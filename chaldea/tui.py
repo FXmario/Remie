@@ -13,6 +13,8 @@ from PIL import Image as PILImage
 from PIL import ImageSequence
 from openai import APIConnectionError, APITimeoutError
 from openai.types.chat import ChatCompletionMessageParam
+from rich.console import RenderableType
+from rich.markdown import Markdown
 from rich.markup import escape
 from rich.panel import Panel
 from rich.segment import Segment
@@ -67,9 +69,9 @@ Screen {
 }
 
 #status {
-    width: 7;
+    width: 6;
     height: 3;
-    margin-right: 1;
+    margin-right: 0;
     content-align: center middle;
     background: $panel;
 }
@@ -80,9 +82,9 @@ Screen {
 }
 
 #tmux-spinner {
-    width: 16;
+    width: 1;
     height: 3;
-    margin-right: 1;
+    margin-right: 0;
     content-align: left middle;
     display: none;
 }
@@ -128,6 +130,29 @@ def _is_tmux() -> bool:
     return bool(os.environ.get("TMUX"))
 
 
+def _safe_stream_markdown(text: str, code_theme: str) -> RenderableType:
+    """Render partial Markdown safely during streaming.
+
+    Auto-closes incomplete code fences so Pygments highlighting engages
+    as soon as the opening fence and language arrive.  Falls back to
+    plain escaped text if the Markdown parser rejects the content.
+    """
+    fence_count = text.count("\n```") + (1 if text.startswith("```") else 0)
+    if fence_count % 2 == 1:
+        text = text + "\n```"
+    try:
+        return Markdown(text, code_theme=code_theme, hyperlinks=True)
+    except Exception:
+        return Text.from_markup(escape(text))
+
+
+def _has_tool_call(text: str) -> bool:
+    """Return True if any complete line starts with the tool: prefix."""
+    return any(
+        line.strip().startswith("tool:") for line in text.splitlines() if line.strip()
+    )
+
+
 class StreamingRichLog(RichLog):
     """A RichLog that can stream text in place at the bottom of the log."""
 
@@ -138,13 +163,24 @@ class StreamingRichLog(RichLog):
     def begin_stream(self) -> None:
         self._stream_start = len(self.lines)
 
-    def update_stream(self, text: str) -> None:
+    def update_stream(
+        self,
+        content: str | RenderableType,
+        *,
+        title: str = "Assistant",
+        border_style: str = "yellow",
+    ) -> None:
         if self._stream_start is None:
             self.begin_stream()
+        inner = (
+            content
+            if not isinstance(content, str)
+            else Text.from_markup(escape(content))
+        )
         renderable = Panel(
-            Text.from_markup(escape(text)),
-            title="Assistant",
-            border_style="yellow",
+            inner,
+            title=title,
+            border_style=border_style,
             padding=(0, 1),
         )
         console = self.app.console
@@ -253,7 +289,7 @@ class ThinkingIndicator(Label):
     def _advance(self) -> None:
         if self._working:
             self._frame_index = (self._frame_index + 1) % len(self.FRAMES)
-            self.update(f"{self.FRAMES[self._frame_index]} Thinking...")
+            self.update(f"{self.FRAMES[self._frame_index]}")
 
     def set_status(self, status: str) -> None:
         self._working = status == "working"
@@ -337,9 +373,23 @@ class AgentApp(App):
             while True:
                 full_text = ""
                 log.begin_stream()
+                tool_detected = False
                 async for delta in stream_llm_call(self.conversation):
                     full_text += delta
-                    log.update_stream(full_text)
+                    if not tool_detected and _has_tool_call(full_text):
+                        tool_detected = True
+                    if tool_detected:
+                        thinking = extract_thinking(full_text)
+                        if thinking:
+                            log.update_stream(
+                                thinking,
+                                title="Thinking",
+                                border_style="dim",
+                            )
+                    else:
+                        log.update_stream(
+                            _safe_stream_markdown(full_text, self._code_theme()),
+                        )
                 tool_invocations = extract_tool_invocations(full_text)
                 if not tool_invocations:
                     log.replace_stream(
