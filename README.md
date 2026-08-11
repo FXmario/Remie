@@ -4,8 +4,10 @@ A terminal-based coding agent with a [Textual](https://textual.textualize.io/) T
 
 ## Features
 
-- Textual TUI with a color-coded conversation log (You / Thinking / Assistant / tool calls / tool results)
+- Textual TUI with bordered panels per message (user and assistant) and color-coded tool activity
 - Streaming responses — assistant text appears token-by-token inside the log as the model generates it
+- Syntax highlighting for code blocks the agent generates (fenced code in responses)
+- The model name is shown on the top-right of the input box border
 - Uses your terminal's native color scheme (ANSI), so the UI matches your system theme — like opencode
 - Async agent loop — the UI stays responsive while the LLM responds and tools run
 - Tools: `read_file`, `list_files`, `edit_file`
@@ -24,6 +26,16 @@ Install dependencies:
 uv sync
 ```
 
+To install the agent as a global command and use it from any project:
+
+```bash
+uv tool install /home/mario/Work/FuiAgent
+cd ~/Projects/my-other-project
+chaldea
+```
+
+The agent operates on the directory where `chaldea` is launched, so relative tool paths target the current project.
+
 Configure the LLM connection via environment variables (a `.env` file is loaded automatically):
 
 | Variable          | Description                        | Default       |
@@ -31,6 +43,11 @@ Configure the LLM connection via environment variables (a `.env` file is loaded 
 | `LLAMA_BASE_URL`  | Base URL of the LLM server         | (required)    |
 | `LLAMA_API_KEY`   | API key for the server             | `llama-cpp`   |
 | `LLAMA_MODEL`     | Model name                         | `local-model` |
+| `CHALDEA_DEBUG`   | Show raw tool calls (name + params) | (unset)       |
+
+When the agent calls a tool, the log shows a human-readable line like `Agent calling the read a file`.
+Tool results are hidden by default. Set `CHALDEA_DEBUG=1` to show the raw function name, JSON parameters,
+and `tool_result` payloads (e.g. `Agent calling read_file({"filename": "main.py"})`); a `· debug` marker appears in the header.
 
 ## Usage
 
