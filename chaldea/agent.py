@@ -1,3 +1,4 @@
+import ast
 import inspect
 import json
 import os
@@ -38,6 +39,10 @@ OPENCODE_GO_MODELS = [
     "mimo-v2.5-pro",
     "hy3",
 ]
+
+
+class UnsupportedModelError(RuntimeError):
+    """Raised when a configured provider needs an unsupported API format."""
 
 
 @dataclass
@@ -110,7 +115,12 @@ async def fetch_opencode_go_models(api_key: str) -> list[str]:
             )
             response.raise_for_status()
             payload = response.json()
-            return [item["id"] for item in payload.get("data", []) if item.get("id")]
+            models = [
+                item["id"]
+                for item in payload.get("data", [])
+                if item.get("id") in OPENCODE_GO_MODELS
+            ]
+            return models or list(OPENCODE_GO_MODELS)
         except httpx.HTTPError, ValueError, KeyError, TypeError:
             return list(OPENCODE_GO_MODELS)
 
@@ -238,7 +248,7 @@ def extract_thinking(text: str) -> str:
 def extract_tool_invocations(text: str) -> list[tuple[str, dict[str, Any]]]:
     """
     Return list of (tool_name, args) requested in 'tool: name({...})' lines.
-    The parser expects single-line, compact JSON in parentheses.
+    Supports compact JSON and Python-style keyword arguments.
     """
     invocations = []
     for raw_line in text.splitlines():
@@ -251,10 +261,25 @@ def extract_tool_invocations(text: str) -> list[tuple[str, dict[str, Any]]]:
             name = name.strip()
             if not rest.endswith(")"):
                 continue
-            json_str = rest[:-1].strip()
-            args = json.loads(json_str)
+            args_text = rest[:-1].strip()
+            try:
+                args = json.loads(args_text)
+            except json.JSONDecodeError:
+                call = ast.parse(f"tool({args_text})", mode="eval").body
+                if not isinstance(call, ast.Call):
+                    continue
+                if call.args:
+                    args = ast.literal_eval(call.args[0])
+                else:
+                    args = {
+                        keyword.arg: ast.literal_eval(keyword.value)
+                        for keyword in call.keywords
+                        if keyword.arg is not None
+                    }
+            if not isinstance(args, dict):
+                continue
             invocations.append((name, args))
-        except ValueError, json.JSONDecodeError:
+        except SyntaxError, ValueError, TypeError, json.JSONDecodeError:
             continue
     return invocations
 
@@ -262,6 +287,13 @@ def extract_tool_invocations(text: str) -> list[tuple[str, dict[str, Any]]]:
 async def stream_llm_call(
     conversation: list[ChatCompletionMessageParam],
 ) -> AsyncIterator[str]:
+    if (
+        _config.base_url.rstrip("/") == OPENCODE_GO_BASE_URL
+        and _config.model not in OPENCODE_GO_MODELS
+    ):
+        raise UnsupportedModelError(
+            f"The model '{_config.model}' does not support Chat Completions yet."
+        )
     stream = await openai_client.chat.completions.create(
         model=_config.model,
         messages=conversation,
@@ -269,6 +301,8 @@ async def stream_llm_call(
         stream=True,
     )
     async for chunk in stream:
+        if not chunk.choices:
+            continue
         delta = chunk.choices[0].delta.content
         if delta:
             yield delta
@@ -299,17 +333,21 @@ def run_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
     """
     if name not in TOOL_REGISTRY:
         return {"action": f"unknown_tool_{name}", "args": args}
-    if name == "read_file":
-        return read_file_tool(args.get("filename", "."))
-    elif name == "list_files":
-        return list_files_tool(args.get("path", "."))
-    elif name == "edit_file":
-        return edit_file_tool(
-            args.get("path", "."),
-            args.get("old_str", ""),
-            args.get("new_str", ""),
-        )
-    return TOOL_REGISTRY[name](**args)
+    try:
+        if name == "read_file":
+            filename = args.get("filename") or args.get("path") or "."
+            return read_file_tool(filename)
+        elif name == "list_files":
+            return list_files_tool(args.get("path", "."))
+        elif name == "edit_file":
+            return edit_file_tool(
+                args.get("path", "."),
+                args.get("old_str", ""),
+                args.get("new_str", ""),
+            )
+        return TOOL_REGISTRY[name](**args)
+    except (OSError, UnicodeError, TypeError, ValueError) as error:
+        return {"error": f"{type(error).__name__}: {error}"}
 
 
 def render_user_message(text: str) -> Panel:

@@ -54,6 +54,16 @@ class TestReadFileTool:
         with pytest.raises(FileNotFoundError):
             read_file_tool(str(tmp_path / "missing.txt"))
 
+    def test_run_tool_accepts_path_alias(self, tmp_path):
+        path = tmp_path / "hello.txt"
+        path.write_text("hello", encoding="utf-8")
+        result = run_tool("read_file", {"path": str(path)})
+        assert result["content"] == "hello"
+
+    def test_run_tool_returns_directory_error(self, tmp_path):
+        result = run_tool("read_file", {"path": str(tmp_path)})
+        assert result["error"].startswith("IsADirectoryError:")
+
 
 class TestListFilesTool:
     def test_lists_files_and_dirs(self, tmp_path):
@@ -153,6 +163,10 @@ class TestExtractToolInvocations:
             ("read_file", {"filename": "a.py"}),
             ("list_files", {"path": "."}),
         ]
+
+    def test_parses_python_style_keyword_arguments(self):
+        text = 'tool: list_files(path=".")'
+        assert extract_tool_invocations(text) == [("list_files", {"path": "."})]
 
     def test_ignores_invalid_json(self):
         assert extract_tool_invocations("tool: read_file({bad})") == []
@@ -275,3 +289,24 @@ class TestConnectionConfig:
     def test_opencode_go_constants(self):
         assert OPENCODE_GO_BASE_URL == "https://opencode.ai/zen/go/v1"
         assert "deepseek-v4-flash" in OPENCODE_GO_MODELS
+
+    def test_opencode_models_filter_unsupported_ids(self):
+        import asyncio
+
+        class FakeResponse:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {"data": [{"id": "gpt-5.6-luna"}, {"id": "kimi-k3"}]}
+
+        async def fake_get(self, url, headers=None):
+            return FakeResponse()
+
+        monkeypatch = pytest.MonkeyPatch()
+        monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+        try:
+            models = asyncio.run(fetch_opencode_go_models("valid"))
+        finally:
+            monkeypatch.undo()
+        assert models == ["kimi-k3"]

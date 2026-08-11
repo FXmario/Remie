@@ -32,6 +32,7 @@ from textual_image.widget import SixelImage as TerminalImage
 from chaldea.agent import (
     OPENCODE_GO_BASE_URL,
     OPENCODE_GO_MODELS,
+    UnsupportedModelError,
     configure_openai,
     extract_thinking,
     extract_tool_invocations,
@@ -371,6 +372,10 @@ class ConnectionScreen(ModalScreen):
     BINDINGS = [("escape", "dismiss", "Cancel")]
 
     CSS = """
+    ConnectionScreen {
+        align: center middle;
+    }
+
     #connection-dialog {
         width: 60;
         height: 20;
@@ -664,6 +669,16 @@ class AgentApp(App):
             message = get_connection_error_message(error)
             if message is not None:
                 self.notify(message, title="LLM connection error", severity="error")
+        except UnsupportedModelError as error:
+            log.replace_stream()
+            self.notify(str(error), title="Unsupported model", severity="error")
+        except Exception as error:
+            log.replace_stream()
+            self.notify(
+                f"{type(error).__name__}: {error}",
+                title="Agent error",
+                severity="error",
+            )
         finally:
             self._agent_running = False
             prompt.disabled = False
