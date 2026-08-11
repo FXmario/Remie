@@ -2,6 +2,7 @@ import inspect
 import json
 import os
 from collections.abc import AsyncIterator
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
@@ -17,11 +18,102 @@ from rich.text import Text
 
 load_dotenv()
 
+CONFIG_DIR = Path(
+    os.environ.get("CHALDEA_CONFIG_DIR", "~/.config/fuiagent")
+).expanduser()
+CONFIG_FILE = CONFIG_DIR / "config.json"
+
+OPENCODE_GO_BASE_URL = "https://opencode.ai/zen/go/v1"
+
+OPENCODE_GO_MODELS = [
+    "deepseek-v4-flash",
+    "deepseek-v4-pro",
+    "kimi-k3",
+    "kimi-k2.7-code",
+    "kimi-k2.6",
+    "grok-4.5",
+    "glm-5.2",
+    "glm-5.1",
+    "mimo-v2.5",
+    "mimo-v2.5-pro",
+    "hy3",
+]
+
+
+@dataclass
+class ConnectionConfig:
+    base_url: str
+    api_key: str
+    model: str
+
+
+def _default_config() -> ConnectionConfig:
+    return ConnectionConfig(
+        base_url=os.environ.get("LLAMA_BASE_URL", "http://localhost:1234/v1"),
+        api_key=os.environ.get("LLAMA_API_KEY", "llama-cpp"),
+        model=os.environ.get("LLAMA_MODEL", "local-model"),
+    )
+
+
+def load_config() -> ConnectionConfig:
+    """Load saved connection config, falling back to environment defaults."""
+    try:
+        data = json.loads(CONFIG_FILE.read_text())
+        return ConnectionConfig(
+            base_url=data.get("base_url", ""),
+            api_key=data.get("api_key", ""),
+            model=data.get("model", ""),
+        )
+    except OSError, json.JSONDecodeError:
+        return _default_config()
+
+
+def save_config(config: ConnectionConfig) -> None:
+    """Persist connection config to disk."""
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    CONFIG_FILE.write_text(json.dumps(asdict(config), indent=2))
+
+
+_config = load_config()
+
 openai_client = AsyncOpenAI(
-    base_url=os.environ["LLAMA_BASE_URL"],
-    api_key=os.environ.get("LLAMA_API_KEY", "llama-cpp"),
+    base_url=_config.base_url,
+    api_key=_config.api_key,
     http_client=httpx.AsyncClient(verify=False),
 )
+
+
+def get_config() -> ConnectionConfig:
+    """Return the current active connection config."""
+    return _config
+
+
+def configure_openai(base_url: str, api_key: str, model: str) -> ConnectionConfig:
+    """Rebuild the OpenAI client with a new connection configuration."""
+    global _config, openai_client
+    _config = ConnectionConfig(base_url=base_url, api_key=api_key, model=model)
+    openai_client = AsyncOpenAI(
+        base_url=base_url,
+        api_key=api_key,
+        http_client=httpx.AsyncClient(verify=False),
+    )
+    return _config
+
+
+async def fetch_opencode_go_models(api_key: str) -> list[str]:
+    """Fetch the OpenCode Go model list, falling back to a hardcoded list."""
+    async with httpx.AsyncClient(timeout=10) as client:
+        try:
+            response = await client.get(
+                f"{OPENCODE_GO_BASE_URL}/models",
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+            response.raise_for_status()
+            payload = response.json()
+            return [item["id"] for item in payload.get("data", []) if item.get("id")]
+        except httpx.HTTPError, ValueError, KeyError, TypeError:
+            return list(OPENCODE_GO_MODELS)
+
 
 SYSTEM_PROMPT = """
 You are a coding assistant whose goal it is to help us solve coding tasks. 
@@ -171,7 +263,7 @@ async def stream_llm_call(
     conversation: list[ChatCompletionMessageParam],
 ) -> AsyncIterator[str]:
     stream = await openai_client.chat.completions.create(
-        model=os.environ.get("LLAMA_MODEL", "local-model"),
+        model=_config.model,
         messages=conversation,
         max_tokens=2000,
         stream=True,
@@ -188,9 +280,7 @@ def get_connection_error_message(error: Exception) -> str | None:
         request = getattr(error, "request", None)
     except RuntimeError:
         request = None
-    url = str(getattr(request, "url", "")) or os.environ.get(
-        "LLAMA_BASE_URL", "unknown URL"
-    )
+    url = str(getattr(request, "url", "")) or _config.base_url
     if isinstance(error, (APITimeoutError, httpx.TimeoutException)):
         return (
             f"The LLM request to {url} timed out. "

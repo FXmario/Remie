@@ -5,9 +5,14 @@ from rich.panel import Panel
 from rich.text import Text
 
 from chaldea.agent import (
+    OPENCODE_GO_BASE_URL,
+    OPENCODE_GO_MODELS,
+    configure_openai,
     edit_file_tool,
     extract_thinking,
     extract_tool_invocations,
+    fetch_opencode_go_models,
+    get_config,
     get_connection_error_message,
     get_tool_summary,
     list_files_tool,
@@ -171,14 +176,20 @@ class TestGetToolSummary:
 
 class TestConnectionErrorMessage:
     def test_timeout_error(self):
-        error = httpx.ReadTimeout("request timed out")
+        error = httpx.ReadTimeout(
+            "request timed out",
+            request=httpx.Request("GET", "http://localhost:1234/v1"),
+        )
         assert get_connection_error_message(error) == (
             "The LLM request to http://localhost:1234/v1 timed out. "
             "Check that the model server is responding."
         )
 
     def test_connect_error(self):
-        error = httpx.ConnectError("connection refused")
+        error = httpx.ConnectError(
+            "connection refused",
+            request=httpx.Request("GET", "http://localhost:1234/v1"),
+        )
         assert get_connection_error_message(error) == (
             "Could not connect to the LLM server at http://localhost:1234/v1. "
             "Check that it is running."
@@ -220,3 +231,47 @@ class TestRenderMessages:
         panel = render_assistant_panel("final answer")
         assert isinstance(panel, Panel)
         assert panel.title == "Assistant"
+
+
+class TestConnectionConfig:
+    def test_configure_openai_updates_config_and_client(self):
+        previous = get_config()
+        try:
+            config = configure_openai("http://test:1234/v1", "secret", "test-model")
+            assert get_config().base_url == "http://test:1234/v1"
+            assert get_config().api_key == "secret"
+            assert get_config().model == "test-model"
+            assert config.model == "test-model"
+        finally:
+            configure_openai(previous.base_url, previous.api_key, previous.model)
+
+    def test_fetch_opencode_go_models_falls_back_on_error(self, monkeypatch):
+        import asyncio
+
+        async def fake_get(self, url, headers=None):
+            raise httpx.ConnectError("boom")
+
+        monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+        models = asyncio.run(fetch_opencode_go_models("invalid"))
+        assert models == OPENCODE_GO_MODELS
+
+    def test_fetch_opencode_go_models_parses_payload(self, monkeypatch):
+        import asyncio
+
+        class FakeResponse:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {"data": [{"id": "kimi-k3"}, {"id": "grok-4.5"}]}
+
+        async def fake_get(self, url, headers=None):
+            return FakeResponse()
+
+        monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+        models = asyncio.run(fetch_opencode_go_models("valid"))
+        assert models == ["kimi-k3", "grok-4.5"]
+
+    def test_opencode_go_constants(self):
+        assert OPENCODE_GO_BASE_URL == "https://opencode.ai/zen/go/v1"
+        assert "deepseek-v4-flash" in OPENCODE_GO_MODELS

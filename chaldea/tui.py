@@ -22,21 +22,28 @@ from rich.text import Text
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import BindingType
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.geometry import Size
+from textual.screen import ModalScreen
 from textual.strip import Strip
-from textual.widgets import Footer, Header, Input, Label, RichLog
+from textual.widgets import Button, Footer, Header, Input, Label, RichLog, Select
 from textual_image.widget import SixelImage as TerminalImage
 
 from chaldea.agent import (
+    OPENCODE_GO_BASE_URL,
+    OPENCODE_GO_MODELS,
+    configure_openai,
     extract_thinking,
     extract_tool_invocations,
+    fetch_opencode_go_models,
+    get_config,
     get_connection_error_message,
     get_full_system_prompt,
     get_tool_summary,
     render_assistant_panel,
     render_user_message,
     run_tool,
+    save_config,
     stream_llm_call,
 )
 
@@ -61,8 +68,13 @@ Screen {
     border-title-align: right;
 }
 
-#input-row {
+#prompt-box {
     height: 4;
+    width: 1fr;
+}
+
+#input-row {
+    height: 5;
     width: 100%;
     padding: 0 1 1 1;
     align: left middle;
@@ -87,6 +99,23 @@ Screen {
     margin-right: 0;
     content-align: left middle;
     display: none;
+}
+
+#model-badge {
+    dock: top;
+    align: right top;
+    height: 1;
+    width: auto;
+    padding: 0 1;
+    margin-right: 1;
+    content-align: center middle;
+    border: none;
+    color: $text;
+    background: $panel;
+}
+
+#model-badge:hover {
+    background: $primary 20%;
 }
 """
 
@@ -296,14 +325,191 @@ class ThinkingIndicator(Label):
         self.display = self._working and _is_tmux()
         if self._working:
             self._frame_index = 0
-            self.update(f"{self.FRAMES[0]} Thinking...")
+            self.update(self.FRAMES[0])
+
+
+class ModelBadge(Label):
+    """Clickable label showing the active model name."""
+
+    def __init__(self) -> None:
+        super().__init__(id="model-badge")
+        self.update_config(get_config())
+
+    def update_config(self, config) -> None:
+        vendor = (
+            "OpenCode Go"
+            if config.base_url.rstrip("/") == OPENCODE_GO_BASE_URL
+            else "Local"
+        )
+        self.update(f"{config.model}  {vendor}")
+
+    async def on_click(self) -> None:
+        app = self.app
+        if isinstance(app, AgentApp):
+            await app.action_open_connection()
 
 
 class InputRow(Horizontal):
     def compose(self) -> ComposeResult:
         yield StatusIndicator()
         yield ThinkingIndicator()
+        yield PromptBox()
+
+
+class PromptBox(Vertical):
+    def __init__(self) -> None:
+        super().__init__(id="prompt-box")
+
+    def compose(self) -> ComposeResult:
         yield Input(id="prompt", placeholder="Type a message and press Enter...")
+        yield ModelBadge()
+
+
+class ConnectionScreen(ModalScreen):
+    """Modal to select a provider and connect to the LLM API."""
+
+    BINDINGS = [("escape", "dismiss", "Cancel")]
+
+    CSS = """
+    #connection-dialog {
+        width: 60;
+        height: 20;
+        max-height: 80%;
+        padding: 1 2;
+        border: round $primary;
+        background: $surface;
+    }
+
+    #connection-scroll {
+        height: 1fr;
+        scrollbar-size: 1 1;
+    }
+
+    #connection-dialog Label {
+        margin-top: 1;
+    }
+
+    #connection-dialog .row {
+        height: 3;
+        width: 100%;
+        align: center middle;
+    }
+
+    #connection-dialog Button {
+        margin-top: 1;
+    }
+    """
+
+    def compose(self) -> ComposeResult:
+        current = get_config()
+        with Vertical(id="connection-dialog"):
+            with VerticalScroll(id="connection-scroll"):
+                yield Label("Connection", id="dialog-title")
+                yield Select(
+                    [
+                        ("Local (llama.cpp)", "local"),
+                        ("OpenCode Go", "opencode-go"),
+                    ],
+                    value="local",
+                    id="provider-select",
+                    prompt="Choose provider...",
+                )
+                yield Label("Base URL")
+                yield Input(
+                    current.base_url,
+                    placeholder="http://localhost:1234/v1",
+                    id="base-url-input",
+                )
+                yield Label("API Key")
+                yield Input(
+                    current.api_key,
+                    password=True,
+                    placeholder="API key",
+                    id="api-key-input",
+                )
+                yield Label("Model")
+                yield Select(
+                    [(model, model) for model in OPENCODE_GO_MODELS],
+                    value=current.model
+                    if current.model in OPENCODE_GO_MODELS
+                    else OPENCODE_GO_MODELS[0],
+                    id="model-select",
+                    prompt="Select model...",
+                )
+                with Horizontal(classes="row"):
+                    yield Button("Refresh models", id="refresh-button")
+                    yield Button("Submit", variant="primary", id="submit-button")
+                    yield Button("Cancel", id="cancel-button")
+
+    def on_mount(self) -> None:
+        self.query_one("#model-select", Select).disabled = True
+        self.query_one("#api-key-input", Input).focus()
+
+    async def on_select_changed(self, event: Select.Changed) -> None:
+        if event.select.id == "provider-select":
+            is_go = event.value == "opencode-go"
+            self.query_one("#base-url-input", Input).disabled = is_go
+            self.query_one("#model-select", Select).disabled = not is_go
+            if is_go:
+                self.query_one("#base-url-input", Input).value = OPENCODE_GO_BASE_URL
+                api_key = self.query_one("#api-key-input", Input).value.strip()
+                if api_key:
+                    await self._refresh_models(api_key)
+
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "cancel-button":
+            self.dismiss()
+            return
+        if event.button.id == "submit-button":
+            self._connect()
+        elif event.button.id == "refresh-button":
+            api_key = self.query_one("#api-key-input", Input).value.strip()
+            if api_key:
+                await self._refresh_models(api_key)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        """Submit modal fields without leaking them to the chat input."""
+        event.stop()
+        self._connect()
+
+    async def _refresh_models(self, api_key: str) -> None:
+        select = self.query_one("#model-select", Select)
+        select.loading = True
+        models = await fetch_opencode_go_models(api_key)
+        select.loading = False
+        select.set_options([(model, model) for model in models])
+        select.value = models[0] if models else OPENCODE_GO_MODELS[0]
+
+    def _connect(self) -> None:
+        provider = self.query_one("#provider-select", Select).value
+        if provider == "opencode-go":
+            base_url = OPENCODE_GO_BASE_URL
+            api_key = self.query_one("#api-key-input", Input).value.strip()
+            model = self._selected_model()
+            if not api_key:
+                self.notify(
+                    "Enter your OpenCode Go API key",
+                    title="Missing API key",
+                    severity="error",
+                )
+                return
+        else:
+            base_url = self.query_one("#base-url-input", Input).value.strip()
+            api_key = self.query_one("#api-key-input", Input).value.strip()
+            model = self._selected_model()
+        config = configure_openai(base_url, api_key, model)
+        save_config(config)
+        app = self.app
+        if isinstance(app, AgentApp):
+            app.query_one(ModelBadge).update_config(config)
+        self.dismiss()
+        self.app.notify(f"Connected to {model}", title="Connection updated")
+
+    def _selected_model(self) -> str:
+        value = self.query_one("#model-select", Select).value
+        if isinstance(value, str):
+            return value
+        return OPENCODE_GO_MODELS[0]
 
 
 class AgentApp(App):
@@ -311,16 +517,21 @@ class AgentApp(App):
 
     TITLE = "FuiAgent"
     CSS = CSS
+    ENABLE_COMMAND_PALETTE = False
     BINDINGS: ClassVar[list[BindingType]] = [
         ("ctrl+c", "quit", "Quit"),
         ("ctrl+l", "clear_log", "Clear log"),
+        ("ctrl+p", "open_connection", "Connect"),
         ("ctrl+t", "toggle_theme", "Toggle theme"),
+        ("escape", "stop_agent", "Stop agent"),
     ]
 
     def __init__(self) -> None:
         super().__init__()
         self.conversation: list[ChatCompletionMessageParam] = []
         self.theme = "ansi-dark"
+        self._agent_running = False
+        self._stop_requested = False
         self.debug_mode = os.environ.get("CHALDEA_DEBUG", "").lower() in {
             "1",
             "true",
@@ -345,7 +556,7 @@ class AgentApp(App):
         self.conversation = [{"role": "system", "content": get_full_system_prompt()}]
         self.sub_title = ""
         prompt = self.query_one("#prompt", Input)
-        prompt.border_title = os.environ.get("LLAMA_MODEL", "local-model")
+        self.query_one(ModelBadge).update_config(get_config())
         prompt.focus()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
@@ -361,6 +572,8 @@ class AgentApp(App):
         log.write("")
         event.input.value = ""
         event.input.disabled = True
+        self._stop_requested = False
+        self._agent_running = True
         self._set_status("working")
         _ = self.run_agent_turn()
 
@@ -371,10 +584,15 @@ class AgentApp(App):
         completed = False
         try:
             while True:
+                if self._stop_requested:
+                    log.write("[dim]Stopped by user[/]")
+                    break
                 full_text = ""
                 log.begin_stream()
                 tool_detected = False
                 async for delta in stream_llm_call(self.conversation):
+                    if self._stop_requested:
+                        break
                     full_text += delta
                     if not tool_detected and _has_tool_call(full_text):
                         tool_detected = True
@@ -390,6 +608,10 @@ class AgentApp(App):
                         log.update_stream(
                             _safe_stream_markdown(full_text, self._code_theme()),
                         )
+                if self._stop_requested:
+                    log.replace_stream()
+                    log.write("[dim]Stopped by user[/]")
+                    break
                 tool_invocations = extract_tool_invocations(full_text)
                 if not tool_invocations:
                     log.replace_stream(
@@ -420,6 +642,9 @@ class AgentApp(App):
                 log.replace_stream(*replacements)
                 self.conversation.append({"role": "assistant", "content": full_text})
                 for name, args in tool_invocations:
+                    if self._stop_requested:
+                        log.write("[dim]Stopped by user[/]")
+                        break
                     result = await asyncio.to_thread(run_tool, name, args)
                     result_json = json.dumps(result, default=str)
                     if self.debug_mode:
@@ -440,6 +665,7 @@ class AgentApp(App):
             if message is not None:
                 self.notify(message, title="LLM connection error", severity="error")
         finally:
+            self._agent_running = False
             prompt.disabled = False
             prompt.focus()
             if not completed:
@@ -450,6 +676,17 @@ class AgentApp(App):
 
     def action_toggle_theme(self) -> None:
         self.theme = "ansi-dark" if self.theme == "ansi-light" else "ansi-light"
+
+    def action_stop_agent(self) -> None:
+        """Request the running agent loop to stop at the next await point."""
+        if self._agent_running:
+            self._stop_requested = True
+
+    async def action_open_connection(self) -> None:
+        """Open the connection/model picker. Ignored while the agent is busy."""
+        if self._agent_running:
+            return
+        await self.push_screen(ConnectionScreen())
 
 
 def run_tui() -> None:

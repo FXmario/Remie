@@ -45,6 +45,22 @@ Configure the LLM connection via environment variables (a `.env` file is loaded 
 | `LLAMA_MODEL`     | Model name                         | `local-model` |
 | `CHALDEA_DEBUG`   | Show raw tool calls (name + params) | (unset)       |
 
+### OpenCode Go
+
+You can also connect to [OpenCode Go](https://opencode.ai/docs/go/) — a low-cost
+subscription service for open coding models. It uses the OpenAI-compatible
+endpoint `https://opencode.ai/zen/go/v1` (chat completions), so it works with
+the same client.
+
+Open the connection picker with `Ctrl+P` or by clicking the model name next to
+the input. From there you can:
+
+- Choose **Local (llama.cpp)** to use your environment-configured server
+- Choose **OpenCode Go**, paste your API key (from [opencode.ai/auth](https://opencode.ai/auth)), and pick a model — the model list is fetched live, falling back to a bundled list
+
+The active connection (base URL, API key, model) is saved to
+`~/.config/fuiagent/config.json` and reused on the next launch.
+
 When the agent calls a tool, the log shows a human-readable line like `Agent calling the read a file`.
 Tool results are hidden by default. Set `CHALDEA_DEBUG=1` to show the raw function name, JSON parameters,
 and `tool_result` payloads (e.g. `Agent calling read_file({"filename": "main.py"})`); a `· debug` marker appears in the header.
@@ -67,7 +83,9 @@ Type a message at the bottom input and press Enter. The agent will reason (`Thin
 | --------- | ----------- |
 | `Ctrl+C`  | Quit        |
 | `Ctrl+L`  | Clear log   |
+| `Ctrl+P`  | Open connection/model picker |
 | `Ctrl+T`  | Toggle dark/light theme |
+| `Esc`     | Stop the agent while it is running |
 
 ## How it works
 
