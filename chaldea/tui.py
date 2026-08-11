@@ -20,11 +20,10 @@ from rich.text import Text
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import BindingType
-from textual.containers import Vertical
+from textual.containers import Horizontal, Vertical
 from textual.geometry import Size
 from textual.strip import Strip
-from textual.widgets import Footer, Header, Input, RichLog
-from textual.widgets._header import HeaderIcon, HeaderTitle
+from textual.widgets import Footer, Header, Input, Label, RichLog
 from textual_image.widget import SixelImage as TerminalImage
 
 from chaldea.agent import (
@@ -44,10 +43,6 @@ Screen {
     layout: vertical;
 }
 
-AgentHeader {
-    height: 3;
-}
-
 #log {
     width: 1fr;
     height: 1fr;
@@ -58,15 +53,23 @@ AgentHeader {
 
 #prompt {
     height: 3;
-    margin: 0 1 1 1;
+    width: 1fr;
+    margin: 0;
     border: round $primary;
     border-title-align: right;
 }
 
+#input-row {
+    height: 4;
+    width: 100%;
+    padding: 0 1 1 1;
+    align: left middle;
+}
+
 #status {
-    dock: right;
     width: 7;
     height: 3;
+    margin-right: 1;
     content-align: center middle;
     background: $panel;
 }
@@ -74,6 +77,14 @@ AgentHeader {
 #status-gif {
     width: 6;
     height: 3;
+}
+
+#tmux-spinner {
+    width: 16;
+    height: 3;
+    margin-right: 1;
+    content-align: left middle;
+    display: none;
 }
 """
 
@@ -111,6 +122,10 @@ def _detect_terminal_background() -> str | None:
         channels.append(value / 255.0)
     luminance = 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2]
     return "light" if luminance >= 0.5 else "dark"
+
+
+def _is_tmux() -> bool:
+    return bool(os.environ.get("TMUX"))
 
 
 class StreamingRichLog(RichLog):
@@ -197,7 +212,8 @@ class StatusIndicator(Vertical):
         yield TerminalImage(self._frames[self._state][0][0], id="status-gif")
 
     def on_mount(self) -> None:
-        self._schedule_next_frame()
+        if not _is_tmux():
+            self._schedule_next_frame()
 
     def _schedule_next_frame(self) -> None:
         durations = self._frames[self._state][1]
@@ -207,7 +223,8 @@ class StatusIndicator(Vertical):
         frames = self._frames[self._state][0]
         self._frame_index = (self._frame_index + 1) % len(frames)
         self.query_one("#status-gif", TerminalImage).image = frames[self._frame_index]
-        self._schedule_next_frame()
+        if not _is_tmux():
+            self._schedule_next_frame()
 
     def set_status(self, status: str) -> None:
         if status not in self._frames:
@@ -217,20 +234,40 @@ class StatusIndicator(Vertical):
         self._state = status
         self._frame_index = 0
         self.query_one("#status-gif", TerminalImage).image = self._frames[status][0][0]
-        self._schedule_next_frame()
+        if not _is_tmux():
+            self._schedule_next_frame()
 
 
-class AgentHeader(Header):
-    """Header with the animated status image in its top-right corner."""
+class ThinkingIndicator(Label):
+    FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
     def __init__(self) -> None:
-        super().__init__(show_clock=False)
-        self.tall = True
+        super().__init__(id="tmux-spinner")
+        self._frame_index = 0
+        self._working = False
 
+    def on_mount(self) -> None:
+        if _is_tmux():
+            self.set_interval(0.1, self._advance)
+
+    def _advance(self) -> None:
+        if self._working:
+            self._frame_index = (self._frame_index + 1) % len(self.FRAMES)
+            self.update(f"{self.FRAMES[self._frame_index]} Thinking...")
+
+    def set_status(self, status: str) -> None:
+        self._working = status == "working"
+        self.display = self._working and _is_tmux()
+        if self._working:
+            self._frame_index = 0
+            self.update(f"{self.FRAMES[0]} Thinking...")
+
+
+class InputRow(Horizontal):
     def compose(self) -> ComposeResult:
-        yield HeaderIcon().data_bind(Header.icon)
-        yield HeaderTitle()
         yield StatusIndicator()
+        yield ThinkingIndicator()
+        yield Input(id="prompt", placeholder="Type a message and press Enter...")
 
 
 class AgentApp(App):
@@ -256,13 +293,17 @@ class AgentApp(App):
         }
 
     def compose(self) -> ComposeResult:
-        yield AgentHeader()
+        yield Header()
         yield StreamingRichLog(id="log", markup=True, wrap=True)
-        yield Input(id="prompt", placeholder="Type a message and press Enter...")
+        yield InputRow(id="input-row")
         yield Footer()
 
     def _code_theme(self) -> str:
         return "ansi_light" if self.theme == "ansi-light" else "ansi_dark"
+
+    def _set_status(self, status: str) -> None:
+        self.query_one(StatusIndicator).set_status(status)
+        self.query_one(ThinkingIndicator).set_status(status)
 
     def on_mount(self) -> None:
         self.conversation = [{"role": "system", "content": get_full_system_prompt()}]
@@ -284,7 +325,7 @@ class AgentApp(App):
         log.write("")
         event.input.value = ""
         event.input.disabled = True
-        self.query_one(StatusIndicator).set_status("working")
+        self._set_status("working")
         _ = self.run_agent_turn()
 
     @work(exclusive=True)
@@ -308,7 +349,7 @@ class AgentApp(App):
                         {"role": "assistant", "content": full_text}
                     )
                     completed = True
-                    self.query_one(StatusIndicator).set_status("done")
+                    self._set_status("done")
                     return
                 thinking = extract_thinking(full_text)
                 replacements: list[str] = []
@@ -352,7 +393,7 @@ class AgentApp(App):
             prompt.disabled = False
             prompt.focus()
             if not completed:
-                self.query_one(StatusIndicator).set_status("ready")
+                self._set_status("ready")
 
     def action_clear_log(self) -> None:
         self.query_one("#log", RichLog).clear()

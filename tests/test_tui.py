@@ -3,7 +3,33 @@ import asyncio
 import httpx
 
 import chaldea.tui as tui
-from chaldea.tui import AgentApp, StatusIndicator, _load_status_gif
+from chaldea.tui import (
+    AgentApp,
+    StatusIndicator,
+    ThinkingIndicator,
+    _is_tmux,
+    _load_status_gif,
+)
+
+
+def test_tmux_detection(monkeypatch):
+    monkeypatch.delenv("TMUX", raising=False)
+    assert not _is_tmux()
+
+    monkeypatch.setenv("TMUX", "/tmp/tmux-1000/default,1,0")
+    assert _is_tmux()
+
+
+def test_tmux_thinking_indicator_visibility(monkeypatch):
+    monkeypatch.setenv("TMUX", "/tmp/tmux-1000/default,1,0")
+    indicator = ThinkingIndicator()
+
+    indicator.set_status("working")
+    assert indicator._working
+    assert indicator.display
+
+    indicator.set_status("ready")
+    assert not indicator.display
 
 
 def test_status_gifs_load_with_frame_timing():
