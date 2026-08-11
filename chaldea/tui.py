@@ -143,6 +143,7 @@ class AgentApp(App):
     def __init__(self) -> None:
         super().__init__()
         self.conversation: list[ChatCompletionMessageParam] = []
+        self.theme = "ansi-dark"
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -158,6 +159,9 @@ class AgentApp(App):
     def on_input_submitted(self, event: Input.Submitted) -> None:
         user_input = event.value.strip()
         if not user_input:
+            return
+        if user_input.lower() in {"exit", "quit", "keluar"}:
+            self.exit()
             return
         self.conversation.append({"role": "user", "content": user_input})
         log = self.query_one("#log", StreamingRichLog)
