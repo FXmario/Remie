@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+from pathlib import Path
 import re
 import select
 import sys
@@ -8,6 +9,8 @@ import time
 from typing import ClassVar
 
 import httpx
+from PIL import Image as PILImage
+from PIL import ImageSequence
 from openai import APIConnectionError, APITimeoutError
 from openai.types.chat import ChatCompletionMessageParam
 from rich.markup import escape
@@ -17,9 +20,12 @@ from rich.text import Text
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import BindingType
+from textual.containers import Vertical
 from textual.geometry import Size
 from textual.strip import Strip
 from textual.widgets import Footer, Header, Input, RichLog
+from textual.widgets._header import HeaderIcon, HeaderTitle
+from textual_image.widget import SixelImage as TerminalImage
 
 from chaldea.agent import (
     extract_thinking,
@@ -38,6 +44,10 @@ Screen {
     layout: vertical;
 }
 
+AgentHeader {
+    height: 3;
+}
+
 #log {
     width: 1fr;
     height: 1fr;
@@ -51,6 +61,19 @@ Screen {
     margin: 0 1 1 1;
     border: round $primary;
     border-title-align: right;
+}
+
+#status {
+    dock: right;
+    width: 7;
+    height: 3;
+    content-align: center middle;
+    background: $panel;
+}
+
+#status-gif {
+    width: 6;
+    height: 3;
 }
 """
 
@@ -143,6 +166,73 @@ class StreamingRichLog(RichLog):
         self.refresh()
 
 
+def _load_status_gif(name: str) -> tuple[list[PILImage.Image], list[float]]:
+    """Load GIF frames and their original durations from the project assets."""
+    asset = Path(__file__).resolve().parent.parent / "assets" / name
+    if not asset.exists():
+        asset = Path.cwd() / "assets" / name
+    with PILImage.open(asset) as image:
+        frames = []
+        durations = []
+        for frame in ImageSequence.Iterator(image):
+            frames.append(frame.convert("RGBA").copy())
+            durations.append(max(0.1, frame.info.get("duration", 100) / 1000))
+    return frames, durations
+
+
+class StatusIndicator(Vertical):
+    """Animated Sixel/unicode status indicator with a text fallback."""
+
+    def __init__(self) -> None:
+        super().__init__(id="status")
+        self._frames = {
+            status: _load_status_gif(f"{status}.gif")
+            for status in ("ready", "working", "done")
+        }
+        self._state = "ready"
+        self._frame_index = 0
+        self._timer = None
+
+    def compose(self) -> ComposeResult:
+        yield TerminalImage(self._frames[self._state][0][0], id="status-gif")
+
+    def on_mount(self) -> None:
+        self._schedule_next_frame()
+
+    def _schedule_next_frame(self) -> None:
+        durations = self._frames[self._state][1]
+        self._timer = self.set_timer(durations[self._frame_index], self._advance)
+
+    def _advance(self) -> None:
+        frames = self._frames[self._state][0]
+        self._frame_index = (self._frame_index + 1) % len(frames)
+        self.query_one("#status-gif", TerminalImage).image = frames[self._frame_index]
+        self._schedule_next_frame()
+
+    def set_status(self, status: str) -> None:
+        if status not in self._frames:
+            raise ValueError(f"Unknown status: {status}")
+        if self._timer is not None:
+            self._timer.stop()
+        self._state = status
+        self._frame_index = 0
+        self.query_one("#status-gif", TerminalImage).image = self._frames[status][0][0]
+        self._schedule_next_frame()
+
+
+class AgentHeader(Header):
+    """Header with the animated status image in its top-right corner."""
+
+    def __init__(self) -> None:
+        super().__init__(show_clock=False)
+        self.tall = True
+
+    def compose(self) -> ComposeResult:
+        yield HeaderIcon().data_bind(Header.icon)
+        yield HeaderTitle()
+        yield StatusIndicator()
+
+
 class AgentApp(App):
     """Textual TUI for the FuiAgent coding assistant."""
 
@@ -166,20 +256,17 @@ class AgentApp(App):
         }
 
     def compose(self) -> ComposeResult:
-        yield Header()
+        yield AgentHeader()
         yield StreamingRichLog(id="log", markup=True, wrap=True)
         yield Input(id="prompt", placeholder="Type a message and press Enter...")
         yield Footer()
-
-    def _ready_subtitle(self) -> str:
-        return "Ready · debug" if self.debug_mode else "Ready"
 
     def _code_theme(self) -> str:
         return "ansi_light" if self.theme == "ansi-light" else "ansi_dark"
 
     def on_mount(self) -> None:
         self.conversation = [{"role": "system", "content": get_full_system_prompt()}]
-        self.sub_title = self._ready_subtitle()
+        self.sub_title = ""
         prompt = self.query_one("#prompt", Input)
         prompt.border_title = os.environ.get("LLAMA_MODEL", "local-model")
         prompt.focus()
@@ -197,13 +284,14 @@ class AgentApp(App):
         log.write("")
         event.input.value = ""
         event.input.disabled = True
-        self.sub_title = "Working..."
+        self.query_one(StatusIndicator).set_status("working")
         _ = self.run_agent_turn()
 
     @work(exclusive=True)
     async def run_agent_turn(self) -> None:
         log = self.query_one("#log", StreamingRichLog)
         prompt = self.query_one("#prompt", Input)
+        completed = False
         try:
             while True:
                 full_text = ""
@@ -219,6 +307,8 @@ class AgentApp(App):
                     self.conversation.append(
                         {"role": "assistant", "content": full_text}
                     )
+                    completed = True
+                    self.query_one(StatusIndicator).set_status("done")
                     return
                 thinking = extract_thinking(full_text)
                 replacements: list[str] = []
@@ -261,7 +351,8 @@ class AgentApp(App):
         finally:
             prompt.disabled = False
             prompt.focus()
-            self.sub_title = self._ready_subtitle()
+            if not completed:
+                self.query_one(StatusIndicator).set_status("ready")
 
     def action_clear_log(self) -> None:
         self.query_one("#log", RichLog).clear()
@@ -272,8 +363,6 @@ class AgentApp(App):
 
 def run_tui() -> None:
     app = AgentApp()
-    if _detect_terminal_background() == "light":
-        app.theme = "ansi-light"
     app.run()
 
 

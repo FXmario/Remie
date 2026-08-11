@@ -3,7 +3,23 @@ import asyncio
 import httpx
 
 import chaldea.tui as tui
-from chaldea.tui import AgentApp
+from chaldea.tui import AgentApp, StatusIndicator, _load_status_gif
+
+
+def test_status_gifs_load_with_frame_timing():
+    frames, durations = _load_status_gif("ready.gif")
+
+    assert len(frames) > 1
+    assert len(frames) == len(durations)
+    assert all(frame.mode == "RGBA" for frame in frames)
+    assert all(duration > 0 for duration in durations)
+
+
+def test_status_indicator_starts_ready():
+    indicator = StatusIndicator()
+
+    assert indicator._state == "ready"
+    assert len(indicator._frames["working"][0]) > 1
 
 
 def test_connection_error_shows_toast_and_keeps_app_running(monkeypatch):
