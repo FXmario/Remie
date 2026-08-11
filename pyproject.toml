@@ -16,3 +16,6 @@ chaldea = "chaldea.tui:main"
 
 [tool.uv]
 package = true
+
+[dependency-groups]
+dev = ["pytest>=8"]
