@@ -1,14 +1,22 @@
 import inspect
 import json
 import os
+import re
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
 import httpx
 from dotenv import load_dotenv
-from openai import AsyncOpenAI
+from openai import APIConnectionError, APITimeoutError, AsyncOpenAI
 from openai.types.chat import ChatCompletionMessageParam
+from rich.console import Group, RenderableType
+from rich.markup import escape
+from rich.panel import Panel
+from rich.syntax import Syntax
+from rich.text import Text
+
+load_dotenv()
 
 load_dotenv()
 
@@ -94,6 +102,19 @@ TOOL_REGISTRY = {
     "edit_file": edit_file_tool,
 }
 
+TOOL_SUMMARIES = {
+    "read_file": "read a file",
+    "list_files": "list the files in a directory",
+    "edit_file": "edit a file",
+}
+
+
+def get_tool_summary(name: str) -> str:
+    """
+    Return a short human-readable summary for a tool name.
+    """
+    return TOOL_SUMMARIES.get(name, name)
+
 
 def get_tool_str_representation(tool_name: str) -> str:
     tool = TOOL_REGISTRY[tool_name]
@@ -164,6 +185,27 @@ async def stream_llm_call(
             yield delta
 
 
+def get_connection_error_message(error: Exception) -> str | None:
+    """Return a user-facing message for an LLM timeout or connection error."""
+    try:
+        request = getattr(error, "request", None)
+    except RuntimeError:
+        request = None
+    url = str(getattr(request, "url", "")) or os.environ.get(
+        "LLAMA_BASE_URL", "unknown URL"
+    )
+    if isinstance(error, (APITimeoutError, httpx.TimeoutException)):
+        return (
+            f"The LLM request to {url} timed out. "
+            "Check that the model server is responding."
+        )
+    if isinstance(error, (APIConnectionError, httpx.TransportError)):
+        return (
+            f"Could not connect to the LLM server at {url}. Check that it is running."
+        )
+    return None
+
+
 def run_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
     """
     Dispatch a tool invocation to the registered tool function.
@@ -181,3 +223,68 @@ def run_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
             args.get("new_str", ""),
         )
     return TOOL_REGISTRY[name](**args)
+
+
+CODE_FENCE = re.compile(r"^```(\w*)\s*$")
+
+
+def render_user_message(text: str) -> Panel:
+    """
+    Render a user message as a bordered panel.
+    """
+    return Panel(Text(escape(text)), title="You", border_style="blue", padding=(0, 1))
+
+
+def render_assistant_message(text: str) -> RenderableType:
+    """
+    Render an assistant message, highlighting fenced code blocks with syntax
+    highlighting.
+    """
+    lines = text.splitlines()
+    items: list[Text | Syntax] = []
+    plain: list[str] = []
+    i = 0
+    while i < len(lines):
+        match = CODE_FENCE.match(lines[i].strip())
+        if match:
+            if plain:
+                items.append(Text.from_markup(escape("\n".join(plain))))
+                plain = []
+            language = match.group(1) or "text"
+            i += 1
+            code_lines: list[str] = []
+            while i < len(lines) and not lines[i].strip().startswith("```"):
+                code_lines.append(lines[i])
+                i += 1
+            i += 1
+            code = "\n".join(code_lines)
+            if code:
+                items.append(
+                    Syntax(
+                        code,
+                        language,
+                        theme="ansi_dark",
+                        word_wrap=True,
+                        line_numbers=False,
+                    )
+                )
+        else:
+            plain.append(lines[i])
+            i += 1
+    if plain:
+        items.append(Text.from_markup(escape("\n".join(plain))))
+    if not items:
+        items.append(Text(""))
+    return Group(*items) if len(items) > 1 else items[0]
+
+
+def render_assistant_panel(text: str) -> Panel:
+    """
+    Render an assistant message as a bordered panel with code highlighting.
+    """
+    return Panel(
+        render_assistant_message(text),
+        title="Assistant",
+        border_style="yellow",
+        padding=(0, 1),
+    )

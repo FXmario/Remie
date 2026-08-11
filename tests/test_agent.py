@@ -1,11 +1,21 @@
 import pytest
+import httpx
+from rich.console import Group
+from rich.panel import Panel
+from rich.syntax import Syntax
+from rich.text import Text
 
 from chaldea.agent import (
     edit_file_tool,
     extract_thinking,
     extract_tool_invocations,
+    get_connection_error_message,
+    get_tool_summary,
     list_files_tool,
     read_file_tool,
+    render_assistant_message,
+    render_assistant_panel,
+    render_user_message,
     resolve_abs_path,
     run_tool,
 )
@@ -148,3 +158,68 @@ class TestExtractToolInvocations:
 
     def test_ignores_malformed_line_without_closing_paren(self):
         assert extract_tool_invocations('tool: read_file({"filename": "a.py"') == []
+
+
+class TestGetToolSummary:
+    def test_known_tools_return_summary(self):
+        assert get_tool_summary("read_file") == "read a file"
+        assert get_tool_summary("list_files") == "list the files in a directory"
+        assert get_tool_summary("edit_file") == "edit a file"
+
+    def test_unknown_tool_falls_back_to_name(self):
+        assert get_tool_summary("nonexistent") == "nonexistent"
+
+
+class TestConnectionErrorMessage:
+    def test_timeout_error(self):
+        error = httpx.ReadTimeout("request timed out")
+        assert get_connection_error_message(error) == (
+            "The LLM request to http://localhost:1234/v1 timed out. "
+            "Check that the model server is responding."
+        )
+
+    def test_connect_error(self):
+        error = httpx.ConnectError("connection refused")
+        assert get_connection_error_message(error) == (
+            "Could not connect to the LLM server at http://localhost:1234/v1. "
+            "Check that it is running."
+        )
+
+    def test_non_connection_error_returns_none(self):
+        assert get_connection_error_message(ValueError("bad response")) is None
+
+
+class TestRenderMessages:
+    def test_user_message_is_panel(self):
+        panel = render_user_message("hello")
+        assert isinstance(panel, Panel)
+        assert panel.title == "You"
+
+    def test_assistant_message_plain_text(self):
+        renderable = render_assistant_message("just a reply")
+        assert isinstance(renderable, Text)
+        assert "just a reply" in renderable.plain
+
+    def test_assistant_message_highlights_code(self):
+        renderable = render_assistant_message("Here:\n```python\nx = 1\n```\nDone.")
+        assert isinstance(renderable, Group)
+        syntax_items = [
+            item for item in renderable.renderables if isinstance(item, Syntax)
+        ]
+        assert len(syntax_items) == 1
+        assert syntax_items[0].code == "x = 1"
+
+    def test_assistant_message_multiple_code_blocks(self):
+        renderable = render_assistant_message(
+            "```python\na = 1\n```\nand\n```python\nb = 2\n```"
+        )
+        assert isinstance(renderable, Group)
+        syntax_items = [
+            item for item in renderable.renderables if isinstance(item, Syntax)
+        ]
+        assert [item.code for item in syntax_items] == ["a = 1", "b = 2"]
+
+    def test_assistant_panel_is_panel(self):
+        panel = render_assistant_panel("final answer")
+        assert isinstance(panel, Panel)
+        assert panel.title == "Assistant"

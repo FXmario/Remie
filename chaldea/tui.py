@@ -7,8 +7,11 @@ import sys
 import time
 from typing import ClassVar
 
+import httpx
+from openai import APIConnectionError, APITimeoutError
 from openai.types.chat import ChatCompletionMessageParam
 from rich.markup import escape
+from rich.panel import Panel
 from rich.segment import Segment
 from rich.text import Text
 from textual import work
@@ -21,7 +24,11 @@ from textual.widgets import Footer, Header, Input, RichLog
 from chaldea.agent import (
     extract_thinking,
     extract_tool_invocations,
+    get_connection_error_message,
     get_full_system_prompt,
+    get_tool_summary,
+    render_assistant_panel,
+    render_user_message,
     run_tool,
     stream_llm_call,
 )
@@ -42,6 +49,8 @@ Screen {
 #prompt {
     height: 3;
     margin: 0 1 1 1;
+    border: round $primary;
+    border-title-align: right;
 }
 """
 
@@ -94,7 +103,12 @@ class StreamingRichLog(RichLog):
     def update_stream(self, text: str) -> None:
         if self._stream_start is None:
             self.begin_stream()
-        renderable = Text.from_markup(f"[bold yellow]Assistant:[/] {escape(text)}")
+        renderable = Panel(
+            Text.from_markup(escape(text)),
+            title="Assistant",
+            border_style="yellow",
+            padding=(0, 1),
+        )
         console = self.app.console
         width = max(self.scrollable_content_region.width, 1)
         segments = console.render(renderable, console.options.update_width(width))
@@ -144,6 +158,12 @@ class AgentApp(App):
         super().__init__()
         self.conversation: list[ChatCompletionMessageParam] = []
         self.theme = "ansi-dark"
+        self.debug_mode = os.environ.get("CHALDEA_DEBUG", "").lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -151,10 +171,15 @@ class AgentApp(App):
         yield Input(id="prompt", placeholder="Type a message and press Enter...")
         yield Footer()
 
+    def _ready_subtitle(self) -> str:
+        return "Ready · debug" if self.debug_mode else "Ready"
+
     def on_mount(self) -> None:
         self.conversation = [{"role": "system", "content": get_full_system_prompt()}]
-        self.sub_title = "Ready"
-        self.query_one("#prompt", Input).focus()
+        self.sub_title = self._ready_subtitle()
+        prompt = self.query_one("#prompt", Input)
+        prompt.border_title = os.environ.get("LLAMA_MODEL", "local-model")
+        prompt.focus()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         user_input = event.value.strip()
@@ -165,7 +190,8 @@ class AgentApp(App):
             return
         self.conversation.append({"role": "user", "content": user_input})
         log = self.query_one("#log", StreamingRichLog)
-        log.write(f"[bold blue]You:[/] {escape(user_input)}")
+        log.write(render_user_message(user_input))
+        log.write("")
         event.input.value = ""
         event.input.disabled = True
         self.sub_title = "Working..."
@@ -184,7 +210,7 @@ class AgentApp(App):
                     log.update_stream(full_text)
                 tool_invocations = extract_tool_invocations(full_text)
                 if not tool_invocations:
-                    log.end_stream()
+                    log.replace_stream(render_assistant_panel(full_text))
                     self.conversation.append(
                         {"role": "assistant", "content": full_text}
                     )
@@ -193,21 +219,44 @@ class AgentApp(App):
                 replacements: list[str] = []
                 if thinking:
                     replacements.append(f"[dim]Thinking:[/] {escape(thinking)}")
-                for name, _ in tool_invocations:
-                    replacements.append(f"[bold cyan]Agent calling {escape(name)}[/]")
+                for name, args in tool_invocations:
+                    if self.debug_mode:
+                        tool_line = (
+                            f"[bold cyan]Agent calling {escape(name)}"
+                            f"({escape(json.dumps(args))})[/]"
+                        )
+                    else:
+                        tool_line = (
+                            "[bold cyan]Agent calling the "
+                            f"{escape(get_tool_summary(name))}[/]"
+                        )
+                    replacements.append(tool_line)
                 log.replace_stream(*replacements)
                 self.conversation.append({"role": "assistant", "content": full_text})
                 for name, args in tool_invocations:
                     result = await asyncio.to_thread(run_tool, name, args)
                     result_json = json.dumps(result, default=str)
-                    log.write(f"[bold magenta]tool_result:[/] {escape(result_json)}")
+                    if self.debug_mode:
+                        log.write(
+                            f"[bold magenta]tool_result:[/] {escape(result_json)}"
+                        )
                     self.conversation.append(
                         {"role": "user", "content": f"tool_result({result_json})"}
                     )
+        except (
+            APITimeoutError,
+            APIConnectionError,
+            httpx.TimeoutException,
+            httpx.TransportError,
+        ) as error:
+            log.replace_stream()
+            message = get_connection_error_message(error)
+            if message is not None:
+                self.notify(message, title="LLM connection error", severity="error")
         finally:
             prompt.disabled = False
             prompt.focus()
-            self.sub_title = "Ready"
+            self.sub_title = self._ready_subtitle()
 
     def action_clear_log(self) -> None:
         self.query_one("#log", RichLog).clear()
