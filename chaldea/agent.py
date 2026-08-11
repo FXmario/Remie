@@ -1,6 +1,7 @@
 import inspect
 import json
 import os
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
@@ -148,14 +149,19 @@ def extract_tool_invocations(text: str) -> list[tuple[str, dict[str, Any]]]:
     return invocations
 
 
-async def async_execute_llm_call(conversation: list[ChatCompletionMessageParam]) -> str:
-    response = await openai_client.chat.completions.create(
+async def stream_llm_call(
+    conversation: list[ChatCompletionMessageParam],
+) -> AsyncIterator[str]:
+    stream = await openai_client.chat.completions.create(
         model=os.environ.get("LLAMA_MODEL", "local-model"),
         messages=conversation,
         max_tokens=2000,
+        stream=True,
     )
-    content = response.choices[0].message.content
-    return content if content is not None else ""
+    async for chunk in stream:
+        delta = chunk.choices[0].delta.content
+        if delta:
+            yield delta
 
 
 def run_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:

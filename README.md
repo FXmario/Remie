@@ -5,6 +5,8 @@ A terminal-based coding agent with a [Textual](https://textual.textualize.io/) T
 ## Features
 
 - Textual TUI with a color-coded conversation log (You / Thinking / Assistant / tool calls / tool results)
+- Streaming responses — assistant text appears token-by-token as the model generates it
+- Follows the system theme by detecting your terminal's background color (dark/light)
 - Async agent loop — the UI stays responsive while the LLM responds and tools run
 - Tools: `read_file`, `list_files`, `edit_file`
 - Thinking step before every tool call, kept in the conversation history
@@ -32,11 +34,15 @@ Configure the LLM connection via environment variables (a `.env` file is loaded 
 
 ## Usage
 
+Run the agent with the `chaldea` command (installed by `uv sync`), or launch it directly:
+
 ```bash
+chaldea
+# or
 uv run main.py
 ```
 
-Type a message at the bottom input and press Enter. The agent will reason (`Thinking:`), call tools when needed, show the results, and reply.
+Type a message at the bottom input and press Enter. The agent will reason (`Thinking:`), call tools when needed, show the results, and reply — with the response streaming in as it is generated.
 
 ### Keybindings
 
@@ -44,6 +50,7 @@ Type a message at the bottom input and press Enter. The agent will reason (`Thin
 | --------- | ----------- |
 | `Ctrl+C`  | Quit        |
 | `Ctrl+L`  | Clear log   |
+| `Ctrl+T`  | Toggle dark/light theme |
 
 ## How it works
 
@@ -59,4 +66,4 @@ tool: read_file({"filename": "main.py"})
 
 - `main.py` — entry point; launches the TUI
 - `chaldea/agent.py` — LLM client, system prompt, tool registry, and parsing helpers
-- `chaldea/tui.py` — the Textual `AgentApp`
+- `chaldea/tui.py` — the Textual `AgentApp`, theme detection, and the `chaldea` CLI entry point

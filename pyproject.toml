@@ -10,3 +10,9 @@ dependencies = [
     "python-dotenv>=1.2.2",
     "textual>=8.2.8",
 ]
+
+[project.scripts]
+chaldea = "chaldea.tui:main"
+
+[tool.uv]
+package = true
