@@ -1,8 +1,7 @@
 import pytest
 import httpx
-from rich.console import Group
+from rich.markdown import Markdown
 from rich.panel import Panel
-from rich.syntax import Syntax
 from rich.text import Text
 
 from chaldea.agent import (
@@ -197,27 +196,25 @@ class TestRenderMessages:
 
     def test_assistant_message_plain_text(self):
         renderable = render_assistant_message("just a reply")
-        assert isinstance(renderable, Text)
-        assert "just a reply" in renderable.plain
+        assert isinstance(renderable, Markdown)
 
-    def test_assistant_message_highlights_code(self):
-        renderable = render_assistant_message("Here:\n```python\nx = 1\n```\nDone.")
-        assert isinstance(renderable, Group)
-        syntax_items = [
-            item for item in renderable.renderables if isinstance(item, Syntax)
-        ]
-        assert len(syntax_items) == 1
-        assert syntax_items[0].code == "x = 1"
-
-    def test_assistant_message_multiple_code_blocks(self):
+    def test_assistant_message_renders_markdown(self):
         renderable = render_assistant_message(
-            "```python\na = 1\n```\nand\n```python\nb = 2\n```"
+            "# Heading\n\n**bold** and `inline code`\n\n- item"
         )
-        assert isinstance(renderable, Group)
-        syntax_items = [
-            item for item in renderable.renderables if isinstance(item, Syntax)
-        ]
-        assert [item.code for item in syntax_items] == ["a = 1", "b = 2"]
+        assert isinstance(renderable, Markdown)
+        assert renderable.markup == (
+            "# Heading\n\n**bold** and `inline code`\n\n- item"
+        )
+
+    def test_assistant_message_supports_code_blocks(self):
+        renderable = render_assistant_message("```python\na = 1\n```")
+        assert isinstance(renderable, Markdown)
+        assert renderable.code_theme == "ansi_dark"
+
+    def test_assistant_message_supports_light_code_theme(self):
+        renderable = render_assistant_message("```python\na = 1\n```", "ansi_light")
+        assert renderable.code_theme == "ansi_light"
 
     def test_assistant_panel_is_panel(self):
         panel = render_assistant_panel("final answer")

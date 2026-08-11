@@ -66,9 +66,9 @@ def _detect_terminal_background() -> str | None:
     sys.stdout.write("\x1b]11;?\x1b\\")
     sys.stdout.flush()
     response = b""
-    deadline = time.monotonic() + 0.3
+    deadline = time.monotonic() + 0.1
     while time.monotonic() < deadline:
-        ready, _, _ = select.select([sys.stdin], [], [], 0.05)
+        ready, _, _ = select.select([sys.stdin], [], [], 0.02)
         if ready:
             try:
                 data = os.read(sys.stdin.fileno(), 1024)
@@ -174,6 +174,9 @@ class AgentApp(App):
     def _ready_subtitle(self) -> str:
         return "Ready · debug" if self.debug_mode else "Ready"
 
+    def _code_theme(self) -> str:
+        return "ansi_light" if self.theme == "ansi-light" else "ansi_dark"
+
     def on_mount(self) -> None:
         self.conversation = [{"role": "system", "content": get_full_system_prompt()}]
         self.sub_title = self._ready_subtitle()
@@ -210,7 +213,9 @@ class AgentApp(App):
                     log.update_stream(full_text)
                 tool_invocations = extract_tool_invocations(full_text)
                 if not tool_invocations:
-                    log.replace_stream(render_assistant_panel(full_text))
+                    log.replace_stream(
+                        render_assistant_panel(full_text, self._code_theme())
+                    )
                     self.conversation.append(
                         {"role": "assistant", "content": full_text}
                     )

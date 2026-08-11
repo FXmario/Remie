@@ -1,7 +1,6 @@
 import inspect
 import json
 import os
-import re
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
@@ -10,13 +9,11 @@ import httpx
 from dotenv import load_dotenv
 from openai import APIConnectionError, APITimeoutError, AsyncOpenAI
 from openai.types.chat import ChatCompletionMessageParam
-from rich.console import Group, RenderableType
+from rich.console import RenderableType
 from rich.markup import escape
+from rich.markdown import Markdown
 from rich.panel import Panel
-from rich.syntax import Syntax
 from rich.text import Text
-
-load_dotenv()
 
 load_dotenv()
 
@@ -225,9 +222,6 @@ def run_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
     return TOOL_REGISTRY[name](**args)
 
 
-CODE_FENCE = re.compile(r"^```(\w*)\s*$")
-
-
 def render_user_message(text: str) -> Panel:
     """
     Render a user message as a bordered panel.
@@ -235,55 +229,19 @@ def render_user_message(text: str) -> Panel:
     return Panel(Text(escape(text)), title="You", border_style="blue", padding=(0, 1))
 
 
-def render_assistant_message(text: str) -> RenderableType:
-    """
-    Render an assistant message, highlighting fenced code blocks with syntax
-    highlighting.
-    """
-    lines = text.splitlines()
-    items: list[Text | Syntax] = []
-    plain: list[str] = []
-    i = 0
-    while i < len(lines):
-        match = CODE_FENCE.match(lines[i].strip())
-        if match:
-            if plain:
-                items.append(Text.from_markup(escape("\n".join(plain))))
-                plain = []
-            language = match.group(1) or "text"
-            i += 1
-            code_lines: list[str] = []
-            while i < len(lines) and not lines[i].strip().startswith("```"):
-                code_lines.append(lines[i])
-                i += 1
-            i += 1
-            code = "\n".join(code_lines)
-            if code:
-                items.append(
-                    Syntax(
-                        code,
-                        language,
-                        theme="ansi_dark",
-                        word_wrap=True,
-                        line_numbers=False,
-                    )
-                )
-        else:
-            plain.append(lines[i])
-            i += 1
-    if plain:
-        items.append(Text.from_markup(escape("\n".join(plain))))
-    if not items:
-        items.append(Text(""))
-    return Group(*items) if len(items) > 1 else items[0]
+def render_assistant_message(
+    text: str, code_theme: str = "ansi_dark"
+) -> RenderableType:
+    """Render an assistant response as Markdown with highlighted code."""
+    return Markdown(text, code_theme=code_theme, hyperlinks=True)
 
 
-def render_assistant_panel(text: str) -> Panel:
+def render_assistant_panel(text: str, code_theme: str = "ansi_dark") -> Panel:
     """
     Render an assistant message as a bordered panel with code highlighting.
     """
     return Panel(
-        render_assistant_message(text),
+        render_assistant_message(text, code_theme),
         title="Assistant",
         border_style="yellow",
         padding=(0, 1),

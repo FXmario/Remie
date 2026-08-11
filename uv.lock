@@ -58,6 +58,7 @@ dependencies = [
     { name = "httpx" },
     { name = "openai" },
     { name = "python-dotenv" },
+    { name = "rich" },
     { name = "textual" },
 ]
 
@@ -71,6 +72,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "openai", specifier = ">=2.53.0" },
     { name = "python-dotenv", specifier = ">=1.2.2" },
+    { name = "rich", specifier = ">=15.0.0" },
     { name = "textual", specifier = ">=8.2.8" },
 ]
 
