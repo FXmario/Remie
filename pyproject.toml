@@ -1,7 +1,7 @@
 [project]
 name = "fuiagent"
 version = "0.1.0"
-description = "Add your description here"
+description = "Prototype Coding Agent"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
@@ -22,3 +22,6 @@ package = true
 
 [dependency-groups]
 dev = ["pytest>=8"]
+
+[tool.setuptools.packages.find]
+include = ["chaldea*"]
