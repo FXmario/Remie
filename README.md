@@ -5,11 +5,11 @@ A terminal-based coding agent with a [Textual](https://textual.textualize.io/) T
 ## Features
 
 - Textual TUI with a color-coded conversation log (You / Thinking / Assistant / tool calls / tool results)
-- Streaming responses — assistant text appears token-by-token as the model generates it
-- Follows the system theme by detecting your terminal's background color (dark/light)
+- Streaming responses — assistant text appears token-by-token inside the log as the model generates it
+- Uses your terminal's native color scheme (ANSI), so the UI matches your system theme — like opencode
 - Async agent loop — the UI stays responsive while the LLM responds and tools run
 - Tools: `read_file`, `list_files`, `edit_file`
-- Thinking step before every tool call, kept in the conversation history
+- Thinking step before every tool call; tool calls are announced as `Agent calling <tool>`, kept in the conversation history
 
 ## Requirements
 
