@@ -463,6 +463,8 @@ def extract_tool_invocations(text: str) -> list[tuple[str, dict[str, Any]]]:
 
 async def stream_llm_call(
     conversation: list[ChatCompletionMessageParam],
+    usage_box: dict[str, int] | None = None,
+    reasoning_box: list[str] | None = None,
 ) -> AsyncIterator[str]:
     if (
         _config.base_url.rstrip("/") == OPENCODE_GO_BASE_URL
@@ -471,18 +473,32 @@ async def stream_llm_call(
         raise UnsupportedModelError(
             f"The model '{_config.model}' does not support Chat Completions yet."
         )
-    stream = await openai_client.chat.completions.create(
-        model=_config.model,
-        messages=conversation,
-        max_tokens=2000,
-        stream=True,
-    )
+    kwargs: dict[str, Any] = {
+        "model": _config.model,
+        "messages": conversation,
+        "max_tokens": 2000,
+        "stream": True,
+    }
+    if usage_box is not None and _config.base_url.rstrip("/") == OPENCODE_GO_BASE_URL:
+        kwargs["stream_options"] = {"include_usage": True}
+    stream = await openai_client.chat.completions.create(**kwargs)
     async for chunk in stream:
+        usage = getattr(chunk, "usage", None)
+        if usage_box is not None and usage is not None:
+            usage_box["prompt_tokens"] = usage.prompt_tokens or 0
+            usage_box["completion_tokens"] = usage.completion_tokens or 0
         if not chunk.choices:
             continue
-        delta = chunk.choices[0].delta.content
-        if delta:
-            yield delta
+        delta = chunk.choices[0].delta
+        if reasoning_box is not None:
+            reason = getattr(delta, "reasoning_content", None) or getattr(
+                delta, "reasoning", None
+            )
+            if reason:
+                reasoning_box.append(reason)
+        content = delta.content
+        if content:
+            yield content
 
 
 def get_connection_error_message(error: Exception) -> str | None:
@@ -547,6 +563,51 @@ def render_user_message(text: str) -> Panel:
     Render a user message as a bordered panel.
     """
     return Panel(Text(escape(text)), title="You", border_style="blue", padding=(0, 1))
+
+
+def estimate_tokens(text: str) -> int:
+    """
+    Rough token estimate for a piece of text, used when the API does not
+    report exact usage. Based on the ~4 chars/token heuristic.
+    """
+    if not text:
+        return 0
+    return max(1, len(text) // 4 + text.count("\n") // 3)
+
+
+def estimate_conversation_tokens(
+    conversation: list[ChatCompletionMessageParam],
+) -> int:
+    """
+    Rough token estimate for the whole conversation, summing string content
+    (including tool_result(...) messages).
+    """
+    total = 0
+    for message in conversation:
+        content = message.get("content")
+        if isinstance(content, str):
+            total += estimate_tokens(content)
+        elif isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and isinstance(part.get("text"), str):
+                    total += estimate_tokens(part["text"])
+                elif hasattr(part, "text") and part.text:
+                    total += estimate_tokens(part.text)
+    return total
+
+
+def strip_protocol_lines(text: str) -> str:
+    """
+    Remove 'thinking:' and 'tool:' protocol lines for display. They stay in
+    the conversation history sent to the model.
+    """
+    lines = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if line.startswith("thinking:") or line.startswith("tool:"):
+            continue
+        lines.append(raw_line)
+    return "\n".join(lines)
 
 
 def render_assistant_message(

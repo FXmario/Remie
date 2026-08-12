@@ -34,6 +34,8 @@ from fuica.agent import (
     OPENCODE_GO_MODELS,
     UnsupportedModelError,
     configure_openai,
+    estimate_conversation_tokens,
+    estimate_tokens,
     extract_thinking,
     extract_tool_invocations,
     fetch_opencode_go_models,
@@ -46,6 +48,7 @@ from fuica.agent import (
     run_tool,
     save_config,
     stream_llm_call,
+    strip_protocol_lines,
 )
 
 CSS = """
@@ -181,6 +184,16 @@ def _has_tool_call(text: str) -> bool:
     return any(
         line.strip().startswith("tool:") for line in text.splitlines() if line.strip()
     )
+
+
+def _format_tokens(count: int) -> str:
+    """Format a token count compactly, e.g. 1234 -> '1.2k'."""
+    if count >= 1000:
+        value = count / 1000.0
+        if value == int(value):
+            return f"{int(value)}k"
+        return f"{value:.1f}k"
+    return str(count)
 
 
 class StreamingRichLog(RichLog):
@@ -330,10 +343,12 @@ class ThinkingIndicator(Label):
 
 
 class ModelBadge(Label):
-    """Clickable label showing the active model name."""
+    """Clickable label showing the active model name, vendor, and token usage."""
 
     def __init__(self) -> None:
         super().__init__(id="model-badge")
+        self._model_text = ""
+        self._vendor_text = ""
         self.update_config(get_config())
 
     def update_config(self, config) -> None:
@@ -342,7 +357,19 @@ class ModelBadge(Label):
             if config.base_url.rstrip("/") == OPENCODE_GO_BASE_URL
             else "Local"
         )
-        self.update(f"{config.model}  {vendor}")
+        self._model_text = config.model
+        self._vendor_text = vendor
+        self._show()
+
+    def set_tokens(self, input_tokens: int, output_tokens: int) -> None:
+        self._show(input_tokens, output_tokens)
+
+    def _show(self, input_tokens: int = 0, output_tokens: int = 0) -> None:
+        text = f"{self._model_text}  {self._vendor_text}"
+        if input_tokens or output_tokens:
+            total = input_tokens + output_tokens
+            text += f" · {_format_tokens(total)} tok"
+        self.update(text)
 
     async def on_click(self) -> None:
         app = self.app
@@ -537,6 +564,9 @@ class AgentApp(App):
         self.theme = "ansi-dark"
         self._agent_running = False
         self._stop_requested = False
+        self._input_queue: asyncio.Queue[str | None] = asyncio.Queue()
+        self._total_input_tokens = 0
+        self._total_output_tokens = 0
         self.debug_mode = os.environ.get("FUICA_DEBUG", "").lower() in {
             "1",
             "true",
@@ -571,23 +601,47 @@ class AgentApp(App):
         if user_input.lower() in {"exit", "quit", "keluar"}:
             self.exit()
             return
-        self.conversation.append({"role": "user", "content": user_input})
         log = self.query_one("#log", StreamingRichLog)
         log.write(render_user_message(user_input))
         log.write("")
         event.input.value = ""
-        event.input.disabled = True
-        self._stop_requested = False
-        self._agent_running = True
-        self._set_status("working")
-        _ = self.run_agent_turn()
+        self._input_queue.put_nowait(user_input)
+        if not self._agent_running:
+            _ = self.message_worker()
 
     @work(exclusive=True)
-    async def run_agent_turn(self) -> None:
+    async def message_worker(self) -> None:
+        """Consume queued user messages, processing them one at a time."""
+        try:
+            while True:
+                user_input = await self._input_queue.get()
+                self._input_queue.task_done()
+                if user_input is None or self._stop_requested:
+                    self._drain_queue()
+                    break
+                self._set_status("working")
+                await self.run_agent_turn(user_input)
+                if self._stop_requested:
+                    self._drain_queue()
+                    break
+        finally:
+            self._stop_requested = False
+            self.query_one("#prompt", Input).focus()
+
+    def _drain_queue(self) -> None:
+        while not self._input_queue.empty():
+            try:
+                self._input_queue.get_nowait()
+                self._input_queue.task_done()
+            except asyncio.QueueEmpty:
+                break
+
+    async def run_agent_turn(self, user_input: str) -> None:
         log = self.query_one("#log", StreamingRichLog)
-        prompt = self.query_one("#prompt", Input)
         completed = False
         try:
+            self._agent_running = True
+            self.conversation.append({"role": "user", "content": user_input})
             while True:
                 if self._stop_requested:
                     log.write("[dim]Stopped by user[/]")
@@ -595,20 +649,29 @@ class AgentApp(App):
                 full_text = ""
                 log.begin_stream()
                 tool_detected = False
-                async for delta in stream_llm_call(self.conversation):
+                usage_box: dict[str, int] = {}
+                reasoning_box: list[str] = []
+                async for delta in stream_llm_call(
+                    self.conversation, usage_box, reasoning_box
+                ):
                     if self._stop_requested:
                         break
                     full_text += delta
                     if not tool_detected and _has_tool_call(full_text):
                         tool_detected = True
+                    reasoning_text = "".join(reasoning_box)
                     if tool_detected:
-                        thinking = extract_thinking(full_text)
-                        if thinking:
-                            log.update_stream(
-                                thinking,
-                                title="Thinking",
-                                border_style="dim",
-                            )
+                        shown = reasoning_text or extract_thinking(full_text)
+                    elif reasoning_text:
+                        shown = reasoning_text
+                    else:
+                        shown = ""
+                    if shown:
+                        log.update_stream(
+                            Text.from_markup(escape(shown)),
+                            title="Reasoning",
+                            border_style="dim",
+                        )
                     else:
                         log.update_stream(
                             _safe_stream_markdown(full_text, self._code_theme()),
@@ -617,21 +680,45 @@ class AgentApp(App):
                     log.replace_stream()
                     log.write("[dim]Stopped by user[/]")
                     break
+                reasoning_text = "".join(reasoning_box) or extract_thinking(full_text)
+                input_tokens = usage_box.get("prompt_tokens") or (
+                    estimate_conversation_tokens(self.conversation)
+                )
+                output_tokens = usage_box.get("completion_tokens") or estimate_tokens(
+                    full_text
+                )
+                self._total_input_tokens += input_tokens
+                self._total_output_tokens += output_tokens
+                self.query_one(ModelBadge).set_tokens(
+                    self._total_input_tokens, self._total_output_tokens
+                )
                 tool_invocations = extract_tool_invocations(full_text)
                 if not tool_invocations:
-                    log.replace_stream(
-                        render_assistant_panel(full_text, self._code_theme())
-                    )
+                    content = strip_protocol_lines(full_text).strip()
+                    renderables = []
+                    if reasoning_text:
+                        renderables.append(
+                            Panel(
+                                Text.from_markup(escape(reasoning_text)),
+                                title="Reasoning",
+                                border_style="dim",
+                                padding=(0, 1),
+                            )
+                        )
+                    if content:
+                        renderables.append(
+                            render_assistant_panel(content, self._code_theme())
+                        )
+                    log.replace_stream(*renderables)
                     self.conversation.append(
                         {"role": "assistant", "content": full_text}
                     )
                     completed = True
                     self._set_status("done")
                     return
-                thinking = extract_thinking(full_text)
                 replacements: list[str] = []
-                if thinking:
-                    replacements.append(f"[dim]Thinking:[/] {escape(thinking)}")
+                if reasoning_text:
+                    replacements.append(f"[dim]Reasoning:[/] {escape(reasoning_text)}")
                 for name, args in tool_invocations:
                     if self.debug_mode:
                         tool_line = (
@@ -681,21 +768,23 @@ class AgentApp(App):
             )
         finally:
             self._agent_running = False
-            prompt.disabled = False
-            prompt.focus()
             if not completed:
                 self._set_status("ready")
 
     def action_clear_log(self) -> None:
         self.query_one("#log", RichLog).clear()
+        self._total_input_tokens = 0
+        self._total_output_tokens = 0
+        self.query_one(ModelBadge).set_tokens(0, 0)
 
     def action_toggle_theme(self) -> None:
         self.theme = "ansi-dark" if self.theme == "ansi-light" else "ansi-light"
 
     def action_stop_agent(self) -> None:
-        """Request the running agent loop to stop at the next await point."""
+        """Request the running agent loop to stop and clear pending messages."""
         if self._agent_running:
             self._stop_requested = True
+            self._input_queue.put_nowait(None)
 
     async def action_open_connection(self) -> None:
         """Open the connection/model picker. Ignored while the agent is busy."""

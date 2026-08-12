@@ -12,6 +12,8 @@ from fuica.agent import (
     RUN_COMMAND_TIMEOUT,
     configure_openai,
     edit_file_tool,
+    estimate_conversation_tokens,
+    estimate_tokens,
     extract_thinking,
     extract_tool_invocations,
     fetch_opencode_go_models,
@@ -27,6 +29,8 @@ from fuica.agent import (
     resolve_abs_path,
     run_command_tool,
     run_tool,
+    stream_llm_call,
+    strip_protocol_lines,
     tree_files_tool,
 )
 
@@ -327,6 +331,147 @@ class TestExtractToolInvocations:
 
     def test_ignores_malformed_line_without_closing_paren(self):
         assert extract_tool_invocations('tool: read_file({"filename": "a.py"') == []
+
+
+class TestEstimateTokens:
+    def test_empty_text_is_zero(self):
+        assert estimate_tokens("") == 0
+
+    def test_plain_text(self):
+        assert estimate_tokens("hello world") == 2
+
+    def test_newlines_add_bonus(self):
+        assert estimate_tokens("a" * 40 + "\n" * 30) == 27
+
+    def test_minimum_one_for_non_empty(self):
+        assert estimate_tokens("x") == 1
+
+
+class TestEstimateConversationTokens:
+    def test_sums_string_content(self):
+        conversation = [
+            {"role": "system", "content": "abcd"},
+            {"role": "user", "content": "efghijkl"},
+        ]
+        assert estimate_conversation_tokens(conversation) == estimate_tokens(
+            "abcd"
+        ) + estimate_tokens("efghijkl")
+
+    def test_sums_tool_result_messages(self):
+        conversation = [
+            {"role": "user", "content": "tool_result({\"x\": 1})"},
+            {"role": "user", "content": "tool_result({\"y\": 2})"},
+        ]
+        assert estimate_conversation_tokens(conversation) == 2 * estimate_tokens(
+            'tool_result({"x": 1})'
+        )
+
+    def test_ignores_non_string_content(self):
+        conversation = [{"role": "user", "content": [{"image": "base64"}]}]
+        assert estimate_conversation_tokens(conversation) == 0
+
+    def test_empty_conversation(self):
+        assert estimate_conversation_tokens([]) == 0
+
+
+class TestStripProtocolLines:
+    def test_removes_thinking_and_tool_lines(self):
+        text = "thinking: why\nhello\ntool: read_file({\"filename\": \"a.py\"})\ndone"
+        assert strip_protocol_lines(text) == "hello\ndone"
+
+    def test_keeps_normal_text(self):
+        assert strip_protocol_lines("just a reply") == "just a reply"
+
+    def test_empty_input(self):
+        assert strip_protocol_lines("") == ""
+
+    def test_only_protocol_lines(self):
+        assert strip_protocol_lines("thinking: x\ntool: list_files({\"path\": \".\"})") == ""
+
+
+class TestStreamLlmUsageAndReasoning:
+    def test_captures_usage_and_reasoning(self, monkeypatch):
+        import asyncio
+
+        class FakeUsage:
+            prompt_tokens = 100
+            completion_tokens = 50
+
+        class FakeDelta:
+            def __init__(self, content=None, reasoning_content=None):
+                self.content = content
+                self.reasoning_content = reasoning_content
+
+        class FakeChoice:
+            def __init__(self, delta):
+                self.delta = delta
+
+        class FakeChunk:
+            def __init__(self, choices, usage=None):
+                self.choices = choices
+                self.usage = usage
+
+        class FakeCompletions:
+            async def create(self, **kwargs):
+                async def gen():
+                    yield FakeChunk(
+                        [FakeChoice(FakeDelta(reasoning_content="think..."))]
+                    )
+                    yield FakeChunk([FakeChoice(FakeDelta(content="hi"))])
+                    yield FakeChunk([], usage=FakeUsage())
+
+                return gen()
+
+        class FakeChat:
+            completions = FakeCompletions()
+
+        class FakeClient:
+            chat = FakeChat()
+
+        monkeypatch.setattr("fuica.agent.openai_client", FakeClient())
+
+        conversation = []
+        usage_box = {}
+        reasoning_box = []
+
+        async def collect():
+            return [d async for d in stream_llm_call(
+                conversation, usage_box, reasoning_box
+            )]
+
+        chunks = asyncio.run(collect())
+        assert chunks == ["hi"]
+        assert usage_box == {"prompt_tokens": 100, "completion_tokens": 50}
+        assert reasoning_box == ["think..."]
+
+    def test_no_boxes_keeps_plain_stream(self, monkeypatch):
+        import asyncio
+
+        class FakeDelta:
+            content = "hi"
+
+        class FakeChoice:
+            delta = FakeDelta()
+
+        class FakeChunk:
+            choices = [FakeChoice()]
+
+        class FakeCompletions:
+            async def create(self, **kwargs):
+                async def gen():
+                    yield FakeChunk()
+
+                return gen()
+
+        class FakeClient:
+            chat = type("FakeChat", (), {"completions": FakeCompletions()})()
+
+        monkeypatch.setattr("fuica.agent.openai_client", FakeClient())
+
+        async def collect():
+            return [d async for d in stream_llm_call([])]
+
+        assert asyncio.run(collect()) == ["hi"]
 
 
 class TestGetToolSummary:

@@ -6,6 +6,9 @@ A terminal-based coding agent with a [Textual](https://textual.textualize.io/) T
 
 - Textual TUI with bordered panels per message (user and assistant) and color-coded tool activity
 - Streaming responses — assistant text appears token-by-token inside the log as the model generates it
+- Message queue — keep typing while the agent works; queued messages are processed one at a time
+- Token counter — running input/output token total shown in the model badge (exact usage from OpenCode Go, estimate otherwise)
+- Reasoning display — the agent's thinking process streams in a `Reasoning` panel every turn (native `reasoning_content` when the provider streams it, `thinking:` lines otherwise)
 - Syntax highlighting for code blocks the agent generates (fenced code in responses)
 - The model name is shown on the top-right of the input box border
 - Uses your terminal's native color scheme (ANSI), so the UI matches your system theme — like opencode
