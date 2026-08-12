@@ -208,6 +208,8 @@ You have access to a series of tools you can execute. Hear are the tools you can
 When you want to use a tool, first provide a short 'thinking:' line explaining your reasoning, then reply with exactly one line in the format: 'tool: TOOL_NAME({{JSON_ARGS}})' and nothing else.
 Use compact single-line JSON with double quotes. After receiving a tool_result(...) message, continue the task.
 If no tool is needed, respond normally.
+
+When multiple valid approaches have meaningful tradeoffs or require a user preference, do not choose silently. Briefly explain the options and ask the user which they prefer. Continue autonomously for routine implementation details or when one option clearly dominates. Do not ask unnecessary confirmation questions.
 """
 
 

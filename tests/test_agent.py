@@ -20,6 +20,7 @@ from fuica.agent import (
     fetch_opencode_go_models,
     get_config,
     get_connection_error_message,
+    get_full_system_prompt,
     get_tool_summary,
     glob_files_tool,
     load_config,
@@ -693,6 +694,13 @@ class TestStreamLlmUsageAndReasoning:
                 previous.provider,
                 previous.reasoning_effort,
             )
+
+
+class TestSystemPrompt:
+    def test_prompt_asks_user_between_multiple_opinions(self):
+        prompt = get_full_system_prompt()
+        assert "multiple valid approaches" in prompt
+        assert "ask the user which they prefer" in prompt
 
 
 class TestGetToolSummary:
