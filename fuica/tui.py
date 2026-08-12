@@ -42,6 +42,7 @@ from fuica.agent import (
     get_config,
     get_connection_error_message,
     get_full_system_prompt,
+    get_model_context_limit,
     get_tool_summary,
     render_assistant_panel,
     render_user_message,
@@ -196,6 +197,21 @@ def _format_tokens(count: int) -> str:
             return f"{int(value)}k"
         return f"{value:.1f}k"
     return str(count)
+
+
+def _format_context_bar(used: int, limit: int, width: int = 10) -> str:
+    """Render context usage as a compact terminal progress bar."""
+    if limit <= 0:
+        return ""
+    ratio = max(0.0, min(1.0, used / limit))
+    filled = min(width, round(ratio * width))
+    return "█" * filled + "░" * (width - filled)
+
+
+def _model_option(model: str) -> tuple[str, str]:
+    limit = get_model_context_limit(model, "opencode-go")
+    label = f"{model} · {_format_tokens(limit)} ctx" if limit else model
+    return label, model
 
 
 def _render_diff(diff: str) -> Panel:
@@ -375,6 +391,8 @@ class ModelBadge(Label):
         self._reasoning_effort = "off"
         self._input_tokens = 0
         self._output_tokens = 0
+        self._context_tokens = 0
+        self._context_limit: int | None = None
         self.update_config(get_config())
 
     def update_config(self, config) -> None:
@@ -386,12 +404,18 @@ class ModelBadge(Label):
         self._model_text = config.model
         self._vendor_text = vendor
         self._reasoning_effort = config.reasoning_effort
+        self._context_limit = config.context_limit
         self._show(self._input_tokens, self._output_tokens)
 
     def set_tokens(self, input_tokens: int, output_tokens: int) -> None:
         self._input_tokens = input_tokens
         self._output_tokens = output_tokens
         self._show(input_tokens, output_tokens)
+
+    def set_context(self, used: int, limit: int | None) -> None:
+        self._context_tokens = used
+        self._context_limit = limit
+        self._show(self._input_tokens, self._output_tokens)
 
     def _show(self, input_tokens: int = 0, output_tokens: int = 0) -> None:
         text = f"{self._model_text}  {self._vendor_text}"
@@ -400,6 +424,12 @@ class ModelBadge(Label):
         if input_tokens or output_tokens:
             total = input_tokens + output_tokens
             text += f" · {_format_tokens(total)} tok"
+        if self._context_limit:
+            text += (
+                f" · ctx {_format_tokens(self._context_tokens)}"
+                f"/{_format_tokens(self._context_limit)}"
+                f" {_format_context_bar(self._context_tokens, self._context_limit)}"
+            )
         self.update(text)
 
     async def on_click(self) -> None:
@@ -494,7 +524,7 @@ class ConnectionScreen(ModalScreen):
                 )
                 yield Label("Model")
                 yield Select(
-                    [(model, model) for model in OPENCODE_GO_MODELS],
+                    [_model_option(model) for model in OPENCODE_GO_MODELS],
                     value=current.model
                     if current.model in OPENCODE_GO_MODELS
                     else OPENCODE_GO_MODELS[0],
@@ -554,7 +584,7 @@ class ConnectionScreen(ModalScreen):
         select.loading = True
         models = await fetch_opencode_go_models(api_key)
         select.loading = False
-        select.set_options([(model, model) for model in models])
+        select.set_options([_model_option(model) for model in models])
         select.value = models[0] if models else OPENCODE_GO_MODELS[0]
 
     def _connect(self) -> None:
@@ -583,6 +613,7 @@ class ConnectionScreen(ModalScreen):
             model,
             provider=str(provider),
             reasoning_effort=effort,
+            context_limit=get_model_context_limit(model, str(provider)),
         )
         save_config(config)
         app = self.app
@@ -745,6 +776,10 @@ class AgentApp(App):
                 self._total_output_tokens += output_tokens
                 self.query_one(ModelBadge).set_tokens(
                     self._total_input_tokens, self._total_output_tokens
+                )
+                self.query_one(ModelBadge).set_context(
+                    estimate_conversation_tokens(self.conversation),
+                    get_config().context_limit,
                 )
                 tool_invocations = extract_tool_invocations(full_text)
                 if not tool_invocations:

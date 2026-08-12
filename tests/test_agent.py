@@ -6,6 +6,7 @@ from rich.panel import Panel
 from rich.text import Text
 
 from fuica.agent import (
+    MODEL_CONTEXT_LIMITS,
     OPENCODE_GO_BASE_URL,
     OPENCODE_GO_MODELS,
     RUN_COMMAND_MAX_OUTPUT,
@@ -677,6 +678,7 @@ class TestConnectionConfig:
             "model",
             "opencode-go",
             "max",
+            256000,
         )
         save_config(original)
         assert load_config() == original
@@ -713,7 +715,12 @@ class TestConnectionConfig:
                 pass
 
             def json(self):
-                return {"data": [{"id": "kimi-k3"}, {"id": "grok-4.5"}]}
+                return {
+                    "data": [
+                        {"id": "kimi-k3", "context_length": 256000},
+                        {"id": "grok-4.5"},
+                    ]
+                }
 
         async def fake_get(self, url, headers=None):
             return FakeResponse()
@@ -721,6 +728,7 @@ class TestConnectionConfig:
         monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
         models = asyncio.run(fetch_opencode_go_models("valid"))
         assert models == ["kimi-k3", "grok-4.5"]
+        assert MODEL_CONTEXT_LIMITS["kimi-k3"] == 256000
 
     def test_opencode_go_constants(self):
         assert OPENCODE_GO_BASE_URL == "https://opencode.ai/zen/go/v1"

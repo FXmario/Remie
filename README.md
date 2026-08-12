@@ -7,7 +7,7 @@ A terminal-based coding agent with a [Textual](https://textual.textualize.io/) T
 - Textual TUI with bordered panels per message (user and assistant) and color-coded tool activity
 - Streaming responses — assistant text appears token-by-token inside the log as the model generates it
 - Message queue — keep typing while the agent works; queued messages are processed one at a time
-- Token counter — running input/output token total shown in the model badge (exact usage from OpenCode Go, estimate otherwise)
+- Token counter — running input/output totals plus a context-window progress bar in the model badge
 - Reasoning display — the agent's thinking process streams in a `Reasoning` panel every turn (native `reasoning_content` when the provider streams it, `thinking:` lines otherwise)
 - Syntax highlighting for code blocks the agent generates (fenced code in responses)
 - The model name is shown on the top-right of the input box border
@@ -60,7 +60,7 @@ Open the connection picker with `Ctrl+P` or by clicking the model name next to
 the input. From there you can:
 
 - Choose **Local (llama.cpp)** to use your environment-configured server
-- Choose **OpenCode Go**, paste your API key (from [opencode.ai/auth](https://opencode.ai/auth)), and pick a model — the model list is fetched live, falling back to a bundled list
+- Choose **OpenCode Go**, paste your API key (from [opencode.ai/auth](https://opencode.ai/auth)), and pick a model — the model list and context metadata are fetched live, falling back to bundled defaults
 - Choose a reasoning effort (`off`, `low`, `medium`, `high`, or `max`) supported by your provider
 
 The active connection (provider, base URL, API key, model, and reasoning effort) is saved to

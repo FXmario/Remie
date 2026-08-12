@@ -17,6 +17,7 @@ from fuica.tui import (
     StatusIndicator,
     ThinkingIndicator,
     _format_tokens,
+    _format_context_bar,
     _is_tmux,
     _load_status_gif,
 )
@@ -284,6 +285,23 @@ def test_model_badge_shows_reasoning_effort():
         )
     )
     assert badge.render().plain == "kimi-k3  OpenCode Go · effort max"
+
+
+def test_context_progress_bar_and_badge():
+    assert _format_context_bar(50, 100, width=10) == "█████░░░░░"
+    badge = ModelBadge()
+    badge.update_config(
+        ConnectionConfig(
+            OPENCODE_GO_BASE_URL,
+            "key",
+            "kimi-k3",
+            reasoning_effort="off",
+            context_limit=1000,
+        )
+    )
+    badge.set_context(500, 1000)
+    assert "ctx 500/1k" in badge.render().plain
+    assert "█████░░░░░" in badge.render().plain
 
 
 def test_connection_screen_restores_provider_and_effort():
