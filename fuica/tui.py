@@ -53,6 +53,9 @@ from fuica.agent import (
 )
 
 REASONING_EFFORTS = ("off", "low", "medium", "high", "max")
+PROVIDER_BASE_URLS = {
+    "opencode-go": OPENCODE_GO_BASE_URL,
+}
 
 CSS = """
 Screen {
@@ -486,7 +489,6 @@ class ConnectionScreen(ModalScreen):
         height: 3;
         width: 100%;
         align: center middle;
-        dock: bottom;
     }
 
     #connection-dialog Button {
@@ -510,10 +512,10 @@ class ConnectionScreen(ModalScreen):
                     id="provider-select",
                     prompt="Choose provider...",
                 )
-                yield Label("Base URL")
+                yield Label("Base URL", id="base-url-label")
                 yield Input(
                     current.base_url,
-                    placeholder="http://localhost:1234/v1",
+                    placeholder="http://localhost:7070/v1",
                     id="base-url-input",
                 )
                 yield Label("API Key")
@@ -548,18 +550,25 @@ class ConnectionScreen(ModalScreen):
 
     def on_mount(self) -> None:
         provider = self.query_one("#provider-select", Select).value
-        is_go = provider == "opencode-go"
-        self.query_one("#base-url-input", Input).disabled = is_go
-        self.query_one("#model-select", Select).disabled = not is_go
+        self._set_provider_fields(provider)
         self.query_one("#api-key-input", Input).focus()
+
+    def _set_provider_fields(self, provider: object) -> None:
+        is_local = provider == "local"
+        base_url_input = self.query_one("#base-url-input", Input)
+        base_url_label = self.query_one("#base-url-label", Label)
+        base_url_input.display = is_local
+        base_url_label.display = is_local
+        base_url_input.disabled = not is_local
+        self.query_one("#model-select", Select).disabled = is_local
 
     async def on_select_changed(self, event: Select.Changed) -> None:
         if event.select.id == "provider-select":
-            is_go = event.value == "opencode-go"
-            self.query_one("#base-url-input", Input).disabled = is_go
-            self.query_one("#model-select", Select).disabled = not is_go
-            if is_go:
-                self.query_one("#base-url-input", Input).value = OPENCODE_GO_BASE_URL
+            self._set_provider_fields(event.value)
+            if event.value in PROVIDER_BASE_URLS:
+                self.query_one("#base-url-input", Input).value = PROVIDER_BASE_URLS[
+                    event.value
+                ]
                 api_key = self.query_one("#api-key-input", Input).value.strip()
                 if api_key:
                     await self._refresh_models(api_key)
@@ -590,8 +599,8 @@ class ConnectionScreen(ModalScreen):
 
     def _connect(self) -> None:
         provider = self.query_one("#provider-select", Select).value
-        if provider == "opencode-go":
-            base_url = OPENCODE_GO_BASE_URL
+        if provider != "local":
+            base_url = PROVIDER_BASE_URLS.get(str(provider), OPENCODE_GO_BASE_URL)
             api_key = self.query_one("#api-key-input", Input).value.strip()
             model = self._selected_model()
             if not api_key:

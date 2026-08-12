@@ -1,3 +1,3 @@
 import os
 
-os.environ.setdefault("LLAMA_BASE_URL", "http://localhost:1234/v1")
+os.environ.setdefault("LLAMA_BASE_URL", "http://localhost:7070/v1")

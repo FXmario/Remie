@@ -63,7 +63,7 @@ class ConnectionConfig:
 
 
 def _default_config() -> ConnectionConfig:
-    base_url = os.environ.get("LLAMA_BASE_URL", "http://localhost:1234/v1")
+    base_url = os.environ.get("LLAMA_BASE_URL", "http://localhost:7070/v1")
     provider = (
         "opencode-go" if base_url.rstrip("/") == OPENCODE_GO_BASE_URL else "local"
     )

@@ -323,6 +323,8 @@ def test_connection_screen_restores_provider_and_effort():
                 assert screen.query_one("#provider-select").value == "opencode-go"
                 assert screen.query_one("#reasoning-effort-select").value == "high"
                 assert screen.query_one("#base-url-input").disabled is True
+                assert screen.query_one("#base-url-input").display is False
+                assert screen.query_one("#base-url-label").display is False
                 assert screen.query_one("#model-select").disabled is False
         finally:
             configure_openai(
@@ -331,6 +333,41 @@ def test_connection_screen_restores_provider_and_effort():
                 previous.model,
                 previous.provider,
                 previous.reasoning_effort,
+            )
+
+    asyncio.run(exercise())
+
+
+def test_connection_screen_shows_local_url_field():
+    async def exercise():
+        previous = get_config()
+        configure_openai(
+            "http://localhost:7070/v1",
+            "key",
+            "local-model",
+            provider="local",
+            reasoning_effort="off",
+        )
+        try:
+            app = AgentApp()
+            async with app.run_test() as pilot:
+                await pilot.press("ctrl+p")
+                await pilot.pause()
+                screen = app.screen
+                assert screen.query_one("#base-url-input").display is True
+                assert screen.query_one("#base-url-label").display is True
+                assert screen.query_one("#base-url-input").value == (
+                    "http://localhost:7070/v1"
+                )
+                assert screen.query_one("#model-select").disabled is True
+        finally:
+            configure_openai(
+                previous.base_url,
+                previous.api_key,
+                previous.model,
+                previous.provider,
+                previous.reasoning_effort,
+                previous.context_limit,
             )
 
     asyncio.run(exercise())

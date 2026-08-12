@@ -43,7 +43,7 @@ Configure the LLM connection via environment variables (a `.env` file is loaded 
 
 | Variable          | Description                        | Default       |
 | ----------------- | ---------------------------------- | ------------- |
-| `LLAMA_BASE_URL`  | Base URL of the LLM server         | (required)    |
+| `LLAMA_BASE_URL`  | Base URL of the local LLM server   | `http://localhost:7070/v1` |
 | `LLAMA_API_KEY`   | API key for the server             | `llama-cpp`   |
 | `LLAMA_MODEL`     | Model name                         | `local-model` |
 | `FUICA_DEBUG`            | Show raw tool calls (name + params) | (unset)       |
@@ -62,6 +62,9 @@ the input. From there you can:
 - Choose **Local (llama.cpp)** to use your environment-configured server
 - Choose **OpenCode Go**, paste your API key (from [opencode.ai/auth](https://opencode.ai/auth)), and pick a model — the model list and context metadata are fetched live, falling back to bundled defaults
 - Choose a reasoning effort (`off`, `low`, `medium`, `high`, or `max`) supported by your provider
+
+The Local provider exposes an editable Base URL field, defaulting to
+`http://localhost:7070/v1`. Managed providers use their built-in endpoint.
 
 The active connection (provider, base URL, API key, model, and reasoning effort) is saved to
 `~/.config/fuiagent/config.json` and reused on the next launch.
