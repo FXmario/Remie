@@ -316,6 +316,129 @@ def test_prompt_shift_enter_inserts_newline(monkeypatch):
     asyncio.run(exercise())
 
 
+def test_prompt_history_up_and_down(monkeypatch):
+    async def exercise():
+        async def fake_stream(_conversation, usage_box=None, reasoning_box=None):
+            if False:
+                yield ""
+
+        monkeypatch.setattr(tui, "stream_llm_call", fake_stream)
+
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            prompt = app.query_one("#prompt", PromptTextArea)
+            prompt.focus()
+
+            await pilot.press("a")
+            await pilot.press("a")
+            await pilot.press("a")
+            await pilot.press("enter")
+            await pilot.pause()
+
+            await pilot.press("b")
+            await pilot.press("b")
+            await pilot.press("b")
+            await pilot.press("enter")
+            await pilot.pause()
+
+            assert app._prompt_history == ["aaa", "bbb"]
+
+            await pilot.press("up")
+            assert prompt.text == "bbb"
+            await pilot.press("up")
+            assert prompt.text == "aaa"
+            await pilot.press("down")
+            assert prompt.text == "bbb"
+            await pilot.press("down")
+            assert prompt.text == ""
+
+    asyncio.run(exercise())
+
+
+def test_prompt_history_down_past_end_restores_draft(monkeypatch):
+    async def exercise():
+        async def fake_stream(_conversation, usage_box=None, reasoning_box=None):
+            if False:
+                yield ""
+
+        monkeypatch.setattr(tui, "stream_llm_call", fake_stream)
+
+        app = AgentApp()
+        app._prompt_history = ["hello", "world"]
+        async with app.run_test() as pilot:
+            prompt = app.query_one("#prompt", PromptTextArea)
+            prompt.focus()
+            await pilot.press("d")
+            await pilot.press("r")
+            await pilot.press("a")
+            await pilot.press("f")
+            await pilot.press("t")
+
+            await pilot.press("up")
+            assert prompt.text == "world"
+            await pilot.press("up")
+            assert prompt.text == "hello"
+            await pilot.press("down")
+            assert prompt.text == "world"
+            await pilot.press("down")
+            assert prompt.text == "draft"
+
+    asyncio.run(exercise())
+
+
+def test_prompt_history_skips_consecutive_duplicates(monkeypatch):
+    async def exercise():
+        async def fake_stream(_conversation, usage_box=None, reasoning_box=None):
+            if False:
+                yield ""
+
+        monkeypatch.setattr(tui, "stream_llm_call", fake_stream)
+
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            prompt = app.query_one("#prompt", PromptTextArea)
+            prompt.focus()
+            await pilot.press("a")
+            await pilot.press("enter")
+            await pilot.pause()
+            await pilot.press("a")
+            await pilot.press("enter")
+            await pilot.pause()
+            assert app._prompt_history == ["a"]
+
+    asyncio.run(exercise())
+
+
+def test_up_arrow_moves_lines_before_history(monkeypatch):
+    async def exercise():
+        app = AgentApp()
+        app._prompt_history = ["saved"]
+        async with app.run_test() as pilot:
+            prompt = app.query_one("#prompt", PromptTextArea)
+            prompt.focus()
+            await pilot.press("l")
+            await pilot.press("i")
+            await pilot.press("n")
+            await pilot.press("e")
+            await pilot.press("1")
+            await pilot.press("ctrl+j")
+            await pilot.press("l")
+            await pilot.press("i")
+            await pilot.press("n")
+            await pilot.press("e")
+            await pilot.press("2")
+
+            assert prompt.cursor_location[0] == 1
+            await pilot.press("up")
+            assert prompt.cursor_location[0] == 0
+            assert prompt.text == "line1\nline2"
+
+            await pilot.press("up")
+            assert prompt.text == "saved"
+
+    asyncio.run(exercise())
+
+
 def test_paste_clipboard_image_attaches(monkeypatch):
     async def exercise():
         image = Image.new("RGB", (8, 8), "blue")

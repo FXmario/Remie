@@ -66,6 +66,7 @@ from fuica.agent import (
 )
 
 REASONING_EFFORTS = ("off", "low", "medium", "high", "max")
+PROMPT_HISTORY_LIMIT = 100
 PROVIDER_BASE_URLS = {
     "opencode-go": OPENCODE_GO_BASE_URL,
 }
@@ -489,6 +490,28 @@ class PromptTextArea(TextArea):
             if self._paste_clipboard_image():
                 event.stop()
                 event.prevent_default()
+        elif event.key in {"up", "down"}:
+            if self._maybe_history_navigate(event.key):
+                event.stop()
+                event.prevent_default()
+
+    def _maybe_history_navigate(self, key: str) -> bool:
+        """Navigate prompt history when at a line boundary, like a shell."""
+        app = self.app
+        if not isinstance(app, AgentApp):
+            return False
+        at_boundary = (
+            self.cursor_at_first_line if key == "up" else self.cursor_at_last_line
+        )
+        if not at_boundary:
+            return False
+        direction = -1 if key == "up" else 1
+        text = app.recall_prompt_history(direction, self.text)
+        if text is None:
+            return False
+        self.load_text(text)
+        self.move_cursor(self.document.end, center=False)
+        return True
 
     def _submit(self) -> None:
         text = self.text.strip()
@@ -732,6 +755,9 @@ class AgentApp(App):
         self._stop_requested = False
         self._input_queue: asyncio.Queue[str | list | None] = asyncio.Queue()
         self._pending_image: PILImage.Image | None = None
+        self._prompt_history: list[str] = []
+        self._history_index: int | None = None
+        self._history_draft = ""
         self._total_input_tokens = 0
         self._total_output_tokens = 0
         self.debug_mode = os.environ.get("FUICA_DEBUG", "").lower() in {
@@ -764,6 +790,37 @@ class AgentApp(App):
     def set_pending_image(self, image: PILImage.Image) -> None:
         self._pending_image = image
 
+    def _record_prompt_history(self, text: str) -> None:
+        if not text:
+            return
+        if self._prompt_history and self._prompt_history[-1] == text:
+            return
+        self._prompt_history.append(text)
+        if len(self._prompt_history) > PROMPT_HISTORY_LIMIT:
+            del self._prompt_history[:-PROMPT_HISTORY_LIMIT]
+        self._history_index = None
+        self._history_draft = ""
+
+    def recall_prompt_history(self, direction: int, current_text: str) -> str | None:
+        """Recall prompt history; returns the text to show or None to abort."""
+        if not self._prompt_history:
+            return None
+        if self._history_index is None:
+            if direction < 0:
+                self._history_draft = current_text
+                self._history_index = len(self._prompt_history) - 1
+                return self._prompt_history[self._history_index]
+            return None
+        target = self._history_index + direction
+        if target < 0:
+            self._history_index = 0
+            return self._prompt_history[0]
+        if target >= len(self._prompt_history):
+            self._history_index = None
+            return self._history_draft
+        self._history_index = target
+        return self._prompt_history[target]
+
     def _image_to_content(self, image: PILImage.Image) -> list[dict[str, Any]]:
         buffer = io.BytesIO()
         image.convert("RGBA").save(buffer, format="PNG")
@@ -780,6 +837,7 @@ class AgentApp(App):
         if user_input.lower() in {"exit", "quit", "keluar"}:
             self.exit()
             return
+        self._record_prompt_history(user_input)
         log = self.query_one("#log", StreamingRichLog)
         content: str | list = user_input
         if self._pending_image is not None:

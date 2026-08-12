@@ -16,6 +16,7 @@ A terminal-based coding agent with a [Textual](https://textual.textualize.io/) T
 - Tools: `read_file`, `list_files`, `glob_files`, `tree_files`, `edit_file`, `run_command`
 - Tool calls accepted as `tool: name({...})` or DSML markup (`<|DSML|>invoke name="..." />`)
 - Multiline input — `Shift+Enter` or `Ctrl+J` for a new line, `Enter` to send
+- Prompt history — `Up`/`Down` arrows recall previous prompts, like a shell
 - Paste images from the clipboard with `Ctrl+V` and send them to vision-capable models
 - Thinking step before every tool call; tool calls are announced as `Agent calling <tool>`, kept in the conversation history
 
@@ -100,6 +101,7 @@ Type a message at the bottom input and press Enter. The agent will reason (`Thin
 | `Enter`   | Send the message |
 | `Shift+Enter` / `Ctrl+J` | Insert a new line |
 | `Ctrl+V`  | Paste clipboard text, or attach an image |
+| `Up` / `Down` | Recall previous prompts (history) |
 
 ## How it works
 
