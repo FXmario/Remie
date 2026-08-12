@@ -48,6 +48,30 @@ def test_tmux_thinking_indicator_visibility(monkeypatch):
     assert not indicator.display
 
 
+def test_tmux_spinner_lives_next_to_model_badge(monkeypatch):
+    async def exercise():
+        monkeypatch.setenv("TMUX", "/tmp/tmux-1000/default,1,0")
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            row = app.query_one("#model-row")
+            assert row.query_one(ThinkingIndicator) is not None
+            assert row.query_one(ModelBadge) is not None
+            assert row.query_one("#tmux-spinner", ThinkingIndicator) is not None
+
+    asyncio.run(exercise())
+
+
+def test_tmux_spinner_hidden_when_idle(monkeypatch):
+    async def exercise():
+        monkeypatch.setenv("TMUX", "/tmp/tmux-1000/default,1,0")
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            indicator = app.query_one(ThinkingIndicator)
+            assert indicator.display is False
+
+    asyncio.run(exercise())
+
+
 def test_status_gifs_load_with_frame_timing():
     frames, durations = _load_status_gif("ready.gif")
 

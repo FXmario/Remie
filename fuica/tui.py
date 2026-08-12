@@ -125,15 +125,21 @@ Screen {
 
 #tmux-spinner {
     width: 1;
-    height: 3;
+    height: 1;
     margin-right: 0;
-    content-align: left middle;
+    content-align: center middle;
     display: none;
 }
 
-#model-badge {
+#model-row {
     dock: top;
     align: right top;
+    height: 1;
+    width: 100%;
+    padding: 0 1;
+}
+
+#model-badge {
     height: 1;
     width: auto;
     padding: 0 1;
@@ -549,8 +555,15 @@ class PromptTextArea(TextArea):
 class InputRow(Horizontal):
     def compose(self) -> ComposeResult:
         yield StatusIndicator()
-        yield ThinkingIndicator()
         yield PromptBox()
+
+
+class ModelRow(Horizontal):
+    """Top-right row holding the TMUX spinner next to the model badge."""
+
+    def compose(self) -> ComposeResult:
+        yield ThinkingIndicator()
+        yield ModelBadge()
 
 
 class PromptBox(Vertical):
@@ -558,8 +571,8 @@ class PromptBox(Vertical):
         super().__init__(id="prompt-box")
 
     def compose(self) -> ComposeResult:
+        yield ModelRow(id="model-row")
         yield PromptTextArea()
-        yield ModelBadge()
 
 
 class ConnectionScreen(ModalScreen):
