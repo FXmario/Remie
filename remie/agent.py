@@ -2,6 +2,7 @@ import ast
 import inspect
 import json
 import os
+import subprocess
 from collections.abc import AsyncIterator
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -20,7 +21,7 @@ from rich.text import Text
 load_dotenv()
 
 CONFIG_DIR = Path(
-    os.environ.get("CHALDEA_CONFIG_DIR", "~/.config/fuiagent")
+    os.environ.get("REMIE_CONFIG_DIR", "~/.config/fuiagent")
 ).expanduser()
 CONFIG_FILE = CONFIG_DIR / "config.json"
 
@@ -195,16 +196,81 @@ def edit_file_tool(path: str, old_str: str, new_str: str) -> dict[str, Any]:
     return {"path": str(full_path), "action": "edited"}
 
 
+RUN_COMMAND_TIMEOUT = 30
+RUN_COMMAND_MAX_OUTPUT = 30_000
+TIMED_OUT_EXIT_CODE = 124
+
+
+def _truncate_stream(stream: str, limit: int) -> str:
+    """Truncate a stream to limit chars, keeping a marker on the final line."""
+    if len(stream) <= limit:
+        return stream
+    return stream[:limit].rstrip("\n") + "\n[output truncated]\n"
+
+
+def run_command_tool(command: str, cwd: str = ".") -> dict[str, Any]:
+    """
+    Runs a shell command in the project and returns its exit code and output.
+    :param command: The shell command to run.
+    :param cwd: The directory to run the command in (defaults to the project).
+    :return: A dictionary with the exit code, stdout, stderr, cwd, and whether it timed out.
+    """
+    full_path = resolve_abs_path(cwd)
+    try:
+        result = subprocess.run(
+            command,
+            cwd=str(full_path),
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=RUN_COMMAND_TIMEOUT,
+            input=None,
+        )
+        exit_code = result.returncode
+        stdout, stderr = result.stdout, result.stderr
+        timed_out = False
+    except subprocess.TimeoutExpired as error:
+        exit_code = TIMED_OUT_EXIT_CODE
+        stdout = error.stdout or ""
+        stderr = error.stderr or ""
+        timed_out = True
+
+    truncated = False
+    if len(stdout) + len(stderr) > RUN_COMMAND_MAX_OUTPUT:
+        truncated = True
+        budget = max(RUN_COMMAND_MAX_OUTPUT - 40, 1)
+        if stdout and stderr:
+            stdout_share = int(budget * len(stdout) / (len(stdout) + len(stderr)))
+            stdout = _truncate_stream(stdout, stdout_share)
+            stderr = _truncate_stream(stderr, budget - stdout_share)
+        elif stdout:
+            stdout = _truncate_stream(stdout, budget)
+        else:
+            stderr = _truncate_stream(stderr, budget)
+
+    return {
+        "command": command,
+        "cwd": str(full_path),
+        "exit_code": exit_code,
+        "stdout": stdout,
+        "stderr": stderr,
+        "timed_out": timed_out,
+        "truncated": truncated,
+    }
+
+
 TOOL_REGISTRY = {
     "read_file": read_file_tool,
     "list_files": list_files_tool,
     "edit_file": edit_file_tool,
+    "run_command": run_command_tool,
 }
 
 TOOL_SUMMARIES = {
     "read_file": "read a file",
     "list_files": "list the files in a directory",
     "edit_file": "edit a file",
+    "run_command": "run a shell command",
 }
 
 
@@ -344,6 +410,11 @@ def run_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
                 args.get("path", "."),
                 args.get("old_str", ""),
                 args.get("new_str", ""),
+            )
+        elif name == "run_command":
+            return run_command_tool(
+                args.get("command", ""),
+                args.get("cwd", "."),
             )
         return TOOL_REGISTRY[name](**args)
     except (OSError, UnicodeError, TypeError, ValueError) as error:

@@ -15,7 +15,7 @@ dependencies = [
 ]
 
 [project.scripts]
-chaldea = "chaldea.tui:main"
+remie = "remie.tui:main"
 
 [tool.uv]
 package = true
@@ -24,4 +24,4 @@ package = true
 dev = ["pytest>=8"]
 
 [tool.setuptools.packages.find]
-include = ["chaldea*"]
+include = ["remie*"]

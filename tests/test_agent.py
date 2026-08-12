@@ -1,12 +1,15 @@
 import pytest
 import httpx
+import subprocess
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.text import Text
 
-from chaldea.agent import (
+from remie.agent import (
     OPENCODE_GO_BASE_URL,
     OPENCODE_GO_MODELS,
+    RUN_COMMAND_MAX_OUTPUT,
+    RUN_COMMAND_TIMEOUT,
     configure_openai,
     edit_file_tool,
     extract_thinking,
@@ -21,6 +24,7 @@ from chaldea.agent import (
     render_assistant_panel,
     render_user_message,
     resolve_abs_path,
+    run_command_tool,
     run_tool,
 )
 
@@ -112,6 +116,68 @@ class TestEditFileTool:
         assert path.read_text(encoding="utf-8") == "new content"
 
 
+class TestRunCommandTool:
+    def test_runs_command_and_captures_stdout(self):
+        result = run_command_tool("echo hello")
+        assert result["exit_code"] == 0
+        assert result["stdout"].strip() == "hello"
+        assert result["timed_out"] is False
+        assert result["truncated"] is False
+
+    def test_captures_non_zero_exit_and_stderr(self):
+        result = run_command_tool("echo oops >&2; exit 3")
+        assert result["exit_code"] == 3
+        assert result["stderr"].strip() == "oops"
+        assert result["stdout"] == ""
+
+    def test_runs_in_given_cwd(self, tmp_path):
+        (tmp_path / "marker.txt").write_text("x", encoding="utf-8")
+        result = run_command_tool("ls marker.txt", cwd=str(tmp_path))
+        assert result["exit_code"] == 0
+        assert "marker.txt" in result["stdout"]
+
+    def test_uses_shell_pipes_and_env(self):
+        result = run_command_tool("echo one | tr 'o' '0'")
+        assert result["exit_code"] == 0
+        assert result["stdout"].strip() == "0ne"
+
+    def test_timeout_kills_long_command(self, monkeypatch):
+        import time
+
+        def fake_run(*args, **kwargs):
+            time.sleep(1)
+            cmd = kwargs.get("args", args[0] if args else "")
+            raise subprocess.TimeoutExpired(cmd, kwargs["timeout"])
+
+        monkeypatch.setattr(
+            "remie.agent.subprocess.run", fake_run, raising=False
+        )
+        result = run_command_tool("sleep 60")
+        assert result["timed_out"] is True
+        assert result["exit_code"] == 124
+
+    def test_output_is_truncated(self, monkeypatch):
+        class FakeResult:
+            returncode = 0
+            stdout = "a" * (RUN_COMMAND_MAX_OUTPUT + 10_000)
+            stderr = ""
+
+        monkeypatch.setattr(
+            "remie.agent.subprocess.run",
+            lambda *a, **k: FakeResult(),
+            raising=False,
+        )
+        result = run_command_tool("cat bigfile")
+        assert result["truncated"] is True
+        assert "[output truncated]" in result["stdout"]
+        assert len(result["stdout"]) <= RUN_COMMAND_MAX_OUTPUT
+
+    def test_dispatch_via_run_tool(self):
+        result = run_tool("run_command", {"command": "echo dispatched"})
+        assert result["exit_code"] == 0
+        assert result["stdout"].strip() == "dispatched"
+
+
 class TestRunTool:
     def test_dispatches_read_file(self, tmp_path):
         path = tmp_path / "a.py"
@@ -183,6 +249,7 @@ class TestGetToolSummary:
         assert get_tool_summary("read_file") == "read a file"
         assert get_tool_summary("list_files") == "list the files in a directory"
         assert get_tool_summary("edit_file") == "edit a file"
+        assert get_tool_summary("run_command") == "run a shell command"
 
     def test_unknown_tool_falls_back_to_name(self):
         assert get_tool_summary("nonexistent") == "nonexistent"

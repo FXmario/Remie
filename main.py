@@ -1,4 +1,4 @@
-from chaldea.tui import run_tui
+from remie.tui import run_tui
 
 
 def main():

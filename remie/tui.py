@@ -29,7 +29,7 @@ from textual.strip import Strip
 from textual.widgets import Button, Footer, Header, Input, Label, RichLog, Select
 from textual_image.widget import SixelImage as TerminalImage
 
-from chaldea.agent import (
+from remie.agent import (
     OPENCODE_GO_BASE_URL,
     OPENCODE_GO_MODELS,
     UnsupportedModelError,
@@ -537,7 +537,7 @@ class AgentApp(App):
         self.theme = "ansi-dark"
         self._agent_running = False
         self._stop_requested = False
-        self.debug_mode = os.environ.get("CHALDEA_DEBUG", "").lower() in {
+        self.debug_mode = os.environ.get("REMIE_DEBUG", "").lower() in {
             "1",
             "true",
             "yes",

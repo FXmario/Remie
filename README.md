@@ -31,10 +31,10 @@ To install the agent as a global command and use it from any project:
 ```bash
 uv tool install /home/mario/Work/FuiAgent
 cd ~/Projects/my-other-project
-chaldea
+remie
 ```
 
-The agent operates on the directory where `chaldea` is launched, so relative tool paths target the current project.
+The agent operates on the directory where `remie` is launched, so relative tool paths target the current project.
 
 Configure the LLM connection via environment variables (a `.env` file is loaded automatically):
 
@@ -43,7 +43,7 @@ Configure the LLM connection via environment variables (a `.env` file is loaded 
 | `LLAMA_BASE_URL`  | Base URL of the LLM server         | (required)    |
 | `LLAMA_API_KEY`   | API key for the server             | `llama-cpp`   |
 | `LLAMA_MODEL`     | Model name                         | `local-model` |
-| `CHALDEA_DEBUG`   | Show raw tool calls (name + params) | (unset)       |
+| `REMIE_DEBUG`   | Show raw tool calls (name + params) | (unset)       |
 
 ### OpenCode Go
 
@@ -62,15 +62,15 @@ The active connection (base URL, API key, model) is saved to
 `~/.config/fuiagent/config.json` and reused on the next launch.
 
 When the agent calls a tool, the log shows a human-readable line like `Agent calling the read a file`.
-Tool results are hidden by default. Set `CHALDEA_DEBUG=1` to show the raw function name, JSON parameters,
+Tool results are hidden by default. Set `REMIE_DEBUG=1` to show the raw function name, JSON parameters,
 and `tool_result` payloads (e.g. `Agent calling read_file({"filename": "main.py"})`); a `· debug` marker appears in the header.
 
 ## Usage
 
-Run the agent with the `chaldea` command (installed by `uv sync`), or launch it directly:
+Run the agent with the `remie` command (installed by `uv sync`), or launch it directly:
 
 ```bash
-chaldea
+remie
 # or
 uv run main.py
 ```
@@ -95,10 +95,10 @@ The system prompt instructs the model to emit a short `thinking:` line before a 
 tool: read_file({"filename": "main.py"})
 ```
 
-`chaldea/agent.py` parses those lines, runs the requested tool, and feeds the result back as a `tool_result(...)` message until the model responds without a tool call.
+`remie/agent.py` parses those lines, runs the requested tool, and feeds the result back as a `tool_result(...)` message until the model responds without a tool call.
 
 ## Project layout
 
 - `main.py` — entry point; launches the TUI
-- `chaldea/agent.py` — LLM client, system prompt, tool registry, and parsing helpers
-- `chaldea/tui.py` — the Textual `AgentApp`, theme detection, and the `chaldea` CLI entry point
+- `remie/agent.py` — LLM client, system prompt, tool registry, and parsing helpers
+- `remie/tui.py` — the Textual `AgentApp`, theme detection, and the `remie` CLI entry point

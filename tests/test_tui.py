@@ -2,9 +2,9 @@ import asyncio
 
 import httpx
 
-import chaldea.tui as tui
-from chaldea.agent import ConnectionConfig, OPENCODE_GO_BASE_URL
-from chaldea.tui import (
+import remie.tui as tui
+from remie.agent import ConnectionConfig, OPENCODE_GO_BASE_URL
+from remie.tui import (
     AgentApp,
     ConnectionScreen,
     ModelBadge,
