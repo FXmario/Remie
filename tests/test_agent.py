@@ -531,6 +531,79 @@ class TestStreamLlmUsageAndReasoning:
         assert usage_box == {"prompt_tokens": 100, "completion_tokens": 50}
         assert reasoning_box == ["think..."]
 
+    def test_captures_truncated_finish_reason(self, monkeypatch):
+        import asyncio
+
+        class FakeDelta:
+            content = "partial"
+
+        class FakeChoice:
+            def __init__(self, delta, finish_reason):
+                self.delta = delta
+                self.finish_reason = finish_reason
+
+        class FakeChunk:
+            def __init__(self, choice):
+                self.choices = [choice] if choice else []
+
+        class FakeCompletions:
+            async def create(self, **kwargs):
+                async def gen():
+                    yield FakeChunk(FakeChoice(FakeDelta(), None))
+                    yield FakeChunk(FakeChoice(FakeDelta(), "length"))
+
+                return gen()
+
+        class FakeClient:
+            chat = type("FakeChat", (), {"completions": FakeCompletions()})()
+
+        monkeypatch.setattr("fuica.agent.openai_client", FakeClient())
+
+        finish_box = {}
+
+        async def collect():
+            return [d async for d in stream_llm_call([], finish_box=finish_box)]
+
+        assert asyncio.run(collect()) == ["partial", "partial"]
+        assert finish_box["finish_reason"] == "length"
+        assert finish_box["truncated"] is True
+
+    def test_stop_finish_reason_not_truncated(self, monkeypatch):
+        import asyncio
+
+        class FakeDelta:
+            content = "done"
+
+        class FakeChoice:
+            def __init__(self, delta, finish_reason):
+                self.delta = delta
+                self.finish_reason = finish_reason
+
+        class FakeChunk:
+            def __init__(self, choice):
+                self.choices = [choice] if choice else []
+
+        class FakeCompletions:
+            async def create(self, **kwargs):
+                async def gen():
+                    yield FakeChunk(FakeChoice(FakeDelta(), "stop"))
+
+                return gen()
+
+        class FakeClient:
+            chat = type("FakeChat", (), {"completions": FakeCompletions()})()
+
+        monkeypatch.setattr("fuica.agent.openai_client", FakeClient())
+
+        finish_box = {}
+
+        async def collect():
+            return [d async for d in stream_llm_call([], finish_box=finish_box)]
+
+        assert asyncio.run(collect()) == ["done"]
+        assert finish_box["finish_reason"] == "stop"
+        assert finish_box["truncated"] is False
+
     def test_no_boxes_keeps_plain_stream(self, monkeypatch):
         import asyncio
 

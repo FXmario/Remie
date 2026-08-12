@@ -12,6 +12,7 @@ from fuica.agent import (
     get_config,
 )
 from fuica.tui import (
+    MAX_AUTO_CONTINUATIONS,
     AgentApp,
     ConnectionScreen,
     ModelBadge,
@@ -81,7 +82,7 @@ def test_model_badge_includes_vendor():
 
 def test_connection_error_shows_toast_and_keeps_app_running(monkeypatch):
     async def exercise():
-        async def failed_stream(_conversation, usage_box=None, reasoning_box=None):
+        async def failed_stream(_conversation, usage_box=None, reasoning_box=None, finish_box=None):
             raise httpx.ConnectError("connection refused")
             yield ""
 
@@ -135,7 +136,7 @@ def test_open_connection_opens_modal_when_idle():
 
 def test_escape_stops_running_agent(monkeypatch):
     async def exercise():
-        async def endless_stream(_conversation, usage_box=None, reasoning_box=None):
+        async def endless_stream(_conversation, usage_box=None, reasoning_box=None, finish_box=None):
             while True:
                 yield "chunk"
                 await asyncio.sleep(0)
@@ -159,7 +160,7 @@ def test_escape_stops_running_agent(monkeypatch):
 
 def test_messages_are_queued_and_processed_in_order(monkeypatch):
     async def exercise():
-        async def fake_stream(_conversation, usage_box=None, reasoning_box=None):
+        async def fake_stream(_conversation, usage_box=None, reasoning_box=None, finish_box=None):
             yield "reply"
 
         monkeypatch.setattr(tui, "stream_llm_call", fake_stream)
@@ -184,7 +185,7 @@ def test_messages_are_queued_and_processed_in_order(monkeypatch):
 
 def test_stop_drains_pending_messages(monkeypatch):
     async def exercise():
-        async def endless_stream(_conversation, usage_box=None, reasoning_box=None):
+        async def endless_stream(_conversation, usage_box=None, reasoning_box=None, finish_box=None):
             while True:
                 yield "chunk"
                 await asyncio.sleep(0)
@@ -217,7 +218,9 @@ def test_edit_tool_writes_diff_panel_to_log(monkeypatch, tmp_path):
 
         calls = 0
 
-        async def tool_stream(_conversation, usage_box=None, reasoning_box=None):
+        async def tool_stream(
+            _conversation, usage_box=None, reasoning_box=None, finish_box=None
+        ):
             nonlocal calls
             calls += 1
             if calls == 1:
@@ -247,7 +250,111 @@ def test_edit_tool_writes_diff_panel_to_log(monkeypatch, tmp_path):
     asyncio.run(exercise())
 
 
-async def _empty_stream(_conversation, usage_box=None, reasoning_box=None):
+def test_truncated_response_continues_automatically(monkeypatch):
+    async def exercise():
+        calls = 0
+
+        async def truncating_stream(
+            _conversation, usage_box=None, reasoning_box=None, finish_box=None
+        ):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                finish_box["finish_reason"] = "length"
+                finish_box["truncated"] = True
+                yield "The answer is cut "
+            else:
+                yield "off here, now complete."
+
+        monkeypatch.setattr(tui, "stream_llm_call", truncating_stream)
+
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            await app.run_agent_turn("hello")
+            await pilot.pause()
+
+            assert calls == 2
+            assistant_messages = [
+                m["content"]
+                for m in app.conversation
+                if m["role"] == "assistant"
+            ]
+            assert assistant_messages == [
+                "The answer is cut ",
+                "off here, now complete.",
+            ]
+
+    asyncio.run(exercise())
+
+
+def test_truncated_tool_call_continues_before_executing(monkeypatch, tmp_path):
+    async def exercise():
+        file = tmp_path / "doc.txt"
+        file.write_text("hello\n", encoding="utf-8")
+
+        calls = 0
+
+        async def truncating_stream(
+            _conversation, usage_box=None, reasoning_box=None, finish_box=None
+        ):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                finish_box["finish_reason"] = "length"
+                finish_box["truncated"] = True
+                yield (
+                    f'tool: edit_file({{"path": "{file}", '
+                    '"old_str": "hello", "new_str": "hi"})'
+                )
+            else:
+                yield "done"
+
+        monkeypatch.setattr(tui, "stream_llm_call", truncating_stream)
+
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            await app.run_agent_turn("edit it")
+            await pilot.pause()
+
+            # Complete tool call still executes; no bogus continuation.
+            assert file.read_text(encoding="utf-8") == "hi\n"
+            assert calls == 2
+
+    asyncio.run(exercise())
+
+
+def test_truncation_continuation_limit(monkeypatch):
+    async def exercise():
+        calls = 0
+
+        async def always_truncating(
+            _conversation, usage_box=None, reasoning_box=None, finish_box=None
+        ):
+            nonlocal calls
+            calls += 1
+            finish_box["finish_reason"] = "length"
+            finish_box["truncated"] = True
+            yield "x"
+
+        monkeypatch.setattr(tui, "stream_llm_call", always_truncating)
+
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            await app.run_agent_turn("hello")
+            await pilot.pause()
+
+            assert calls == MAX_AUTO_CONTINUATIONS + 1
+            assistant_messages = [
+                m["content"]
+                for m in app.conversation
+                if m["role"] == "assistant"
+            ]
+            assert len(assistant_messages) == MAX_AUTO_CONTINUATIONS + 1
+
+    asyncio.run(exercise())
+
+
+async def _empty_stream(_conversation, usage_box=None, reasoning_box=None, finish_box=None):
     return
     yield  # pragma: no cover
 
@@ -269,7 +376,7 @@ def test_has_tool_call_detects_dsml():
 
 def test_prompt_enter_submits_and_ctrl_j_inserts_newline(monkeypatch):
     async def exercise():
-        async def fake_stream(_conversation, usage_box=None, reasoning_box=None):
+        async def fake_stream(_conversation, usage_box=None, reasoning_box=None, finish_box=None):
             if False:
                 yield ""
 
@@ -298,7 +405,7 @@ def test_prompt_enter_submits_and_ctrl_j_inserts_newline(monkeypatch):
 
 def test_prompt_shift_enter_inserts_newline(monkeypatch):
     async def exercise():
-        async def fake_stream(_conversation, usage_box=None, reasoning_box=None):
+        async def fake_stream(_conversation, usage_box=None, reasoning_box=None, finish_box=None):
             if False:
                 yield ""
 
@@ -318,7 +425,7 @@ def test_prompt_shift_enter_inserts_newline(monkeypatch):
 
 def test_prompt_history_up_and_down(monkeypatch):
     async def exercise():
-        async def fake_stream(_conversation, usage_box=None, reasoning_box=None):
+        async def fake_stream(_conversation, usage_box=None, reasoning_box=None, finish_box=None):
             if False:
                 yield ""
 
@@ -357,7 +464,7 @@ def test_prompt_history_up_and_down(monkeypatch):
 
 def test_prompt_history_down_past_end_restores_draft(monkeypatch):
     async def exercise():
-        async def fake_stream(_conversation, usage_box=None, reasoning_box=None):
+        async def fake_stream(_conversation, usage_box=None, reasoning_box=None, finish_box=None):
             if False:
                 yield ""
 
@@ -388,7 +495,7 @@ def test_prompt_history_down_past_end_restores_draft(monkeypatch):
 
 def test_prompt_history_skips_consecutive_duplicates(monkeypatch):
     async def exercise():
-        async def fake_stream(_conversation, usage_box=None, reasoning_box=None):
+        async def fake_stream(_conversation, usage_box=None, reasoning_box=None, finish_box=None):
             if False:
                 yield ""
 
@@ -455,7 +562,7 @@ def test_paste_clipboard_image_attaches(monkeypatch):
 
 def test_image_attachment_builds_multimodal_message(monkeypatch):
     async def exercise():
-        async def fake_stream(_conversation, usage_box=None, reasoning_box=None):
+        async def fake_stream(_conversation, usage_box=None, reasoning_box=None, finish_box=None):
             if False:
                 yield ""
 
@@ -606,7 +713,7 @@ def test_connection_screen_shows_local_url_field():
 def test_turn_updates_badge_tokens(monkeypatch):
     async def exercise():
         async def fake_stream(
-            _conversation, usage_box=None, reasoning_box=None
+            _conversation, usage_box=None, reasoning_box=None, finish_box=None
         ):
             if reasoning_box is not None:
                 reasoning_box.append("reasoning text")
@@ -632,7 +739,7 @@ def test_turn_updates_badge_tokens(monkeypatch):
 def test_final_answer_strips_protocol_lines(monkeypatch):
     async def exercise():
         async def fake_stream(
-            _conversation, usage_box=None, reasoning_box=None
+            _conversation, usage_box=None, reasoning_box=None, finish_box=None
         ):
             yield "thinking: let me think"
             yield "\n"

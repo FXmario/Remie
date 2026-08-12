@@ -48,6 +48,9 @@ OPENCODE_GO_MODELS = [
 OPENCODE_GO_DEFAULT_CONTEXT_LIMIT = 128_000
 MODEL_CONTEXT_LIMITS: dict[str, int] = {}
 
+MAX_OUTPUT_TOKENS = int(os.environ.get("FUICA_MAX_OUTPUT_TOKENS", "8192"))
+TRUNCATED_REASONS = {"length", "max_tokens", "max_completion_tokens"}
+
 
 class UnsupportedModelError(RuntimeError):
     """Raised when a configured provider needs an unsupported API format."""
@@ -616,6 +619,7 @@ async def stream_llm_call(
     conversation: list[ChatCompletionMessageParam],
     usage_box: dict[str, int] | None = None,
     reasoning_box: list[str] | None = None,
+    finish_box: dict[str, Any] | None = None,
 ) -> AsyncIterator[str]:
     if (
         _config.base_url.rstrip("/") == OPENCODE_GO_BASE_URL
@@ -627,7 +631,7 @@ async def stream_llm_call(
     kwargs: dict[str, Any] = {
         "model": _config.model,
         "messages": conversation,
-        "max_tokens": 2000,
+        "max_tokens": MAX_OUTPUT_TOKENS,
         "stream": True,
     }
     if _config.reasoning_effort != "off":
@@ -643,6 +647,11 @@ async def stream_llm_call(
         if not chunk.choices:
             continue
         delta = chunk.choices[0].delta
+        if finish_box is not None:
+            finish_reason = chunk.choices[0].finish_reason
+            if finish_reason is not None:
+                finish_box["finish_reason"] = finish_reason
+                finish_box["truncated"] = finish_reason in TRUNCATED_REASONS
         if reasoning_box is not None:
             reason = getattr(delta, "reasoning_content", None) or getattr(
                 delta, "reasoning", None

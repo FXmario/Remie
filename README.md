@@ -8,6 +8,7 @@ A terminal-based coding agent with a [Textual](https://textual.textualize.io/) T
 - Streaming responses — assistant text appears token-by-token inside the log as the model generates it
 - Message queue — keep typing while the agent works; queued messages are processed one at a time
 - Token counter — running input/output totals plus a context-window progress bar in the model badge
+- Auto-continuation — when a response hits the output token limit (e.g. long reasoning), the agent resumes automatically instead of stopping
 - Reasoning display — the agent's thinking process streams in a `Reasoning` panel every turn (native `reasoning_content` when the provider streams it, `thinking:` lines otherwise)
 - Syntax highlighting for code blocks the agent generates (fenced code in responses)
 - The model name is shown on the top-right of the input box border
@@ -52,6 +53,7 @@ Configure the LLM connection via environment variables (a `.env` file is loaded 
 | `LLAMA_MODEL`     | Model name                         | `local-model` |
 | `FUICA_DEBUG`            | Show raw tool calls (name + params) | (unset)       |
 | `FUICA_REASONING_EFFORT` | Reasoning mode: off/low/medium/high/max | `medium`   |
+| `FUICA_MAX_OUTPUT_TOKENS` | Max output tokens per response | `8192` |
 
 ### OpenCode Go
 

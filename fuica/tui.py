@@ -67,6 +67,7 @@ from fuica.agent import (
 
 REASONING_EFFORTS = ("off", "low", "medium", "high", "max")
 PROMPT_HISTORY_LIMIT = 100
+MAX_AUTO_CONTINUATIONS = 4
 PROVIDER_BASE_URLS = {
     "opencode-go": OPENCODE_GO_BASE_URL,
 }
@@ -90,6 +91,10 @@ Screen {
     margin: 0;
     border: round $primary;
     border-title-align: right;
+}
+
+#prompt .text-area--placeholder {
+    color: grey;
 }
 
 #prompt-box {
@@ -471,7 +476,7 @@ class PromptTextArea(TextArea):
     def __init__(self, **kwargs) -> None:
         super().__init__(
             id="prompt",
-            placeholder="Type a message and press Enter...",
+            placeholder="Type a prompt here...",
             soft_wrap=True,
             show_line_numbers=False,
             **kwargs,
@@ -891,6 +896,7 @@ class AgentApp(App):
         try:
             self._agent_running = True
             self.conversation.append({"role": "user", "content": user_content})
+            continuations = 0
             while True:
                 if self._stop_requested:
                     log.write("[dim]Stopped by user[/]")
@@ -900,8 +906,9 @@ class AgentApp(App):
                 tool_detected = False
                 usage_box: dict[str, int] = {}
                 reasoning_box: list[str] = []
+                finish_box: dict[str, Any] = {}
                 async for delta in stream_llm_call(
-                    self.conversation, usage_box, reasoning_box
+                    self.conversation, usage_box, reasoning_box, finish_box
                 ):
                     if self._stop_requested:
                         break
@@ -917,7 +924,7 @@ class AgentApp(App):
                         shown = ""
                     if shown:
                         log.update_stream(
-                            Text.from_markup(escape(shown)),
+                            _safe_stream_markdown(shown, self._code_theme()),
                             title="Reasoning",
                             border_style="dim",
                         )
@@ -946,13 +953,33 @@ class AgentApp(App):
                     get_config().context_limit,
                 )
                 tool_invocations = extract_tool_invocations(full_text)
+                if (
+                    finish_box.get("truncated")
+                    and continuations < MAX_AUTO_CONTINUATIONS
+                    and not tool_invocations
+                ):
+                    self.conversation.append(
+                        {"role": "assistant", "content": full_text}
+                    )
+                    partial = strip_protocol_lines(full_text).strip()
+                    if partial:
+                        log.replace_stream(
+                            render_assistant_panel(partial, self._code_theme())
+                        )
+                    else:
+                        log.replace_stream()
+                    log.write("[dim]Response limit reached, continuing...[/]")
+                    continuations += 1
+                    continue
                 if not tool_invocations:
                     content = strip_protocol_lines(full_text).strip()
                     renderables = []
                     if reasoning_text:
                         renderables.append(
                             Panel(
-                                Text.from_markup(escape(reasoning_text)),
+                                _safe_stream_markdown(
+                                    reasoning_text, self._code_theme()
+                                ),
                                 title="Reasoning",
                                 border_style="dim",
                                 padding=(0, 1),
@@ -969,9 +996,18 @@ class AgentApp(App):
                     completed = True
                     self._set_status("done")
                     return
-                replacements: list[str] = []
+                replacements: list[RenderableType] = []
                 if reasoning_text:
-                    replacements.append(f"[dim]Reasoning:[/] {escape(reasoning_text)}")
+                    replacements.append(
+                        Panel(
+                            _safe_stream_markdown(
+                                reasoning_text, self._code_theme()
+                            ),
+                            title="Reasoning",
+                            border_style="dim",
+                            padding=(0, 1),
+                        )
+                    )
                 for name, args in tool_invocations:
                     if self.debug_mode:
                         tool_line = (
