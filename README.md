@@ -14,6 +14,9 @@ A terminal-based coding agent with a [Textual](https://textual.textualize.io/) T
 - Uses your terminal's native color scheme (ANSI), so the UI matches your system theme — like opencode
 - Async agent loop — the UI stays responsive while the LLM responds and tools run
 - Tools: `read_file`, `list_files`, `glob_files`, `tree_files`, `edit_file`, `run_command`
+- Tool calls accepted as `tool: name({...})` or DSML markup (`<|DSML|>invoke name="..." />`)
+- Multiline input — `Shift+Enter` or `Ctrl+J` for a new line, `Enter` to send
+- Paste images from the clipboard with `Ctrl+V` and send them to vision-capable models
 - Thinking step before every tool call; tool calls are announced as `Agent calling <tool>`, kept in the conversation history
 
 ## Requirements
@@ -94,6 +97,9 @@ Type a message at the bottom input and press Enter. The agent will reason (`Thin
 | `Ctrl+P`  | Open connection/model picker |
 | `Ctrl+T`  | Toggle dark/light theme |
 | `Esc`     | Stop the agent while it is running |
+| `Enter`   | Send the message |
+| `Shift+Enter` / `Ctrl+J` | Insert a new line |
+| `Ctrl+V`  | Paste clipboard text, or attach an image |
 
 ## How it works
 

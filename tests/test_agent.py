@@ -357,6 +357,59 @@ class TestExtractToolInvocations:
     def test_ignores_malformed_line_without_closing_paren(self):
         assert extract_tool_invocations('tool: read_file({"filename": "a.py"') == []
 
+    def test_parses_dsml_invocation(self):
+        text = (
+            "<|DSML|>tool_calls>\n"
+            '<|DSML|>invoke name="list-files">\n'
+            '<|DSML|>parameter path="." />\n'
+            "<|DSML|>/tool_calls>\n"
+        )
+        assert extract_tool_invocations(text) == [("list_files", {"path": "."})]
+
+    def test_parses_dsml_normalizes_dashed_names(self):
+        text = (
+            "<|DSML|>tool_calls>\n"
+            '<|DSML|>invoke name="read-file">\n'
+            '<|DSML|>parameter filename="main.py" />\n'
+            "<|DSML|>/tool_calls>\n"
+        )
+        assert extract_tool_invocations(text) == [
+            ("read_file", {"filename": "main.py"})
+        ]
+
+    def test_parses_dsml_multiple_calls_and_params(self):
+        text = (
+            "<|DSML|>tool_calls>\n"
+            '<|DSML|>invoke name="read-file">\n'
+            '<|DSML|>parameter filename="main.py" />\n'
+            "<|DSML|>parameter count=2 />\n"
+            '<|DSML|>invoke name="tree-files">\n'
+            '<|DSML|>parameter path="/tmp" />\n'
+            "<|DSML|>/tool_calls>\n"
+        )
+        assert extract_tool_invocations(text) == [
+            ("read_file", {"filename": "main.py", "count": 2}),
+            ("tree_files", {"path": "/tmp"}),
+        ]
+
+    def test_dsml_without_closing_tag_still_parses(self):
+        text = (
+            '<|DSML|>invoke name="list-files">\n'
+            '<|DSML|>parameter path="src" />\n'
+        )
+        assert extract_tool_invocations(text) == [("list_files", {"path": "src"})]
+
+    def test_mixed_tool_and_dsml_formats(self):
+        text = (
+            'tool: read_file({"filename": "a.py"})\n'
+            '<|DSML|>invoke name="list-files">\n'
+            '<|DSML|>parameter path="." />\n'
+        )
+        assert extract_tool_invocations(text) == [
+            ("read_file", {"filename": "a.py"}),
+            ("list_files", {"path": "."}),
+        ]
+
 
 class TestEstimateTokens:
     def test_empty_text_is_zero(self):
@@ -412,6 +465,15 @@ class TestStripProtocolLines:
 
     def test_only_protocol_lines(self):
         assert strip_protocol_lines("thinking: x\ntool: list_files({\"path\": \".\"})") == ""
+
+    def test_removes_dsml_lines(self):
+        text = (
+            "<|DSML|>tool_calls>\n"
+            'hello\n'
+            '<|DSML|>invoke name="list-files">\n'
+            '<|DSML|>parameter path="." />\n'
+        )
+        assert strip_protocol_lines(text) == "hello"
 
 
 class TestStreamLlmUsageAndReasoning:

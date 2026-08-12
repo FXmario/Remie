@@ -1,4 +1,6 @@
 import asyncio
+import base64
+import io
 import json
 import os
 from pathlib import Path
@@ -6,10 +8,11 @@ import re
 import select
 import sys
 import time
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import httpx
 from PIL import Image as PILImage
+from PIL import ImageGrab
 from PIL import ImageSequence
 from openai import APIConnectionError, APITimeoutError
 from openai.types.chat import ChatCompletionMessageParam
@@ -24,9 +27,19 @@ from textual.app import App, ComposeResult
 from textual.binding import BindingType
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.geometry import Size
+from textual.message import Message
 from textual.screen import ModalScreen
 from textual.strip import Strip
-from textual.widgets import Button, Footer, Header, Input, Label, RichLog, Select
+from textual.widgets import (
+    Button,
+    Footer,
+    Header,
+    Input,
+    Label,
+    RichLog,
+    Select,
+    TextArea,
+)
 from textual_image.widget import SixelImage as TerminalImage
 
 from fuica.agent import (
@@ -186,7 +199,9 @@ def _safe_stream_markdown(text: str, code_theme: str) -> RenderableType:
 
 
 def _has_tool_call(text: str) -> bool:
-    """Return True if any complete line starts with the tool: prefix."""
+    """Return True if any complete line is a tool invocation (or DSML markup)."""
+    if "<|DSML|>" in text and "invoke name=" in text:
+        return True
     return any(
         line.strip().startswith("tool:") for line in text.splitlines() if line.strip()
     )
@@ -441,6 +456,62 @@ class ModelBadge(Label):
             await app.action_open_connection()
 
 
+class PromptSubmitted(Message):
+    """Posted when the user submits the prompt box."""
+
+    def __init__(self, text: str) -> None:
+        super().__init__()
+        self.text = text
+
+
+class PromptTextArea(TextArea):
+    """Multiline prompt: Enter submits, Shift+Enter / Ctrl+J insert newlines."""
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(
+            id="prompt",
+            placeholder="Type a message and press Enter...",
+            soft_wrap=True,
+            show_line_numbers=False,
+            **kwargs,
+        )
+
+    async def on_key(self, event) -> None:
+        if event.key == "enter":
+            event.stop()
+            event.prevent_default()
+            self._submit()
+        elif event.key in {"shift+enter", "ctrl+j"}:
+            event.stop()
+            event.prevent_default()
+            self.insert("\n")
+        elif event.key == "ctrl+v":
+            if self._paste_clipboard_image():
+                event.stop()
+                event.prevent_default()
+
+    def _submit(self) -> None:
+        text = self.text.strip()
+        if not text:
+            return
+        self.post_message(PromptSubmitted(text))
+        self.load_text("")
+
+    def _paste_clipboard_image(self) -> bool:
+        """Attach an image from the clipboard; return True if one was attached."""
+        try:
+            grabbed = ImageGrab.grabclipboard()
+        except Exception:
+            grabbed = None
+        if not isinstance(grabbed, PILImage.Image):
+            return False
+        app = self.app
+        if isinstance(app, AgentApp):
+            app.set_pending_image(grabbed)
+            app.notify("Image attached — press Enter to send", title="Clipboard")
+        return True
+
+
 class InputRow(Horizontal):
     def compose(self) -> ComposeResult:
         yield StatusIndicator()
@@ -453,7 +524,7 @@ class PromptBox(Vertical):
         super().__init__(id="prompt-box")
 
     def compose(self) -> ComposeResult:
-        yield Input(id="prompt", placeholder="Type a message and press Enter...")
+        yield PromptTextArea()
         yield ModelBadge()
 
 
@@ -659,7 +730,8 @@ class AgentApp(App):
         self.theme = "ansi-dark"
         self._agent_running = False
         self._stop_requested = False
-        self._input_queue: asyncio.Queue[str | None] = asyncio.Queue()
+        self._input_queue: asyncio.Queue[str | list | None] = asyncio.Queue()
+        self._pending_image: PILImage.Image | None = None
         self._total_input_tokens = 0
         self._total_output_tokens = 0
         self.debug_mode = os.environ.get("FUICA_DEBUG", "").lower() in {
@@ -685,22 +757,43 @@ class AgentApp(App):
     def on_mount(self) -> None:
         self.conversation = [{"role": "system", "content": get_full_system_prompt()}]
         self.sub_title = ""
-        prompt = self.query_one("#prompt", Input)
+        prompt = self.query_one("#prompt", PromptTextArea)
         self.query_one(ModelBadge).update_config(get_config())
         prompt.focus()
 
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        user_input = event.value.strip()
+    def set_pending_image(self, image: PILImage.Image) -> None:
+        self._pending_image = image
+
+    def _image_to_content(self, image: PILImage.Image) -> list[dict[str, Any]]:
+        buffer = io.BytesIO()
+        image.convert("RGBA").save(buffer, format="PNG")
+        encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+        return {
+            "type": "image_url",
+            "image_url": {"url": f"data:image/png;base64,{encoded}"},
+        }
+
+    def on_prompt_submitted(self, event: PromptSubmitted) -> None:
+        user_input = event.text.strip()
         if not user_input:
             return
         if user_input.lower() in {"exit", "quit", "keluar"}:
             self.exit()
             return
         log = self.query_one("#log", StreamingRichLog)
-        log.write(render_user_message(user_input))
+        content: str | list = user_input
+        if self._pending_image is not None:
+            content = [
+                {"type": "text", "text": user_input},
+                self._image_to_content(self._pending_image),
+            ]
+            self._pending_image = None
+            log.write(render_user_message(user_input))
+            log.write("[dim]📷 image attached[/]")
+        else:
+            log.write(render_user_message(user_input))
         log.write("")
-        event.input.value = ""
-        self._input_queue.put_nowait(user_input)
+        self._input_queue.put_nowait(content)
         if not self._agent_running:
             _ = self.message_worker()
 
@@ -709,19 +802,22 @@ class AgentApp(App):
         """Consume queued user messages, processing them one at a time."""
         try:
             while True:
-                user_input = await self._input_queue.get()
+                user_content = await self._input_queue.get()
                 self._input_queue.task_done()
-                if user_input is None or self._stop_requested:
+                if user_content is None or self._stop_requested:
                     self._drain_queue()
                     break
                 self._set_status("working")
-                await self.run_agent_turn(user_input)
+                await self.run_agent_turn(user_content)
                 if self._stop_requested:
                     self._drain_queue()
                     break
         finally:
             self._stop_requested = False
-            self.query_one("#prompt", Input).focus()
+            try:
+                self.query_one("#prompt", PromptTextArea).focus()
+            except Exception:
+                pass
 
     def _drain_queue(self) -> None:
         while not self._input_queue.empty():
@@ -731,12 +827,12 @@ class AgentApp(App):
             except asyncio.QueueEmpty:
                 break
 
-    async def run_agent_turn(self, user_input: str) -> None:
+    async def run_agent_turn(self, user_content: str | list) -> None:
         log = self.query_one("#log", StreamingRichLog)
         completed = False
         try:
             self._agent_running = True
-            self.conversation.append({"role": "user", "content": user_input})
+            self.conversation.append({"role": "user", "content": user_content})
             while True:
                 if self._stop_requested:
                     log.write("[dim]Stopped by user[/]")

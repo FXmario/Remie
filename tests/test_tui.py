@@ -1,6 +1,7 @@
 import asyncio
 
 import httpx
+from PIL import Image
 from rich.panel import Panel
 
 import fuica.tui as tui
@@ -14,10 +15,13 @@ from fuica.tui import (
     AgentApp,
     ConnectionScreen,
     ModelBadge,
+    PromptSubmitted,
+    PromptTextArea,
     StatusIndicator,
     ThinkingIndicator,
     _format_tokens,
     _format_context_bar,
+    _has_tool_call,
     _is_tmux,
     _load_status_gif,
 )
@@ -253,6 +257,109 @@ def test_format_tokens():
     assert _format_tokens(999) == "999"
     assert _format_tokens(1234) == "1.2k"
     assert _format_tokens(25000) == "25k"
+
+
+def test_has_tool_call_detects_dsml():
+    assert _has_tool_call(
+        '<|DSML|>invoke name="list-files">\n<|DSML|>parameter path="." />'
+    )
+    assert _has_tool_call('tool: read_file({"filename": "a.py"})')
+    assert not _has_tool_call("just a normal reply")
+
+
+def test_prompt_enter_submits_and_ctrl_j_inserts_newline(monkeypatch):
+    async def exercise():
+        async def fake_stream(_conversation, usage_box=None, reasoning_box=None):
+            if False:
+                yield ""
+
+        monkeypatch.setattr(tui, "stream_llm_call", fake_stream)
+
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            prompt = app.query_one("#prompt", PromptTextArea)
+            prompt.focus()
+            await pilot.press("a")
+            await pilot.press("ctrl+j")
+            await pilot.press("b")
+            assert prompt.text == "a\nb"
+            await pilot.press("enter")
+            await pilot.pause()
+            await pilot.pause()
+
+            user_contents = [
+                m["content"] for m in app.conversation if m["role"] == "user"
+            ]
+            assert user_contents == ["a\nb"]
+            assert prompt.text == ""
+
+    asyncio.run(exercise())
+
+
+def test_prompt_shift_enter_inserts_newline(monkeypatch):
+    async def exercise():
+        async def fake_stream(_conversation, usage_box=None, reasoning_box=None):
+            if False:
+                yield ""
+
+        monkeypatch.setattr(tui, "stream_llm_call", fake_stream)
+
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            prompt = app.query_one("#prompt", PromptTextArea)
+            prompt.focus()
+            await pilot.press("x")
+            await pilot.press("shift+enter")
+            await pilot.press("y")
+            assert prompt.text == "x\ny"
+
+    asyncio.run(exercise())
+
+
+def test_paste_clipboard_image_attaches(monkeypatch):
+    async def exercise():
+        image = Image.new("RGB", (8, 8), "blue")
+        monkeypatch.setattr(tui.ImageGrab, "grabclipboard", lambda: image)
+
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            prompt = app.query_one("#prompt", PromptTextArea)
+            assert prompt._paste_clipboard_image() is True
+            assert app._pending_image is not None
+
+    asyncio.run(exercise())
+
+
+def test_image_attachment_builds_multimodal_message(monkeypatch):
+    async def exercise():
+        async def fake_stream(_conversation, usage_box=None, reasoning_box=None):
+            if False:
+                yield ""
+
+        monkeypatch.setattr(tui, "stream_llm_call", fake_stream)
+
+        app = AgentApp()
+        image = Image.new("RGB", (8, 8), "red")
+        app.set_pending_image(image)
+        async with app.run_test() as pilot:
+            app.on_prompt_submitted(PromptSubmitted("what is this"))
+            await pilot.pause()
+            await pilot.pause()
+
+            user_content = [
+                m["content"]
+                for m in app.conversation
+                if m["role"] == "user"
+            ][-1]
+            assert isinstance(user_content, list)
+            assert [part["type"] for part in user_content] == ["text", "image_url"]
+            assert user_content[0]["text"] == "what is this"
+            assert user_content[1]["image_url"]["url"].startswith(
+                "data:image/png;base64,"
+            )
+            assert app._pending_image is None
+
+    asyncio.run(exercise())
 
 
 def test_model_badge_shows_token_usage():

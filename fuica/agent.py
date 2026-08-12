@@ -4,6 +4,7 @@ import fnmatch
 import inspect
 import json
 import os
+import re
 import subprocess
 from collections.abc import AsyncIterator
 from dataclasses import asdict, dataclass
@@ -556,6 +557,58 @@ def extract_tool_invocations(text: str) -> list[tuple[str, dict[str, Any]]]:
             invocations.append((name, args))
         except (SyntaxError, ValueError, TypeError, json.JSONDecodeError):
             continue
+    invocations.extend(extract_dsml_invocations(text))
+    return invocations
+
+
+def extract_dsml_invocations(text: str) -> list[tuple[str, dict[str, Any]]]:
+    """
+    Parse DSML tool-call markup like:
+
+        <|DSML|>invoke name="list-files">
+        <|DSML|>parameter path="." />
+
+    Returns a list of (tool_name, args) with dashed names normalized to
+    underscores (list-files -> list_files).
+    """
+    invocations: list[tuple[str, dict[str, Any]]] = []
+    current_name: str | None = None
+    current_args: dict[str, Any] = {}
+
+    def flush() -> None:
+        nonlocal current_name, current_args
+        if current_name is not None:
+            invocations.append((current_name, current_args))
+        current_name = None
+        current_args = {}
+
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line.startswith("<|DSML|>"):
+            continue
+        body = line[len("<|DSML|>") :].strip()
+        if body.startswith("invoke name="):
+            flush()
+            match = re.match(r'invoke name="([^"]+)"', body)
+            if not match:
+                continue
+            current_name = match.group(1).replace("-", "_")
+            current_args = {}
+        elif body.startswith("parameter") and current_name is not None:
+            param_text = body[len("parameter") :].strip()
+            param_text = re.sub(r"/?>\s*$", "", param_text).strip()
+            match = re.match(r"([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+)$", param_text)
+            if not match:
+                continue
+            key, value = match.group(1), match.group(2).strip()
+            try:
+                parsed = ast.literal_eval(value)
+            except (ValueError, SyntaxError):
+                parsed = value.strip('"').strip("'")
+            current_args[key] = parsed
+        elif body.startswith("/tool_calls") or body.startswith("tool_calls"):
+            flush()
+    flush()
     return invocations
 
 
@@ -698,13 +751,17 @@ def estimate_conversation_tokens(
 
 def strip_protocol_lines(text: str) -> str:
     """
-    Remove 'thinking:' and 'tool:' protocol lines for display. They stay in
-    the conversation history sent to the model.
+    Remove 'thinking:', 'tool:', and DSML protocol lines for display. They stay
+    in the conversation history sent to the model.
     """
     lines = []
     for raw_line in text.splitlines():
         line = raw_line.strip()
-        if line.startswith("thinking:") or line.startswith("tool:"):
+        if (
+            line.startswith("thinking:")
+            or line.startswith("tool:")
+            or line.startswith("<|DSML|>")
+        ):
             continue
         lines.append(raw_line)
     return "\n".join(lines)
