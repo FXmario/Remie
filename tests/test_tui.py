@@ -194,6 +194,43 @@ def test_stop_drains_pending_messages(monkeypatch):
     asyncio.run(exercise())
 
 
+def test_edit_tool_writes_diff_panel_to_log(monkeypatch, tmp_path):
+    async def exercise():
+        file = tmp_path / "doc.txt"
+        file.write_text("hello\n", encoding="utf-8")
+
+        calls = 0
+
+        async def tool_stream(_conversation, usage_box=None, reasoning_box=None):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                yield (
+                    f'tool: edit_file({{"path": "{file}", '
+                    '"old_str": "hello", "new_str": "hi"})'
+                )
+            else:
+                yield "done"
+
+        monkeypatch.setattr(tui, "stream_llm_call", tool_stream)
+        rendered = []
+        monkeypatch.setattr(
+            tui, "_render_diff", lambda diff: rendered.append(diff) or Panel("")
+        )
+
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            await app.run_agent_turn("edit it")
+            await pilot.pause()
+
+            assert file.read_text(encoding="utf-8") == "hi\n"
+            assert len(rendered) == 1
+            assert "-hello" in rendered[0]
+            assert "+hi" in rendered[0]
+
+    asyncio.run(exercise())
+
+
 async def _empty_stream(_conversation, usage_box=None, reasoning_box=None):
     return
     yield  # pragma: no cover

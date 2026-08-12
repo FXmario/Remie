@@ -1,4 +1,5 @@
 import ast
+import difflib
 import fnmatch
 import inspect
 import json
@@ -282,6 +283,27 @@ def tree_files_tool(path: str = ".", max_depth: int = 3) -> dict[str, Any]:
     }
 
 
+DIFF_MAX_CHARS = 4000
+
+
+def _make_diff(original: str, edited: str, path: str) -> str:
+    """
+    Build a unified diff between two file contents, truncated to DIFF_MAX_CHARS.
+    """
+    lines = list(
+        difflib.unified_diff(
+            original.splitlines(keepends=True),
+            edited.splitlines(keepends=True),
+            fromfile=f"a/{path}",
+            tofile=f"b/{path}",
+        )
+    )
+    diff = "".join(lines)
+    if len(diff) > DIFF_MAX_CHARS:
+        diff = diff[:DIFF_MAX_CHARS].rstrip("\n") + "\n...diff truncated...\n"
+    return diff
+
+
 def edit_file_tool(path: str, old_str: str, new_str: str) -> dict[str, Any]:
     """
     Replaces first occurrence of old_str with new_str in file. If old_str is empty,
@@ -289,18 +311,27 @@ def edit_file_tool(path: str, old_str: str, new_str: str) -> dict[str, Any]:
     :param path: The path to the file to edit.
     :param old_str: The string to replace.
     :param new_str: The string to replace with.
-    :return: A dictionary with the path to the file and the action taken.
+    :return: A dictionary with the path to the file, the action taken, and a diff.
     """
     full_path = resolve_abs_path(path)
     if old_str == "":
+        original = full_path.read_text(encoding="utf-8") if full_path.exists() else ""
         full_path.write_text(new_str, encoding="utf-8")
-        return {"path": str(full_path), "action": "created_file"}
+        return {
+            "path": str(full_path),
+            "action": "created_file",
+            "diff": _make_diff(original, new_str, str(full_path)),
+        }
     original = full_path.read_text(encoding="utf-8")
     if original.find(old_str) == -1:
         return {"path": str(full_path), "action": "old_str not found"}
     edited = original.replace(old_str, new_str, 1)
     full_path.write_text(edited, encoding="utf-8")
-    return {"path": str(full_path), "action": "edited"}
+    return {
+        "path": str(full_path),
+        "action": "edited",
+        "diff": _make_diff(original, edited, str(full_path)),
+    }
 
 
 RUN_COMMAND_TIMEOUT = 30

@@ -181,8 +181,19 @@ class TestEditFileTool:
         path = tmp_path / "doc.txt"
         path.write_text("aaa bbb aaa", encoding="utf-8")
         result = edit_file_tool(str(path), "aaa", "X")
-        assert result == {"path": str(path.resolve()), "action": "edited"}
+        assert result["path"] == str(path.resolve())
+        assert result["action"] == "edited"
         assert path.read_text(encoding="utf-8") == "X bbb aaa"
+
+    def test_replaces_first_occurrence_returns_diff(self, tmp_path):
+        path = tmp_path / "doc.txt"
+        path.write_text("aaa\nbbb\naaa\n", encoding="utf-8")
+        result = edit_file_tool(str(path), "bbb", "CCC")
+        diff = result["diff"]
+        assert "-bbb" in diff
+        assert "+CCC" in diff
+        assert "a/" + str(path.resolve()) in diff
+        assert "b/" + str(path.resolve()) in diff
 
     def test_old_str_not_found(self, tmp_path):
         path = tmp_path / "doc.txt"
@@ -194,7 +205,9 @@ class TestEditFileTool:
     def test_empty_old_str_creates_file(self, tmp_path):
         path = tmp_path / "new.txt"
         result = edit_file_tool(str(path), "", "created content")
-        assert result == {"path": str(path.resolve()), "action": "created_file"}
+        assert result["path"] == str(path.resolve())
+        assert result["action"] == "created_file"
+        assert "+created content" in result["diff"]
         assert path.read_text(encoding="utf-8") == "created content"
 
     def test_empty_old_str_overwrites_existing(self, tmp_path):
@@ -202,7 +215,16 @@ class TestEditFileTool:
         path.write_text("old content", encoding="utf-8")
         result = edit_file_tool(str(path), "", "new content")
         assert result["action"] == "created_file"
+        assert "-old content" in result["diff"]
+        assert "+new content" in result["diff"]
         assert path.read_text(encoding="utf-8") == "new content"
+
+    def test_large_diff_is_truncated(self, tmp_path):
+        path = tmp_path / "big.txt"
+        path.write_text("x" * 10_000, encoding="utf-8")
+        result = edit_file_tool(str(path), "x" * 100, "y" * 100)
+        assert "diff truncated" in result["diff"]
+        assert len(result["diff"]) <= 4040
 
 
 class TestRunCommandTool:

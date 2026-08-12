@@ -196,6 +196,27 @@ def _format_tokens(count: int) -> str:
     return str(count)
 
 
+def _render_diff(diff: str) -> Panel:
+    """Render a unified diff as a colorized panel."""
+    text = Text()
+    for line in diff.splitlines():
+        if line.startswith("+++") or line.startswith("---") or line.startswith("@@"):
+            style = "dim"
+        elif line.startswith("+"):
+            style = "green"
+        elif line.startswith("-"):
+            style = "red"
+        else:
+            style = ""
+        text.append(line + "\n", style=style)
+    return Panel(
+        text,
+        title="Diff",
+        border_style="cyan",
+        padding=(0, 1),
+    )
+
+
 class StreamingRichLog(RichLog):
     """A RichLog that can stream text in place at the bottom of the log."""
 
@@ -739,6 +760,8 @@ class AgentApp(App):
                         break
                     result = await asyncio.to_thread(run_tool, name, args)
                     result_json = json.dumps(result, default=str)
+                    if isinstance(result, dict) and result.get("diff"):
+                        log.write(_render_diff(result["diff"]))
                     if self.debug_mode:
                         log.write(
                             f"[bold magenta]tool_result:[/] {escape(result_json)}"
