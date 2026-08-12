@@ -21,6 +21,7 @@ from fuica.agent import (
     get_connection_error_message,
     get_tool_summary,
     glob_files_tool,
+    load_config,
     list_files_tool,
     read_file_tool,
     render_assistant_message,
@@ -29,6 +30,7 @@ from fuica.agent import (
     resolve_abs_path,
     run_command_tool,
     run_tool,
+    save_config,
     stream_llm_call,
     strip_protocol_lines,
     tree_files_tool,
@@ -495,6 +497,67 @@ class TestStreamLlmUsageAndReasoning:
 
         assert asyncio.run(collect()) == ["hi"]
 
+    def test_sends_reasoning_effort_and_omits_off(self, monkeypatch):
+        import asyncio
+        import fuica.agent as agent
+
+        captured: list[dict] = []
+
+        class FakeDelta:
+            content = "hi"
+
+        class FakeChoice:
+            delta = FakeDelta()
+
+        class FakeChunk:
+            choices = [FakeChoice()]
+
+        class FakeCompletions:
+            async def create(self, **kwargs):
+                captured.append(kwargs)
+
+                async def gen():
+                    yield FakeChunk()
+
+                return gen()
+
+        class FakeClient:
+            chat = type("FakeChat", (), {"completions": FakeCompletions()})()
+
+        previous = agent.get_config()
+        try:
+            agent.configure_openai(
+                "http://localhost:1234/v1",
+                "key",
+                "model",
+                reasoning_effort="high",
+            )
+            monkeypatch.setattr(agent, "openai_client", FakeClient())
+
+            async def collect():
+                return [d async for d in stream_llm_call([])]
+
+            assert asyncio.run(collect()) == ["hi"]
+            assert captured[-1]["reasoning_effort"] == "high"
+
+            agent.configure_openai(
+                "http://localhost:1234/v1",
+                "key",
+                "model",
+                reasoning_effort="off",
+            )
+            monkeypatch.setattr(agent, "openai_client", FakeClient())
+            assert asyncio.run(collect()) == ["hi"]
+            assert "reasoning_effort" not in captured[-1]
+        finally:
+            agent.configure_openai(
+                previous.base_url,
+                previous.api_key,
+                previous.model,
+                previous.provider,
+                previous.reasoning_effort,
+            )
+
 
 class TestGetToolSummary:
     def test_known_tools_return_summary(self):
@@ -579,6 +642,58 @@ class TestConnectionConfig:
             assert config.model == "test-model"
         finally:
             configure_openai(previous.base_url, previous.api_key, previous.model)
+
+    def test_configure_openai_updates_provider_and_effort(self):
+        previous = get_config()
+        try:
+            config = configure_openai(
+                "http://test:1234/v1",
+                "secret",
+                "test-model",
+                provider="local",
+                reasoning_effort="high",
+            )
+            assert config.provider == "local"
+            assert config.reasoning_effort == "high"
+            assert get_config().reasoning_effort == "high"
+        finally:
+            configure_openai(
+                previous.base_url,
+                previous.api_key,
+                previous.model,
+                previous.provider,
+                previous.reasoning_effort,
+            )
+
+    def test_saved_config_round_trips_provider_and_effort(self, tmp_path, monkeypatch):
+        import fuica.agent as agent
+
+        config_file = tmp_path / "config.json"
+        monkeypatch.setattr(agent, "CONFIG_FILE", config_file)
+        monkeypatch.setattr(agent, "CONFIG_DIR", tmp_path)
+        original = agent.ConnectionConfig(
+            "https://example.test/v1",
+            "secret",
+            "model",
+            "opencode-go",
+            "max",
+        )
+        save_config(original)
+        assert load_config() == original
+
+    def test_load_config_derives_provider_for_legacy_file(self, tmp_path, monkeypatch):
+        import fuica.agent as agent
+
+        config_file = tmp_path / "config.json"
+        config_file.write_text(
+            '{"base_url": "https://opencode.ai/zen/go/v1", '
+            '"api_key": "secret", "model": "kimi-k3"}',
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(agent, "CONFIG_FILE", config_file)
+        config = load_config()
+        assert config.provider == "opencode-go"
+        assert config.reasoning_effort == "medium"
 
     def test_fetch_opencode_go_models_falls_back_on_error(self, monkeypatch):
         import asyncio

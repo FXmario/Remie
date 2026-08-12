@@ -51,6 +51,8 @@ from fuica.agent import (
     strip_protocol_lines,
 )
 
+REASONING_EFFORTS = ("off", "low", "medium", "high", "max")
+
 CSS = """
 Screen {
     layout: vertical;
@@ -85,16 +87,16 @@ Screen {
 }
 
 #status {
-    width: 6;
-    height: 3;
+    width: 8;
+    height: 4;
     margin-right: 0;
     content-align: center middle;
     background: $panel;
 }
 
 #status-gif {
-    width: 6;
-    height: 3;
+    width: 8;
+    height: 4;
 }
 
 #tmux-spinner {
@@ -370,6 +372,9 @@ class ModelBadge(Label):
         super().__init__(id="model-badge")
         self._model_text = ""
         self._vendor_text = ""
+        self._reasoning_effort = "off"
+        self._input_tokens = 0
+        self._output_tokens = 0
         self.update_config(get_config())
 
     def update_config(self, config) -> None:
@@ -380,13 +385,18 @@ class ModelBadge(Label):
         )
         self._model_text = config.model
         self._vendor_text = vendor
-        self._show()
+        self._reasoning_effort = config.reasoning_effort
+        self._show(self._input_tokens, self._output_tokens)
 
     def set_tokens(self, input_tokens: int, output_tokens: int) -> None:
+        self._input_tokens = input_tokens
+        self._output_tokens = output_tokens
         self._show(input_tokens, output_tokens)
 
     def _show(self, input_tokens: int = 0, output_tokens: int = 0) -> None:
         text = f"{self._model_text}  {self._vendor_text}"
+        if self._reasoning_effort != "off":
+            text += f" · effort {self._reasoning_effort}"
         if input_tokens or output_tokens:
             total = input_tokens + output_tokens
             text += f" · {_format_tokens(total)} tok"
@@ -463,7 +473,9 @@ class ConnectionScreen(ModalScreen):
                         ("Local (llama.cpp)", "local"),
                         ("OpenCode Go", "opencode-go"),
                     ],
-                    value="local",
+                    value=current.provider
+                    if current.provider in {"local", "opencode-go"}
+                    else "local",
                     id="provider-select",
                     prompt="Choose provider...",
                 )
@@ -489,13 +501,25 @@ class ConnectionScreen(ModalScreen):
                     id="model-select",
                     prompt="Select model...",
                 )
+                yield Label("Reasoning effort")
+                yield Select(
+                    [(effort.title(), effort) for effort in REASONING_EFFORTS],
+                    value=current.reasoning_effort
+                    if current.reasoning_effort in REASONING_EFFORTS
+                    else "medium",
+                    id="reasoning-effort-select",
+                    prompt="Select reasoning effort...",
+                )
                 with Horizontal(classes="row"):
                     yield Button("Refresh models", id="refresh-button")
                     yield Button("Submit", variant="primary", id="submit-button")
                     yield Button("Cancel", id="cancel-button")
 
     def on_mount(self) -> None:
-        self.query_one("#model-select", Select).disabled = True
+        provider = self.query_one("#provider-select", Select).value
+        is_go = provider == "opencode-go"
+        self.query_one("#base-url-input", Input).disabled = is_go
+        self.query_one("#model-select", Select).disabled = not is_go
         self.query_one("#api-key-input", Input).focus()
 
     async def on_select_changed(self, event: Select.Changed) -> None:
@@ -550,7 +574,16 @@ class ConnectionScreen(ModalScreen):
             base_url = self.query_one("#base-url-input", Input).value.strip()
             api_key = self.query_one("#api-key-input", Input).value.strip()
             model = self._selected_model()
-        config = configure_openai(base_url, api_key, model)
+        effort = self.query_one("#reasoning-effort-select", Select).value
+        if not isinstance(effort, str):
+            effort = "medium"
+        config = configure_openai(
+            base_url,
+            api_key,
+            model,
+            provider=str(provider),
+            reasoning_effort=effort,
+        )
         save_config(config)
         app = self.app
         if isinstance(app, AgentApp):

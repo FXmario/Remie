@@ -53,13 +53,22 @@ class ConnectionConfig:
     base_url: str
     api_key: str
     model: str
+    provider: str = "local"
+    reasoning_effort: str = "medium"
 
 
 def _default_config() -> ConnectionConfig:
+    base_url = os.environ.get("LLAMA_BASE_URL", "http://localhost:1234/v1")
     return ConnectionConfig(
-        base_url=os.environ.get("LLAMA_BASE_URL", "http://localhost:1234/v1"),
+        base_url=base_url,
         api_key=os.environ.get("LLAMA_API_KEY", "llama-cpp"),
         model=os.environ.get("LLAMA_MODEL", "local-model"),
+        provider=(
+            "opencode-go"
+            if base_url.rstrip("/") == OPENCODE_GO_BASE_URL
+            else "local"
+        ),
+        reasoning_effort=os.environ.get("FUICA_REASONING_EFFORT", "medium"),
     )
 
 
@@ -67,10 +76,18 @@ def load_config() -> ConnectionConfig:
     """Load saved connection config, falling back to environment defaults."""
     try:
         data = json.loads(CONFIG_FILE.read_text())
+        base_url = data.get("base_url", "")
         return ConnectionConfig(
-            base_url=data.get("base_url", ""),
+            base_url=base_url,
             api_key=data.get("api_key", ""),
             model=data.get("model", ""),
+            provider=data.get(
+                "provider",
+                "opencode-go"
+                if base_url.rstrip("/") == OPENCODE_GO_BASE_URL
+                else "local",
+            ),
+            reasoning_effort=data.get("reasoning_effort", "medium"),
         )
     except (OSError, json.JSONDecodeError):
         return _default_config()
@@ -96,10 +113,22 @@ def get_config() -> ConnectionConfig:
     return _config
 
 
-def configure_openai(base_url: str, api_key: str, model: str) -> ConnectionConfig:
+def configure_openai(
+    base_url: str,
+    api_key: str,
+    model: str,
+    provider: str = "local",
+    reasoning_effort: str = "medium",
+) -> ConnectionConfig:
     """Rebuild the OpenAI client with a new connection configuration."""
     global _config, openai_client
-    _config = ConnectionConfig(base_url=base_url, api_key=api_key, model=model)
+    _config = ConnectionConfig(
+        base_url=base_url,
+        api_key=api_key,
+        model=model,
+        provider=provider,
+        reasoning_effort=reasoning_effort,
+    )
     openai_client = AsyncOpenAI(
         base_url=base_url,
         api_key=api_key,
@@ -510,6 +539,8 @@ async def stream_llm_call(
         "max_tokens": 2000,
         "stream": True,
     }
+    if _config.reasoning_effort != "off":
+        kwargs["reasoning_effort"] = _config.reasoning_effort
     if usage_box is not None and _config.base_url.rstrip("/") == OPENCODE_GO_BASE_URL:
         kwargs["stream_options"] = {"include_usage": True}
     stream = await openai_client.chat.completions.create(**kwargs)

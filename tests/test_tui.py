@@ -4,7 +4,12 @@ import httpx
 from rich.panel import Panel
 
 import fuica.tui as tui
-from fuica.agent import ConnectionConfig, OPENCODE_GO_BASE_URL
+from fuica.agent import (
+    ConnectionConfig,
+    OPENCODE_GO_BASE_URL,
+    configure_openai,
+    get_config,
+)
 from fuica.tui import (
     AgentApp,
     ConnectionScreen,
@@ -55,11 +60,17 @@ def test_status_indicator_starts_ready():
 
 def test_model_badge_includes_vendor():
     local_badge = ModelBadge()
-    local_badge.update_config(ConnectionConfig("http://localhost/v1", "key", "local"))
+    local_badge.update_config(
+        ConnectionConfig("http://localhost/v1", "key", "local", reasoning_effort="off")
+    )
     assert local_badge.render().plain == "local  Local"
 
     remote_badge = ModelBadge()
-    remote_badge.update_config(ConnectionConfig(OPENCODE_GO_BASE_URL, "key", "kimi-k3"))
+    remote_badge.update_config(
+        ConnectionConfig(
+            OPENCODE_GO_BASE_URL, "key", "kimi-k3", reasoning_effort="off"
+        )
+    )
     assert remote_badge.render().plain == "kimi-k3  OpenCode Go"
 
 
@@ -245,15 +256,66 @@ def test_format_tokens():
 
 def test_model_badge_shows_token_usage():
     badge = ModelBadge()
-    badge.update_config(ConnectionConfig(OPENCODE_GO_BASE_URL, "key", "kimi-k3"))
+    badge.update_config(
+        ConnectionConfig(
+            OPENCODE_GO_BASE_URL, "key", "kimi-k3", reasoning_effort="off"
+        )
+    )
     badge.set_tokens(1234, 5678)
     assert badge.render().plain == "kimi-k3  OpenCode Go · 6.9k tok"
 
 
 def test_model_badge_hides_usage_when_zero():
     badge = ModelBadge()
-    badge.update_config(ConnectionConfig("http://localhost/v1", "key", "local"))
+    badge.update_config(
+        ConnectionConfig("http://localhost/v1", "key", "local", reasoning_effort="off")
+    )
     assert badge.render().plain == "local  Local"
+
+
+def test_model_badge_shows_reasoning_effort():
+    badge = ModelBadge()
+    badge.update_config(
+        ConnectionConfig(
+            OPENCODE_GO_BASE_URL,
+            "key",
+            "kimi-k3",
+            reasoning_effort="max",
+        )
+    )
+    assert badge.render().plain == "kimi-k3  OpenCode Go · effort max"
+
+
+def test_connection_screen_restores_provider_and_effort():
+    async def exercise():
+        previous = get_config()
+        configure_openai(
+            OPENCODE_GO_BASE_URL,
+            "key",
+            "kimi-k3",
+            provider="opencode-go",
+            reasoning_effort="high",
+        )
+        try:
+            app = AgentApp()
+            async with app.run_test() as pilot:
+                await pilot.press("ctrl+p")
+                await pilot.pause()
+                screen = app.screen
+                assert screen.query_one("#provider-select").value == "opencode-go"
+                assert screen.query_one("#reasoning-effort-select").value == "high"
+                assert screen.query_one("#base-url-input").disabled is True
+                assert screen.query_one("#model-select").disabled is False
+        finally:
+            configure_openai(
+                previous.base_url,
+                previous.api_key,
+                previous.model,
+                previous.provider,
+                previous.reasoning_effort,
+            )
+
+    asyncio.run(exercise())
 
 
 def test_turn_updates_badge_tokens(monkeypatch):

@@ -46,7 +46,8 @@ Configure the LLM connection via environment variables (a `.env` file is loaded 
 | `LLAMA_BASE_URL`  | Base URL of the LLM server         | (required)    |
 | `LLAMA_API_KEY`   | API key for the server             | `llama-cpp`   |
 | `LLAMA_MODEL`     | Model name                         | `local-model` |
-| `FUICA_DEBUG`   | Show raw tool calls (name + params) | (unset)       |
+| `FUICA_DEBUG`            | Show raw tool calls (name + params) | (unset)       |
+| `FUICA_REASONING_EFFORT` | Reasoning mode: off/low/medium/high/max | `medium`   |
 
 ### OpenCode Go
 
@@ -60,8 +61,9 @@ the input. From there you can:
 
 - Choose **Local (llama.cpp)** to use your environment-configured server
 - Choose **OpenCode Go**, paste your API key (from [opencode.ai/auth](https://opencode.ai/auth)), and pick a model — the model list is fetched live, falling back to a bundled list
+- Choose a reasoning effort (`off`, `low`, `medium`, `high`, or `max`) supported by your provider
 
-The active connection (base URL, API key, model) is saved to
+The active connection (provider, base URL, API key, model, and reasoning effort) is saved to
 `~/.config/fuiagent/config.json` and reused on the next launch.
 
 When the agent calls a tool, the log shows a human-readable line like `Agent calling the read a file`.
