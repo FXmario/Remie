@@ -374,6 +374,44 @@ def test_has_tool_call_detects_dsml():
     assert not _has_tool_call("just a normal reply")
 
 
+def test_ctrl_c_copies_selection(monkeypatch):
+    async def exercise():
+        app = AgentApp()
+        copied = []
+        notifications = []
+        monkeypatch.setattr(
+            app, "copy_to_clipboard", lambda text: copied.append(text)
+        )
+        monkeypatch.setattr(
+            app, "notify", lambda *a, **k: notifications.append(k)
+        )
+        async with app.run_test() as pilot:
+            log = app.query_one("#log")
+            log.write("selectable text")
+            await pilot.pause()
+            app.screen._select_all_in_widget(log)
+            await pilot.pause()
+            await pilot.press("ctrl+c")
+            await pilot.pause()
+
+            assert copied == ["selectable text"]
+            assert app.is_running
+            assert notifications and notifications[-1].get("title") == "Selection"
+
+    asyncio.run(exercise())
+
+
+def test_ctrl_c_quits_without_selection():
+    async def exercise():
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            await pilot.press("ctrl+c")
+            await pilot.pause()
+            assert app.is_running is False
+
+    asyncio.run(exercise())
+
+
 def test_prompt_enter_submits_and_ctrl_j_inserts_newline(monkeypatch):
     async def exercise():
         async def fake_stream(_conversation, usage_box=None, reasoning_box=None, finish_box=None):

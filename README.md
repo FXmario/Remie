@@ -95,7 +95,7 @@ Type a message at the bottom input and press Enter. The agent will reason (`Thin
 
 | Key       | Action      |
 | --------- | ----------- |
-| `Ctrl+C`  | Quit        |
+| `Ctrl+C`  | Copy selected text, or quit if nothing is selected |
 | `Ctrl+L`  | Clear log   |
 | `Ctrl+P`  | Open connection/model picker |
 | `Ctrl+T`  | Toggle dark/light theme |

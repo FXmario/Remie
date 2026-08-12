@@ -23,12 +23,13 @@ from rich.panel import Panel
 from rich.segment import Segment
 from rich.text import Text
 from textual import work
+from textual.actions import SkipAction
 from textual.app import App, ComposeResult
 from textual.binding import BindingType
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.geometry import Size
 from textual.message import Message
-from textual.screen import ModalScreen
+from textual.screen import ModalScreen, Screen
 from textual.strip import Strip
 from textual.widgets import (
     Button,
@@ -265,6 +266,11 @@ class StreamingRichLog(RichLog):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self._stream_start: int | None = None
+
+    def get_selection(self, selection) -> tuple[str, str] | None:
+        """Extract selected text from the rendered log lines."""
+        text = "\n".join(strip.text for strip in self.lines)
+        return selection.extract(text), "\n"
 
     def begin_stream(self) -> None:
         self._stream_start = len(self.lines)
@@ -738,6 +744,17 @@ class ConnectionScreen(ModalScreen):
         return OPENCODE_GO_MODELS[0]
 
 
+class AgentScreen(Screen):
+    """Default screen. Overrides ctrl+c copy to confirm the selection copy."""
+
+    def action_copy_text(self) -> None:
+        selection = self.get_selected_text()
+        if selection is None:
+            raise SkipAction()
+        self.app.copy_to_clipboard(selection)
+        self.app.notify("Copied to clipboard", title="Selection")
+
+
 class AgentApp(App):
     """Textual TUI for the FuiAgent coding assistant."""
 
@@ -745,12 +762,15 @@ class AgentApp(App):
     CSS = CSS
     ENABLE_COMMAND_PALETTE = False
     BINDINGS: ClassVar[list[BindingType]] = [
-        ("ctrl+c", "quit", "Quit"),
+        ("ctrl+c,super+c", "copy_or_quit", "Copy/Quit"),
         ("ctrl+l", "clear_log", "Clear log"),
         ("ctrl+p", "open_connection", "Connect"),
         ("ctrl+t", "toggle_theme", "Toggle theme"),
         ("escape", "stop_agent", "Stop agent"),
     ]
+
+    def get_default_screen(self) -> Screen:
+        return AgentScreen(id="_default")
 
     def __init__(self) -> None:
         super().__init__()
@@ -1067,6 +1087,15 @@ class AgentApp(App):
         self._total_input_tokens = 0
         self._total_output_tokens = 0
         self.query_one(ModelBadge).set_tokens(0, 0)
+
+    def action_copy_or_quit(self) -> None:
+        """Copy selected text, or quit when nothing is selected."""
+        selected = self.screen.get_selected_text()
+        if selected:
+            self.copy_to_clipboard(selected)
+            self.notify("Copied to clipboard", title="Selection")
+            return
+        self.exit()
 
     def action_toggle_theme(self) -> None:
         self.theme = "ansi-dark" if self.theme == "ansi-light" else "ansi-light"
