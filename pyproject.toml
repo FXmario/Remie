@@ -15,7 +15,7 @@ dependencies = [
 ]
 
 [project.scripts]
-remie = "remie.tui:main"
+fuica = "fuica.tui:main"
 
 [tool.uv]
 package = true
@@ -24,4 +24,4 @@ package = true
 dev = ["pytest>=8"]
 
 [tool.setuptools.packages.find]
-include = ["remie*"]
+include = ["fuica*"]

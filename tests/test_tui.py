@@ -2,9 +2,9 @@ import asyncio
 
 import httpx
 
-import remie.tui as tui
-from remie.agent import ConnectionConfig, OPENCODE_GO_BASE_URL
-from remie.tui import (
+import fuica.tui as tui
+from fuica.agent import ConnectionConfig, OPENCODE_GO_BASE_URL
+from fuica.tui import (
     AgentApp,
     ConnectionScreen,
     ModelBadge,

@@ -22,7 +22,7 @@ from rich.text import Text
 load_dotenv()
 
 CONFIG_DIR = Path(
-    os.environ.get("REMIE_CONFIG_DIR", "~/.config/fuiagent")
+    os.environ.get("FUICA_CONFIG_DIR", "~/.config/fuiagent")
 ).expanduser()
 CONFIG_FILE = CONFIG_DIR / "config.json"
 

@@ -1,6 +1,6 @@
 # Updating FuiAgent
 
-Since `remie` is installed as a **uv tool** (a snapshot installed into uv's tool directory), pulling the latest source code alone won't update it — you need to reinstall the tool after getting the new code.
+Since `fuica` is installed as a **uv tool** (a snapshot installed into uv's tool directory), pulling the latest source code alone won't update it — you need to reinstall the tool after getting the new code.
 
 ## 1. Update the source code
 
@@ -21,7 +21,7 @@ uv sync
 
 ## 3. Reinstall the global tool
 
-Because the tool was installed from a **path** (not a registry package), the `remie` command in your PATH runs from uv's tool directory, not from the repo. Reinstalling is required to pick up new code:
+Because the tool was installed from a **path** (not a registry package), the `fuica` command in your PATH runs from uv's tool directory, not from the repo. Reinstalling is required to pick up new code:
 
 ```bash
 uv tool install /home/mario/Work/FuiAgent --force
@@ -43,7 +43,7 @@ git pull && uv sync
 uv tool install /home/mario/Work/FuiAgent --force
 ```
 
-After that, typing `remie` in any directory will run the updated version.
+After that, typing `fuica` in any directory will run the updated version.
 
 ## Tip for active development
 
@@ -53,4 +53,4 @@ If you're actively developing this project, skip the tool-install step entirely 
 uv run main.py
 ```
 
-That always uses the current code. Use the global `remie` install only when you want a stable snapshot available everywhere.
+That always uses the current code. Use the global `fuica` install only when you want a stable snapshot available everywhere.

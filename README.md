@@ -31,10 +31,10 @@ To install the agent as a global command and use it from any project:
 ```bash
 uv tool install /your/project/location/FuiAgent
 cd ~/Projects/my-other-project
-remie
+fuica
 ```
 
-The agent operates on the directory where `remie` is launched, so relative tool paths target the current project.
+The agent operates on the directory where `fuica` is launched, so relative tool paths target the current project.
 
 Configure the LLM connection via environment variables (a `.env` file is loaded automatically):
 
@@ -43,7 +43,7 @@ Configure the LLM connection via environment variables (a `.env` file is loaded 
 | `LLAMA_BASE_URL`  | Base URL of the LLM server         | (required)    |
 | `LLAMA_API_KEY`   | API key for the server             | `llama-cpp`   |
 | `LLAMA_MODEL`     | Model name                         | `local-model` |
-| `REMIE_DEBUG`   | Show raw tool calls (name + params) | (unset)       |
+| `FUICA_DEBUG`   | Show raw tool calls (name + params) | (unset)       |
 
 ### OpenCode Go
 
@@ -62,15 +62,15 @@ The active connection (base URL, API key, model) is saved to
 `~/.config/fuiagent/config.json` and reused on the next launch.
 
 When the agent calls a tool, the log shows a human-readable line like `Agent calling the read a file`.
-Tool results are hidden by default. Set `REMIE_DEBUG=1` to show the raw function name, JSON parameters,
+Tool results are hidden by default. Set `FUICA_DEBUG=1` to show the raw function name, JSON parameters,
 and `tool_result` payloads (e.g. `Agent calling read_file({"filename": "main.py"})`); a `· debug` marker appears in the header.
 
 ## Usage
 
-Run the agent with the `remie` command (installed by `uv sync`), or launch it directly:
+Run the agent with the `fuica` command (installed by `uv sync`), or launch it directly:
 
 ```bash
-remie
+fuica
 # or
 uv run main.py
 ```
@@ -95,10 +95,10 @@ The system prompt instructs the model to emit a short `thinking:` line before a 
 tool: read_file({"filename": "main.py"})
 ```
 
-`remie/agent.py` parses those lines, runs the requested tool, and feeds the result back as a `tool_result(...)` message until the model responds without a tool call.
+`fuica/agent.py` parses those lines, runs the requested tool, and feeds the result back as a `tool_result(...)` message until the model responds without a tool call.
 
 ## Project layout
 
 - `main.py` — entry point; launches the TUI
-- `remie/agent.py` — LLM client, system prompt, tool registry, and parsing helpers
-- `remie/tui.py` — the Textual `AgentApp`, theme detection, and the `remie` CLI entry point
+- `fuica/agent.py` — LLM client, system prompt, tool registry, and parsing helpers
+- `fuica/tui.py` — the Textual `AgentApp`, theme detection, and the `fuica` CLI entry point

@@ -5,7 +5,7 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.text import Text
 
-from remie.agent import (
+from fuica.agent import (
     OPENCODE_GO_BASE_URL,
     OPENCODE_GO_MODELS,
     RUN_COMMAND_MAX_OUTPUT,
@@ -235,7 +235,7 @@ class TestRunCommandTool:
             raise subprocess.TimeoutExpired(cmd, kwargs["timeout"])
 
         monkeypatch.setattr(
-            "remie.agent.subprocess.run", fake_run, raising=False
+            "fuica.agent.subprocess.run", fake_run, raising=False
         )
         result = run_command_tool("sleep 60")
         assert result["timed_out"] is True
@@ -248,7 +248,7 @@ class TestRunCommandTool:
             stderr = ""
 
         monkeypatch.setattr(
-            "remie.agent.subprocess.run",
+            "fuica.agent.subprocess.run",
             lambda *a, **k: FakeResult(),
             raising=False,
         )

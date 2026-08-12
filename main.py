@@ -1,4 +1,4 @@
-from remie.tui import run_tui
+from fuica.tui import run_tui
 
 
 def main():
