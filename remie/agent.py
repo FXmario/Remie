@@ -1,4 +1,5 @@
 import ast
+import fnmatch
 import inspect
 import json
 import os
@@ -175,6 +176,112 @@ def list_files_tool(path: str) -> dict[str, Any]:
     return {"path": str(full_path), "files": all_files}
 
 
+IGNORED_DIRS = {
+    ".git",
+    "__pycache__",
+    ".venv",
+    "node_modules",
+    "build",
+    "dist",
+    "env",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+}
+
+IGNORED_SUFFIXES = (".egg-info",)
+
+
+def _is_ignored(name: str) -> bool:
+    return name in IGNORED_DIRS or name.endswith(IGNORED_SUFFIXES)
+
+
+GLOB_MAX_RESULTS = 200
+TREE_MAX_ENTRIES = 500
+TREE_MAX_DEPTH = 6
+
+
+def glob_files_tool(pattern: str, path: str = ".") -> dict[str, Any]:
+    """
+    Finds files matching a glob pattern, searching recursively.
+    :param pattern: The glob pattern to match (e.g. '*.py' or 'src/*.py').
+    :param path: The directory to search from (defaults to the project).
+    :return: A list of matching file paths relative to the search root.
+    """
+    full_path = resolve_abs_path(path)
+    matches: list[str] = []
+    for root, dirs, files in os.walk(full_path):
+        dirs[:] = sorted(d for d in dirs if not _is_ignored(d))
+        rel_root = os.path.relpath(root, full_path)
+        for filename in sorted(files):
+            rel_path = os.path.join(rel_root, filename) if rel_root != "." else filename
+            rel_path = rel_path.replace(os.sep, "/")
+            if fnmatch.fnmatch(filename, pattern) or fnmatch.fnmatch(rel_path, pattern):
+                matches.append(rel_path)
+            if len(matches) >= GLOB_MAX_RESULTS:
+                break
+        if len(matches) >= GLOB_MAX_RESULTS:
+            break
+    truncated = len(matches) >= GLOB_MAX_RESULTS
+    return {
+        "path": str(full_path),
+        "pattern": pattern,
+        "matches": matches,
+        "count": len(matches),
+        "truncated": truncated,
+    }
+
+
+def _tree_walk(
+    directory: Path,
+    prefix: str,
+    depth: int,
+    max_depth: int,
+    lines: list[str],
+    limit: int,
+) -> None:
+    entries = sorted(
+        (entry for entry in directory.iterdir() if not _is_ignored(entry.name)),
+        key=lambda entry: (not entry.is_dir(), entry.name.lower()),
+    )
+    for index, entry in enumerate(entries):
+        if len(lines) >= limit:
+            return
+        is_last = index == len(entries) - 1
+        connector = "└── " if is_last else "├── "
+        lines.append(f"{prefix}{connector}{entry.name}{'/' if entry.is_dir() else ''}")
+        if entry.is_dir() and depth < max_depth:
+            _tree_walk(
+                entry,
+                prefix + ("    " if is_last else "│   "),
+                depth + 1,
+                max_depth,
+                lines,
+                limit,
+            )
+
+
+def tree_files_tool(path: str = ".", max_depth: int = 3) -> dict[str, Any]:
+    """
+    Shows the directory tree of a path.
+    :param path: The directory to show the tree of (defaults to the project).
+    :param max_depth: How many levels of subdirectories to descend into (max 6).
+    :return: The tree rendered as text.
+    """
+    full_path = resolve_abs_path(path)
+    depth = max(1, min(int(max_depth), TREE_MAX_DEPTH))
+    lines = [f"{full_path.name}/"]
+    _tree_walk(full_path, "", 1, depth, lines, TREE_MAX_ENTRIES)
+    truncated = len(lines) >= TREE_MAX_ENTRIES
+    if truncated:
+        lines.append("[... truncated ...]")
+    return {
+        "path": str(full_path),
+        "tree": "\n".join(lines),
+        "truncated": truncated,
+    }
+
+
 def edit_file_tool(path: str, old_str: str, new_str: str) -> dict[str, Any]:
     """
     Replaces first occurrence of old_str with new_str in file. If old_str is empty,
@@ -264,6 +371,8 @@ TOOL_REGISTRY = {
     "list_files": list_files_tool,
     "edit_file": edit_file_tool,
     "run_command": run_command_tool,
+    "glob_files": glob_files_tool,
+    "tree_files": tree_files_tool,
 }
 
 TOOL_SUMMARIES = {
@@ -271,6 +380,8 @@ TOOL_SUMMARIES = {
     "list_files": "list the files in a directory",
     "edit_file": "edit a file",
     "run_command": "run a shell command",
+    "glob_files": "find files matching a glob pattern",
+    "tree_files": "show the directory tree",
 }
 
 
@@ -415,6 +526,16 @@ def run_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
             return run_command_tool(
                 args.get("command", ""),
                 args.get("cwd", "."),
+            )
+        elif name == "glob_files":
+            return glob_files_tool(
+                args.get("pattern", ""),
+                args.get("path", "."),
+            )
+        elif name == "tree_files":
+            return tree_files_tool(
+                args.get("path", "."),
+                args.get("max_depth", 3),
             )
         return TOOL_REGISTRY[name](**args)
     except (OSError, UnicodeError, TypeError, ValueError) as error:

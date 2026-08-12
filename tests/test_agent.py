@@ -18,6 +18,7 @@ from remie.agent import (
     get_config,
     get_connection_error_message,
     get_tool_summary,
+    glob_files_tool,
     list_files_tool,
     read_file_tool,
     render_assistant_message,
@@ -26,6 +27,7 @@ from remie.agent import (
     resolve_abs_path,
     run_command_tool,
     run_tool,
+    tree_files_tool,
 )
 
 
@@ -85,6 +87,89 @@ class TestListFilesTool:
     def test_missing_directory_raises(self, tmp_path):
         with pytest.raises(FileNotFoundError):
             list_files_tool(str(tmp_path / "missing"))
+
+
+class TestGlobFilesTool:
+    def test_matches_recursively(self, tmp_path):
+        (tmp_path / "a.py").write_text("", encoding="utf-8")
+        (tmp_path / "sub").mkdir()
+        (tmp_path / "sub" / "b.py").write_text("", encoding="utf-8")
+        (tmp_path / "sub" / "c.txt").write_text("", encoding="utf-8")
+        result = glob_files_tool("*.py", str(tmp_path))
+        assert result["count"] == 2
+        assert result["matches"] == ["a.py", "sub/b.py"]
+
+    def test_matches_full_path_pattern(self, tmp_path):
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "main.py").write_text("", encoding="utf-8")
+        result = glob_files_tool("src/*.py", str(tmp_path))
+        assert result["matches"] == ["src/main.py"]
+
+    def test_skips_ignored_dirs(self, tmp_path):
+        (tmp_path / ".venv").mkdir()
+        (tmp_path / "main.py").write_text("", encoding="utf-8")
+        (tmp_path / ".venv" / "hidden.py").write_text("", encoding="utf-8")
+        result = glob_files_tool("*.py", str(tmp_path))
+        assert result["matches"] == ["main.py"]
+
+    def test_no_matches_returns_empty(self, tmp_path):
+        result = glob_files_tool("*.rs", str(tmp_path))
+        assert result["matches"] == []
+        assert result["count"] == 0
+        assert result["truncated"] is False
+
+    def test_truncates_at_limit(self, tmp_path):
+        for i in range(300):
+            (tmp_path / f"f{i}.txt").write_text("", encoding="utf-8")
+        result = glob_files_tool("*.txt", str(tmp_path))
+        assert result["truncated"] is True
+        assert len(result["matches"]) == 200
+
+    def test_dispatch_via_run_tool(self, tmp_path):
+        (tmp_path / "x.py").write_text("", encoding="utf-8")
+        result = run_tool(
+            "glob_files", {"pattern": "*.py", "path": str(tmp_path)}
+        )
+        assert result["matches"] == ["x.py"]
+
+
+class TestTreeFilesTool:
+    def test_renders_nested_tree(self, tmp_path):
+        (tmp_path / "sub").mkdir()
+        (tmp_path / "sub" / "a.py").write_text("", encoding="utf-8")
+        (tmp_path / "root.txt").write_text("", encoding="utf-8")
+        result = tree_files_tool(str(tmp_path))
+        tree = result["tree"]
+        assert "sub/" in tree
+        assert "a.py" in tree
+        assert "root.txt" in tree
+
+    def test_skips_ignored_dirs(self, tmp_path):
+        (tmp_path / ".git").mkdir()
+        (tmp_path / "real.py").write_text("", encoding="utf-8")
+        tree = tree_files_tool(str(tmp_path))["tree"]
+        assert ".git" not in tree
+        assert "real.py" in tree
+
+    def test_depth_is_clamped(self, tmp_path):
+        (tmp_path / "l1").mkdir()
+        (tmp_path / "l1" / "l2").mkdir()
+        (tmp_path / "l1" / "l2" / "l3").mkdir()
+        (tmp_path / "l1" / "l2" / "l3" / "l4").mkdir()
+        (tmp_path / "l1" / "l2" / "l3" / "l4" / "deep.py").write_text(
+            "", encoding="utf-8"
+        )
+        result = tree_files_tool(str(tmp_path), max_depth=2)
+        assert "deep.py" not in result["tree"]
+        assert "l2/" in result["tree"]
+
+    def test_empty_directory(self, tmp_path):
+        result = tree_files_tool(str(tmp_path))
+        assert result["truncated"] is False
+
+    def test_dispatch_via_run_tool(self, tmp_path):
+        result = run_tool("tree_files", {"path": str(tmp_path)})
+        assert tmp_path.name in result["tree"]
 
 
 class TestEditFileTool:
@@ -250,6 +335,8 @@ class TestGetToolSummary:
         assert get_tool_summary("list_files") == "list the files in a directory"
         assert get_tool_summary("edit_file") == "edit a file"
         assert get_tool_summary("run_command") == "run a shell command"
+        assert get_tool_summary("glob_files") == "find files matching a glob pattern"
+        assert get_tool_summary("tree_files") == "show the directory tree"
 
     def test_unknown_tool_falls_back_to_name(self):
         assert get_tool_summary("nonexistent") == "nonexistent"

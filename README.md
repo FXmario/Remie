@@ -10,7 +10,7 @@ A terminal-based coding agent with a [Textual](https://textual.textualize.io/) T
 - The model name is shown on the top-right of the input box border
 - Uses your terminal's native color scheme (ANSI), so the UI matches your system theme — like opencode
 - Async agent loop — the UI stays responsive while the LLM responds and tools run
-- Tools: `read_file`, `list_files`, `edit_file`
+- Tools: `read_file`, `list_files`, `glob_files`, `tree_files`, `edit_file`, `run_command`
 - Thinking step before every tool call; tool calls are announced as `Agent calling <tool>`, kept in the conversation history
 
 ## Requirements
@@ -29,7 +29,7 @@ uv sync
 To install the agent as a global command and use it from any project:
 
 ```bash
-uv tool install /home/mario/Work/FuiAgent
+uv tool install /your/project/location/FuiAgent
 cd ~/Projects/my-other-project
 remie
 ```
