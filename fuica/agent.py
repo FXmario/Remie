@@ -72,7 +72,7 @@ def load_config() -> ConnectionConfig:
             api_key=data.get("api_key", ""),
             model=data.get("model", ""),
         )
-    except OSError, json.JSONDecodeError:
+    except (OSError, json.JSONDecodeError):
         return _default_config()
 
 
@@ -124,7 +124,7 @@ async def fetch_opencode_go_models(api_key: str) -> list[str]:
                 if item.get("id") in OPENCODE_GO_MODELS
             ]
             return models or list(OPENCODE_GO_MODELS)
-        except httpx.HTTPError, ValueError, KeyError, TypeError:
+        except (httpx.HTTPError, ValueError, KeyError, TypeError):
             return list(OPENCODE_GO_MODELS)
 
 
@@ -487,7 +487,7 @@ def extract_tool_invocations(text: str) -> list[tuple[str, dict[str, Any]]]:
             if not isinstance(args, dict):
                 continue
             invocations.append((name, args))
-        except SyntaxError, ValueError, TypeError, json.JSONDecodeError:
+        except (SyntaxError, ValueError, TypeError, json.JSONDecodeError):
             continue
     return invocations
 

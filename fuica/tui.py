@@ -141,7 +141,7 @@ def _detect_terminal_background() -> str | None:
         if ready:
             try:
                 data = os.read(sys.stdin.fileno(), 1024)
-            except OSError, ValueError:
+            except (OSError, ValueError):
                 break
             if not data:
                 break
