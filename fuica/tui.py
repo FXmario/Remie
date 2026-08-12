@@ -466,8 +466,8 @@ class ConnectionScreen(ModalScreen):
 
     #connection-dialog {
         width: 60;
-        height: 20;
-        max-height: 80%;
+        height: 24;
+        max-height: 90%;
         padding: 1 2;
         border: round $primary;
         background: $surface;
@@ -486,6 +486,7 @@ class ConnectionScreen(ModalScreen):
         height: 3;
         width: 100%;
         align: center middle;
+        dock: bottom;
     }
 
     #connection-dialog Button {
@@ -540,10 +541,10 @@ class ConnectionScreen(ModalScreen):
                     id="reasoning-effort-select",
                     prompt="Select reasoning effort...",
                 )
-                with Horizontal(classes="row"):
-                    yield Button("Refresh models", id="refresh-button")
-                    yield Button("Submit", variant="primary", id="submit-button")
-                    yield Button("Cancel", id="cancel-button")
+            with Horizontal(classes="row"):
+                yield Button("Refresh models", id="refresh-button")
+                yield Button("Submit", variant="primary", id="submit-button")
+                yield Button("Cancel", id="cancel-button")
 
     def on_mount(self) -> None:
         provider = self.query_one("#provider-select", Select).value
