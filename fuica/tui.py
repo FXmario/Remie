@@ -56,7 +56,6 @@ from fuica.agent import (
     get_config,
     get_connection_error_message,
     get_full_system_prompt,
-    get_model_context_limit,
     get_tool_summary,
     render_assistant_panel,
     render_user_message,
@@ -230,19 +229,8 @@ def _format_tokens(count: int) -> str:
     return str(count)
 
 
-def _format_context_bar(used: int, limit: int, width: int = 10) -> str:
-    """Render context usage as a compact terminal progress bar."""
-    if limit <= 0:
-        return ""
-    ratio = max(0.0, min(1.0, used / limit))
-    filled = min(width, round(ratio * width))
-    return "█" * filled + "░" * (width - filled)
-
-
 def _model_option(model: str) -> tuple[str, str]:
-    limit = get_model_context_limit(model, "opencode-go")
-    label = f"{model} · {_format_tokens(limit)} ctx" if limit else model
-    return label, model
+    return model, model
 
 
 def _render_diff(diff: str) -> Panel:
@@ -427,8 +415,7 @@ class ModelBadge(Label):
         self._reasoning_effort = "off"
         self._input_tokens = 0
         self._output_tokens = 0
-        self._context_tokens = 0
-        self._context_limit: int | None = None
+        self._speed: float | None = None
         self.update_config(get_config())
 
     def update_config(self, config) -> None:
@@ -440,7 +427,6 @@ class ModelBadge(Label):
         self._model_text = config.model
         self._vendor_text = vendor
         self._reasoning_effort = config.reasoning_effort
-        self._context_limit = config.context_limit
         self._show(self._input_tokens, self._output_tokens)
 
     def set_tokens(self, input_tokens: int, output_tokens: int) -> None:
@@ -448,9 +434,8 @@ class ModelBadge(Label):
         self._output_tokens = output_tokens
         self._show(input_tokens, output_tokens)
 
-    def set_context(self, used: int, limit: int | None) -> None:
-        self._context_tokens = used
-        self._context_limit = limit
+    def set_speed(self, speed: float | None) -> None:
+        self._speed = speed
         self._show(self._input_tokens, self._output_tokens)
 
     def _show(self, input_tokens: int = 0, output_tokens: int = 0) -> None:
@@ -460,12 +445,8 @@ class ModelBadge(Label):
         if input_tokens or output_tokens:
             total = input_tokens + output_tokens
             text += f" · {_format_tokens(total)} tok"
-        if self._context_limit:
-            text += (
-                f" · ctx {_format_tokens(self._context_tokens)}"
-                f"/{_format_tokens(self._context_limit)}"
-                f" {_format_context_bar(self._context_tokens, self._context_limit)}"
-            )
+        if self._speed is not None:
+            text += f" · {self._speed:.1f} tok/s"
         self.update(text)
 
     async def on_click(self) -> None:
@@ -741,7 +722,6 @@ class ConnectionScreen(ModalScreen):
             model,
             provider=str(provider),
             reasoning_effort=effort,
-            context_limit=get_model_context_limit(model, str(provider)),
         )
         save_config(config)
         app = self.app
@@ -940,6 +920,8 @@ class AgentApp(App):
                 usage_box: dict[str, int] = {}
                 reasoning_box: list[str] = []
                 finish_box: dict[str, Any] = {}
+                badge = self.query_one(ModelBadge)
+                stream_started = time.monotonic()
                 async for delta in stream_llm_call(
                     self.conversation, usage_box, reasoning_box, finish_box
                 ):
@@ -948,6 +930,9 @@ class AgentApp(App):
                     full_text += delta
                     if not tool_detected and _has_tool_call(full_text):
                         tool_detected = True
+                    elapsed = time.monotonic() - stream_started
+                    if elapsed > 0:
+                        badge.set_speed(estimate_tokens(full_text) / elapsed)
                     reasoning_text = "".join(reasoning_box)
                     if tool_detected:
                         shown = reasoning_text or extract_thinking(full_text)
@@ -969,6 +954,7 @@ class AgentApp(App):
                     log.replace_stream()
                     log.write("[dim]Stopped by user[/]")
                     break
+                self.query_one(ModelBadge).set_speed(None)
                 reasoning_text = "".join(reasoning_box) or extract_thinking(full_text)
                 input_tokens = usage_box.get("prompt_tokens") or (
                     estimate_conversation_tokens(self.conversation)
@@ -980,10 +966,6 @@ class AgentApp(App):
                 self._total_output_tokens += output_tokens
                 self.query_one(ModelBadge).set_tokens(
                     self._total_input_tokens, self._total_output_tokens
-                )
-                self.query_one(ModelBadge).set_context(
-                    estimate_conversation_tokens(self.conversation),
-                    get_config().context_limit,
                 )
                 tool_invocations = extract_tool_invocations(full_text)
                 if (

@@ -44,10 +44,6 @@ OPENCODE_GO_MODELS = [
     "hy3",
 ]
 
-# Used only when a provider does not publish per-model metadata.
-OPENCODE_GO_DEFAULT_CONTEXT_LIMIT = 128_000
-MODEL_CONTEXT_LIMITS: dict[str, int] = {}
-
 MAX_OUTPUT_TOKENS = int(os.environ.get("FUICA_MAX_OUTPUT_TOKENS", "8192"))
 TRUNCATED_REASONS = {"length", "max_tokens", "max_completion_tokens"}
 
@@ -63,7 +59,6 @@ class ConnectionConfig:
     model: str
     provider: str = "local"
     reasoning_effort: str = "medium"
-    context_limit: int | None = None
 
 
 def _default_config() -> ConnectionConfig:
@@ -77,9 +72,6 @@ def _default_config() -> ConnectionConfig:
         model=os.environ.get("LLAMA_MODEL", "local-model"),
         provider=provider,
         reasoning_effort=os.environ.get("FUICA_REASONING_EFFORT", "medium"),
-        context_limit=OPENCODE_GO_DEFAULT_CONTEXT_LIMIT
-        if provider == "opencode-go"
-        else None,
     )
 
 
@@ -100,12 +92,6 @@ def load_config() -> ConnectionConfig:
             model=data.get("model", ""),
             provider=provider,
             reasoning_effort=data.get("reasoning_effort", "medium"),
-            context_limit=data.get("context_limit")
-            or (
-                OPENCODE_GO_DEFAULT_CONTEXT_LIMIT
-                if provider == "opencode-go"
-                else None
-            ),
         )
     except (OSError, json.JSONDecodeError):
         return _default_config()
@@ -137,7 +123,6 @@ def configure_openai(
     model: str,
     provider: str = "local",
     reasoning_effort: str = "medium",
-    context_limit: int | None = None,
 ) -> ConnectionConfig:
     """Rebuild the OpenAI client with a new connection configuration."""
     global _config, openai_client
@@ -147,7 +132,6 @@ def configure_openai(
         model=model,
         provider=provider,
         reasoning_effort=reasoning_effort,
-        context_limit=context_limit,
     )
     openai_client = AsyncOpenAI(
         base_url=base_url,
@@ -167,36 +151,14 @@ async def fetch_opencode_go_models(api_key: str) -> list[str]:
             )
             response.raise_for_status()
             payload = response.json()
-            MODEL_CONTEXT_LIMITS.clear()
             models = [
                 item["id"]
                 for item in payload.get("data", [])
                 if item.get("id") in OPENCODE_GO_MODELS
             ]
-            for item in payload.get("data", []):
-                model_id = item.get("id")
-                if model_id not in OPENCODE_GO_MODELS:
-                    continue
-                for key in (
-                    "context_length",
-                    "context_window",
-                    "max_context_length",
-                    "max_context_tokens",
-                ):
-                    value = item.get(key)
-                    if isinstance(value, int) and value > 0:
-                        MODEL_CONTEXT_LIMITS[model_id] = value
-                        break
             return models or list(OPENCODE_GO_MODELS)
         except (httpx.HTTPError, ValueError, KeyError, TypeError):
             return list(OPENCODE_GO_MODELS)
-
-
-def get_model_context_limit(model: str, provider: str = "local") -> int | None:
-    """Return the best-known context limit for a model/provider pair."""
-    if provider != "opencode-go":
-        return None
-    return MODEL_CONTEXT_LIMITS.get(model, OPENCODE_GO_DEFAULT_CONTEXT_LIMIT)
 
 
 SYSTEM_PROMPT = """
