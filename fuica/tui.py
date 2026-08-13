@@ -220,7 +220,9 @@ def _has_tool_call(text: str) -> bool:
     if "<|DSML|>" in text and "invoke name=" in text:
         return True
     return any(
-        line.strip().startswith("tool:") for line in text.splitlines() if line.strip()
+        line.strip().startswith(("tool:", "<tool:"))
+        for line in text.splitlines()
+        if line.strip()
     )
 
 

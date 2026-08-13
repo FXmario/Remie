@@ -558,20 +558,43 @@ def extract_thinking(text: str) -> str:
     return "\n".join(lines)
 
 
+def _normalize_tool_line(line: str) -> str | None:
+    """
+    Normalize a tool invocation line to 'tool: name(args)' form, or None if the
+    line is not a tool call. Handles plain, angle-bracket-wrapped, and
+    self-closing variants like '<tool: name(args)>' and '<tool: name(args) />'.
+    """
+    if line.startswith("</tool") or line.startswith("tool>"):
+        return None
+    if line.startswith("<tool:"):
+        inner = line[1:]
+        if inner.endswith(">"):
+            inner = inner[:-1]
+        inner = inner.rstrip()
+        if inner.endswith("/"):
+            inner = inner[:-1].rstrip()
+        return inner
+    if line.startswith("tool:"):
+        return line
+    return None
+
+
 def extract_tool_invocations(text: str) -> list[tuple[str, dict[str, Any]]]:
     """
     Return list of (tool_name, args) requested in 'tool: name({...})' lines.
-    Supports compact JSON and Python-style keyword arguments.
+    Supports plain and angle-bracket-wrapped forms, compact JSON, and
+    Python-style keyword arguments. Dashed names are normalized to underscores.
     """
     invocations = []
     for raw_line in text.splitlines():
         line = raw_line.strip()
-        if not line.startswith("tool:"):
+        normalized = _normalize_tool_line(line)
+        if normalized is None:
             continue
         try:
-            after = line[len("tool:") :].strip()
+            after = normalized[len("tool:") :].strip()
             name, rest = after.split("(", 1)
-            name = name.strip()
+            name = name.strip().replace("-", "_")
             if not rest.endswith(")"):
                 continue
             args_text = rest[:-1].strip()
@@ -796,8 +819,8 @@ def estimate_conversation_tokens(
 
 def strip_protocol_lines(text: str) -> str:
     """
-    Remove 'thinking:', 'tool:', and DSML protocol lines for display. They stay
-    in the conversation history sent to the model.
+    Remove 'thinking:', 'tool:', angle-wrapped tool, and DSML protocol lines for
+    display. They stay in the conversation history sent to the model.
     """
     lines = []
     for raw_line in text.splitlines():
@@ -805,6 +828,8 @@ def strip_protocol_lines(text: str) -> str:
         if (
             line.startswith("thinking:")
             or line.startswith("tool:")
+            or line.startswith("<tool:")
+            or line.startswith("</tool")
             or line.startswith("<|DSML|>")
         ):
             continue

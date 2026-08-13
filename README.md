@@ -17,7 +17,7 @@ A terminal-based coding agent with a [Textual](https://textual.textualize.io/) T
 - Async agent loop — the UI stays responsive while the LLM responds and tools run
 - Tools: `read_file`, `list_files`, `glob_files`, `tree_files`, `edit_file`, `run_command`, `ask_user`
 - `ask_user` — when the agent needs a decision, it pops a modal with predefined choices and a free-text answer field instead of guessing
-- Tool calls accepted as `tool: name({...})` or DSML markup (`<|DSML|>invoke name="..." />`)
+- Tool calls accepted as `tool: name({...})`, `<tool: name(...)>`, or DSML markup (`<|DSML|>invoke name="..." />`)
 - Multiline input — `Shift+Enter` or `Ctrl+J` for a new line, `Enter` to send
 - Prompt history — `Up`/`Down` arrows recall previous prompts, like a shell
 - Paste images from the clipboard with `Ctrl+V` and send them to vision-capable models

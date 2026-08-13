@@ -484,6 +484,7 @@ def test_has_tool_call_detects_dsml():
         '<|DSML|>invoke name="list-files">\n<|DSML|>parameter path="." />'
     )
     assert _has_tool_call('tool: read_file({"filename": "a.py"})')
+    assert _has_tool_call("<tool: list_files(path='.')>")
     assert not _has_tool_call("just a normal reply")
 
 

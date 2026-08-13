@@ -414,6 +414,30 @@ class TestExtractToolInvocations:
             ("list_files", {"path": "."}),
         ]
 
+    def test_parses_angle_wrapped_tool_calls(self):
+        text = (
+            "<tool: tree_files(path='.', max_depth=3)>\n"
+            "<tool: list_files(path='.')>\n"
+        )
+        assert extract_tool_invocations(text) == [
+            ("tree_files", {"path": ".", "max_depth": 3}),
+            ("list_files", {"path": "."}),
+        ]
+
+    def test_parses_self_closing_angle_wrapped_tool_call(self):
+        text = "<tool: list_files(path='.') />\n"
+        assert extract_tool_invocations(text) == [("list_files", {"path": "."})]
+
+    def test_ignores_closing_tool_tags(self):
+        text = "<tool: list_files(path='.')>\n</tool>\n"
+        assert extract_tool_invocations(text) == [("list_files", {"path": "."})]
+
+    def test_normalizes_dashed_names_in_wrapped_form(self):
+        text = "<tool: read-file(filename='main.py')>\n"
+        assert extract_tool_invocations(text) == [
+            ("read_file", {"filename": "main.py"})
+        ]
+
 
 class TestEstimateTokens:
     def test_empty_text_is_zero(self):
@@ -476,6 +500,14 @@ class TestStripProtocolLines:
             'hello\n'
             '<|DSML|>invoke name="list-files">\n'
             '<|DSML|>parameter path="." />\n'
+        )
+        assert strip_protocol_lines(text) == "hello"
+
+    def test_removes_angle_wrapped_tool_lines(self):
+        text = (
+            "<tool: tree_files(path='.', max_depth=3)>\n"
+            "hello\n"
+            "</tool>\n"
         )
         assert strip_protocol_lines(text) == "hello"
 
