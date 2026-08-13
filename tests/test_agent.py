@@ -20,6 +20,7 @@ from fuica.agent import (
     get_config,
     get_connection_error_message,
     get_full_system_prompt,
+    get_max_output_tokens,
     get_model_context_limit,
     get_tool_summary,
     glob_files_tool,
@@ -879,6 +880,33 @@ class TestConnectionConfig:
         assert get_model_context_limit("kimi-k3", "opencode-go") == 256_000
         assert get_model_context_limit("unknown-model", "opencode-go") == 128_000
         assert get_model_context_limit("any", "local") is None
+
+    def test_max_output_tokens_defaults_by_provider(self):
+        import os
+
+        old = os.environ.get("FUICA_MAX_OUTPUT_TOKENS")
+        os.environ.pop("FUICA_MAX_OUTPUT_TOKENS", None)
+        try:
+            assert get_max_output_tokens("opencode-go") == 32_768
+            assert get_max_output_tokens("local") == 8_192
+        finally:
+            if old is None:
+                os.environ.pop("FUICA_MAX_OUTPUT_TOKENS", None)
+            else:
+                os.environ["FUICA_MAX_OUTPUT_TOKENS"] = old
+
+    def test_max_output_tokens_env_override(self):
+        import os
+
+        old = os.environ.get("FUICA_MAX_OUTPUT_TOKENS")
+        os.environ["FUICA_MAX_OUTPUT_TOKENS"] = "4000"
+        try:
+            assert get_max_output_tokens("opencode-go") == 4000
+        finally:
+            if old is None:
+                os.environ.pop("FUICA_MAX_OUTPUT_TOKENS", None)
+            else:
+                os.environ["FUICA_MAX_OUTPUT_TOKENS"] = old
 
     def test_opencode_models_filter_unsupported_ids(self):
         import asyncio

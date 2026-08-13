@@ -54,8 +54,8 @@ Configure the LLM connection via environment variables (a `.env` file is loaded 
 | `LLAMA_MODEL`     | Model name                         | `local-model` |
 | `FUICA_DEBUG`            | Show raw tool calls (name + params) | (unset)       |
 | `FUICA_REASONING_EFFORT` | Reasoning mode: off/low/medium/high/max | `medium`   |
-| `FUICA_MAX_OUTPUT_TOKENS` | Max output tokens per response | `8192` |
-| `FUICA_MAX_AUTO_CONTINUATIONS` | Max auto-continuations per response | `10` |
+| `FUICA_MAX_OUTPUT_TOKENS` | Max output tokens per response | OpenCode Go `32768`, local `8192` |
+| `FUICA_MAX_AUTO_CONTINUATIONS` | Max silent auto-continuations per response | `10` |
 
 ### OpenCode Go
 

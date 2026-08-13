@@ -44,8 +44,19 @@ OPENCODE_GO_MODELS = [
     "hy3",
 ]
 
-MAX_OUTPUT_TOKENS = int(os.environ.get("FUICA_MAX_OUTPUT_TOKENS", "8192"))
 TRUNCATED_REASONS = {"length", "max_tokens", "max_completion_tokens"}
+
+
+def get_max_output_tokens(provider: str = "local") -> int:
+    """Per-provider output token budget. Env override wins; OpenCode Go gets a
+    large budget so long responses aren't cut off by an artificial cap."""
+    env_value = os.environ.get("FUICA_MAX_OUTPUT_TOKENS")
+    if env_value:
+        try:
+            return int(env_value)
+        except ValueError:
+            pass
+    return 32_768 if provider == "opencode-go" else 8_192
 
 OPENCODE_GO_DEFAULT_CONTEXT_LIMIT = 128_000
 MODEL_CONTEXT_LIMITS: dict[str, int] = {
@@ -617,7 +628,7 @@ async def stream_llm_call(
     kwargs: dict[str, Any] = {
         "model": _config.model,
         "messages": conversation,
-        "max_tokens": MAX_OUTPUT_TOKENS,
+        "max_tokens": get_max_output_tokens(_config.provider),
         "stream": True,
     }
     if _config.reasoning_effort != "off":

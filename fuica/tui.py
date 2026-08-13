@@ -1009,7 +1009,6 @@ class AgentApp(App):
                         )
                     else:
                         log.replace_stream()
-                    log.write("[dim]Response limit reached, continuing...[/]")
                     continuations += 1
                     continue
                 if not tool_invocations:
