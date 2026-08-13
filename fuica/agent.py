@@ -206,6 +206,7 @@ Use compact single-line JSON with double quotes. After receiving a tool_result(.
 If no tool is needed, respond normally.
 
 When multiple valid approaches have meaningful tradeoffs or require a user preference, do not choose silently. Briefly explain the options and ask the user which they prefer. Continue autonomously for routine implementation details or when one option clearly dominates. Do not ask unnecessary confirmation questions.
+To ask the user a question, call the 'ask_user' tool and wait for its result instead of ending your turn.
 """
 
 
@@ -466,6 +467,19 @@ def run_command_tool(command: str, cwd: str = ".") -> dict[str, Any]:
     }
 
 
+def ask_user_tool(
+    question: str, options: list[str] | None = None
+) -> dict[str, Any]:
+    """
+    Asks the user a question and waits for their answer. Use this when you need
+    a decision or clarification from the user instead of guessing.
+    :param question: The question to ask the user.
+    :param options: Optional list of predefined choices to offer.
+    :return: The user's answer.
+    """
+    return {"question": question, "options": options or []}
+
+
 TOOL_REGISTRY = {
     "read_file": read_file_tool,
     "list_files": list_files_tool,
@@ -473,6 +487,7 @@ TOOL_REGISTRY = {
     "run_command": run_command_tool,
     "glob_files": glob_files_tool,
     "tree_files": tree_files_tool,
+    "ask_user": ask_user_tool,
 }
 
 TOOL_SUMMARIES = {
@@ -482,6 +497,7 @@ TOOL_SUMMARIES = {
     "run_command": "run a shell command",
     "glob_files": "find files matching a glob pattern",
     "tree_files": "show the directory tree",
+    "ask_user": "ask the user a question",
 }
 
 
@@ -733,6 +749,8 @@ def run_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
                 args.get("path", "."),
                 args.get("max_depth", 3),
             )
+        elif name == "ask_user":
+            return {"action": "ask_user_interactive", "args": args}
         return TOOL_REGISTRY[name](**args)
     except (OSError, UnicodeError, TypeError, ValueError) as error:
         return {"error": f"{type(error).__name__}: {error}"}

@@ -733,6 +733,91 @@ class ConnectionScreen(ModalScreen):
         return OPENCODE_GO_MODELS[0]
 
 
+class AskUserScreen(ModalScreen):
+    """Modal asking the user a question with optional predefined choices."""
+
+    BINDINGS = [("escape", "dismiss", "Cancel")]
+
+    CSS = """
+    AskUserScreen {
+        align: center middle;
+    }
+
+    #ask-dialog {
+        width: 60;
+        height: auto;
+        max-height: 70%;
+        padding: 1 2;
+        border: round $primary;
+        background: $surface;
+    }
+
+    #ask-question {
+        margin-bottom: 1;
+    }
+
+    #ask-dialog .option-row {
+        height: auto;
+        align: left middle;
+    }
+
+    #ask-dialog Button {
+        margin-right: 1;
+    }
+
+    #ask-dialog #ask-input {
+        margin-top: 1;
+    }
+    """
+
+    def __init__(self, question: str, options: list[str] | None = None) -> None:
+        super().__init__()
+        self.question = question
+        self.options = options or []
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="ask-dialog"):
+            yield Label(self.question, id="ask-question")
+            if self.options:
+                with Horizontal(classes="option-row"):
+                    for index, option in enumerate(self.options):
+                        yield Button(
+                            option, id=f"ask-option-{index}", variant="primary"
+                        )
+            yield Input(placeholder="Type an answer...", id="ask-input")
+            with Horizontal(classes="row"):
+                yield Button("Submit", variant="primary", id="ask-submit")
+                yield Button("Cancel", id="ask-cancel")
+
+    def on_mount(self) -> None:
+        self.query_one("#ask-input", Input).focus()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        button_id = event.button.id
+        if button_id == "ask-cancel":
+            self.dismiss(None)
+            return
+        if button_id == "ask-submit":
+            answer = self.query_one("#ask-input", Input).value.strip()
+            if answer:
+                self.dismiss(answer)
+            else:
+                self.notify("Enter an answer first", severity="warning")
+            return
+        if button_id and button_id.startswith("ask-option-"):
+            try:
+                index = int(button_id.rsplit("-", 1)[1])
+                self.dismiss(self.options[index])
+            except (ValueError, IndexError):
+                pass
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        event.stop()
+        answer = self.query_one("#ask-input", Input).value.strip()
+        if answer:
+            self.dismiss(answer)
+
+
 class AgentScreen(Screen):
     """Default screen. Overrides ctrl+c copy to confirm the selection copy."""
 
@@ -1066,7 +1151,21 @@ class AgentApp(App):
                     if self._stop_requested:
                         log.write("[dim]Stopped by user[/]")
                         break
-                    result = await asyncio.to_thread(run_tool, name, args)
+                    if name == "ask_user":
+                        question = str(args.get("question", ""))
+                        options = args.get("options") or []
+                        log.write(
+                            f"[bold cyan]Agent asking you:[/] {escape(question)}"
+                        )
+                        answer = await self.push_screen_wait(
+                            AskUserScreen(question, options)
+                        )
+                        if answer is None:
+                            result = {"answer": None, "cancelled": True}
+                        else:
+                            result = {"answer": answer}
+                    else:
+                        result = await asyncio.to_thread(run_tool, name, args)
                     result_json = json.dumps(result, default=str)
                     if isinstance(result, dict) and result.get("diff"):
                         log.write(_render_diff(result["diff"]))

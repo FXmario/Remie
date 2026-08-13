@@ -10,6 +10,8 @@ from fuica.agent import (
     OPENCODE_GO_MODELS,
     RUN_COMMAND_MAX_OUTPUT,
     RUN_COMMAND_TIMEOUT,
+    TOOL_REGISTRY,
+    ask_user_tool,
     configure_openai,
     edit_file_tool,
     estimate_conversation_tokens,
@@ -738,6 +740,23 @@ class TestGetToolSummary:
 
     def test_unknown_tool_falls_back_to_name(self):
         assert get_tool_summary("nonexistent") == "nonexistent"
+
+
+class TestAskUserTool:
+    def test_registered_and_in_system_prompt(self):
+        assert "ask_user" in TOOL_REGISTRY
+        assert get_tool_summary("ask_user") == "ask the user a question"
+        assert "ask_user" in get_full_system_prompt()
+
+    def test_run_tool_returns_interactive_marker(self):
+        args = {"question": "pick one", "options": ["a", "b"]}
+        assert run_tool("ask_user", args) == {
+            "action": "ask_user_interactive",
+            "args": args,
+        }
+
+    def test_payload_without_options(self):
+        assert ask_user_tool("yes or no?") == {"question": "yes or no?", "options": []}
 
 
 class TestConnectionErrorMessage:

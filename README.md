@@ -15,7 +15,8 @@ A terminal-based coding agent with a [Textual](https://textual.textualize.io/) T
 - The model name is shown on the top-right of the input box border
 - Uses your terminal's native color scheme (ANSI), so the UI matches your system theme — like opencode
 - Async agent loop — the UI stays responsive while the LLM responds and tools run
-- Tools: `read_file`, `list_files`, `glob_files`, `tree_files`, `edit_file`, `run_command`
+- Tools: `read_file`, `list_files`, `glob_files`, `tree_files`, `edit_file`, `run_command`, `ask_user`
+- `ask_user` — when the agent needs a decision, it pops a modal with predefined choices and a free-text answer field instead of guessing
 - Tool calls accepted as `tool: name({...})` or DSML markup (`<|DSML|>invoke name="..." />`)
 - Multiline input — `Shift+Enter` or `Ctrl+J` for a new line, `Enter` to send
 - Prompt history — `Up`/`Down` arrows recall previous prompts, like a shell

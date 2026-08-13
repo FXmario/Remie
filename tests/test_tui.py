@@ -15,6 +15,8 @@ from fuica.agent import (
 from fuica.tui import (
     MAX_AUTO_CONTINUATIONS,
     AgentApp,
+    AgentScreen,
+    AskUserScreen,
     ConnectionScreen,
     ModelBadge,
     PromptSubmitted,
@@ -374,6 +376,93 @@ def test_truncation_continuation_limit(monkeypatch):
                 if m["role"] == "assistant"
             ]
             assert len(assistant_messages) == MAX_AUTO_CONTINUATIONS + 1
+
+    asyncio.run(exercise())
+
+
+def test_ask_user_modal_renders_question_and_options():
+    async def exercise():
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            await app.push_screen(AskUserScreen("pick one", ["a", "b", "c"]))
+            await pilot.pause()
+            screen = app.screen
+            assert screen.query_one("#ask-question").render().plain == "pick one"
+            assert screen.query_one("#ask-option-0")
+            assert screen.query_one("#ask-option-2")
+            assert screen.query_one("#ask-input")
+
+    asyncio.run(exercise())
+
+
+def test_ask_user_tool_feeds_answer_back(monkeypatch):
+    async def exercise():
+        calls = 0
+
+        async def tool_stream(
+            _conversation, usage_box=None, reasoning_box=None, finish_box=None
+        ):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                yield (
+                    'tool: ask_user({"question": "pick one", '
+                    '"options": ["a", "b"]})'
+                )
+            else:
+                yield "done"
+
+        monkeypatch.setattr(tui, "stream_llm_call", tool_stream)
+
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            async def fake_push(screen):
+                assert isinstance(screen, AskUserScreen)
+                return "a"
+
+            monkeypatch.setattr(app, "push_screen_wait", fake_push)
+            await app.run_agent_turn("hello")
+            await pilot.pause()
+
+            user_messages = [
+                m["content"] for m in app.conversation if m["role"] == "user"
+            ]
+            assert any("answer" in m and "a" in m for m in user_messages)
+            assert any('"answer": "a"' in m for m in user_messages)
+            assert app.conversation[-1]["role"] == "assistant"
+
+    asyncio.run(exercise())
+
+
+def test_ask_user_cancel_marks_cancelled(monkeypatch):
+    async def exercise():
+        calls = 0
+
+        async def tool_stream(
+            _conversation, usage_box=None, reasoning_box=None, finish_box=None
+        ):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                yield 'tool: ask_user({"question": "q"})'
+            else:
+                yield "done"
+
+        monkeypatch.setattr(tui, "stream_llm_call", tool_stream)
+
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            async def fake_cancel(screen):
+                return None
+
+            monkeypatch.setattr(app, "push_screen_wait", fake_cancel)
+            await app.run_agent_turn("hello")
+            await pilot.pause()
+
+            user_messages = [
+                m["content"] for m in app.conversation if m["role"] == "user"
+            ]
+            assert any('"cancelled": true' in m for m in user_messages)
 
     asyncio.run(exercise())
 
