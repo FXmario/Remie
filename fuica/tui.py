@@ -261,6 +261,62 @@ def _render_diff(diff: str) -> Panel:
     )
 
 
+TOOL_RESULT_MAX_CHARS = 2000
+
+
+def _format_tool_result(name: str, result: dict[str, Any]) -> str:
+    """Return a readable text summary of a tool result."""
+    if result.get("blocked"):
+        return ""
+    if "error" in result:
+        return f"Error: {result['error']}"
+    if name == "read_file":
+        content = result.get("content", "")
+        return f"Read {result.get('file_path')} ({len(content)} chars)"
+    if name == "edit_file":
+        return f"{result.get('action', 'edited')}: {result.get('path')}"
+    if name == "run_command":
+        parts = [f"exit {result.get('exit_code')}"]
+        if result.get("timed_out"):
+            parts.append("timed out")
+        output = (result.get("stdout") or "").strip()
+        stderr = (result.get("stderr") or "").strip()
+        body = "\n".join(part for part in (output, stderr) if part)
+        summary = " · ".join(parts)
+        return f"{summary}\n{body}" if body else summary
+    if name == "list_files":
+        entries = result.get("files", [])
+        names = ", ".join(e.get("filename", "") for e in entries[:50])
+        suffix = f" (+{len(entries) - 50} more)" if len(entries) > 50 else ""
+        return f"{len(entries)} entries: {names}{suffix}"
+    if name == "glob_files":
+        matches = result.get("matches", [])
+        names = ", ".join(matches[:50])
+        suffix = f" (+{len(matches) - 50} more)" if len(matches) > 50 else ""
+        return f"{result.get('count', len(matches))} matches: {names}{suffix}"
+    if name == "tree_files":
+        return result.get("tree", "")
+    if name == "ask_user":
+        answer = result.get("answer")
+        return f"Answer: {answer}" if answer is not None else "Cancelled"
+    return json.dumps(result, default=str)
+
+
+def _render_tool_result(name: str, result: dict[str, Any]) -> RenderableType | None:
+    """Render a readable, truncated panel for a tool result, or None."""
+    text = _format_tool_result(name, result)
+    if not text:
+        return None
+    if len(text) > TOOL_RESULT_MAX_CHARS:
+        text = text[:TOOL_RESULT_MAX_CHARS].rstrip() + "\n… (result truncated)"
+    return Panel(
+        Text.from_markup(escape(text)),
+        title=f"Tool result · {name}",
+        border_style="blue",
+        padding=(0, 1),
+    )
+
+
 class StreamingRichLog(RichLog):
     """A RichLog that can stream text in place at the bottom of the log."""
 
@@ -1171,6 +1227,16 @@ class AgentApp(App):
                     result_json = json.dumps(result, default=str)
                     if isinstance(result, dict) and result.get("diff"):
                         log.write(_render_diff(result["diff"]))
+                    if isinstance(result, dict) and result.get("blocked"):
+                        log.write(
+                            "[bold red]Blocked command:[/] "
+                            f"{escape(result.get('command', ''))} "
+                            f"\u2014 {escape(str(result.get('reason', 'unsafe command')))}"
+                        )
+                    if isinstance(result, dict):
+                        result_renderable = _render_tool_result(name, result)
+                        if result_renderable is not None:
+                            log.write(result_renderable)
                     if self.debug_mode:
                         log.write(
                             f"[bold magenta]tool_result:[/] {escape(result_json)}"

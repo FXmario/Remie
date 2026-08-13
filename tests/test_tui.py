@@ -237,6 +237,39 @@ def test_stop_drains_pending_messages(monkeypatch):
     asyncio.run(exercise())
 
 
+def test_blocked_command_shows_blocked_log_line(monkeypatch):
+    async def exercise():
+        calls = 0
+
+        async def tool_stream(
+            _conversation, usage_box=None, reasoning_box=None, finish_box=None
+        ):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                yield 'tool: run_command({"command": "rm -rf /"})'
+            else:
+                yield "done"
+
+        monkeypatch.setattr(tui, "stream_llm_call", tool_stream)
+
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            await app.run_agent_turn("run it")
+            await pilot.pause()
+
+            log_lines = [
+                strip.text
+                for strip in app.query_one("#log").lines
+            ]
+            joined = "\n".join(log_lines)
+            assert "Blocked command:" in joined
+            assert "recursive forced delete" in joined
+            assert "rm -rf /" in joined
+
+    asyncio.run(exercise())
+
+
 def test_edit_tool_writes_diff_panel_to_log(monkeypatch, tmp_path):
     async def exercise():
         file = tmp_path / "doc.txt"
@@ -486,6 +519,83 @@ def test_has_tool_call_detects_dsml():
     assert _has_tool_call('tool: read_file({"filename": "a.py"})')
     assert _has_tool_call("<tool: list_files(path='.')>")
     assert not _has_tool_call("just a normal reply")
+
+
+def test_format_tool_result_read_file():
+    text = tui._format_tool_result(
+        "read_file", {"file_path": "main.py", "content": "abc"}
+    )
+    assert text == "Read main.py (3 chars)"
+
+
+def test_format_tool_result_run_command():
+    text = tui._format_tool_result(
+        "run_command",
+        {"exit_code": 0, "stdout": "hello\nworld\n", "stderr": "", "timed_out": False},
+    )
+    assert "exit 0" in text
+    assert "hello\nworld" in text
+
+
+def test_format_tool_result_error_and_blocked():
+    assert tui._format_tool_result("read_file", {"error": "boom"}) == "Error: boom"
+    assert tui._format_tool_result("run_command", {"blocked": True, "reason": "no"}) == ""
+
+
+def test_format_tool_result_ask_user():
+    assert tui._format_tool_result("ask_user", {"answer": "yes"}) == "Answer: yes"
+    assert tui._format_tool_result("ask_user", {"cancelled": True}) == "Cancelled"
+
+
+def test_render_tool_result_panel_and_truncation():
+    panel = tui._render_tool_result("read_file", {"file_path": "a.py", "content": "x"})
+    assert panel is not None
+    assert panel.title == "Tool result · read_file"
+
+    big = tui._render_tool_result(
+        "run_command",
+        {"exit_code": 0, "stdout": "z" * 5000, "stderr": "", "timed_out": False},
+    )
+    assert "result truncated" in big.renderable.plain
+
+    assert tui._render_tool_result("run_command", {"blocked": True}) is None
+
+
+def test_tool_results_rendered_in_turn(monkeypatch, tmp_path):
+    async def exercise():
+        path = tmp_path / "x.txt"
+        path.write_text("hello", encoding="utf-8")
+
+        calls = 0
+
+        async def tool_stream(
+            _conversation, usage_box=None, reasoning_box=None, finish_box=None
+        ):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                yield f'tool: read_file({{"filename": "{path}"}})'
+            else:
+                yield "done"
+
+        monkeypatch.setattr(tui, "stream_llm_call", tool_stream)
+        rendered = []
+        monkeypatch.setattr(
+            tui,
+            "_render_tool_result",
+            lambda name, result: rendered.append((name, result)) or Panel(""),
+        )
+
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            await app.run_agent_turn("read it")
+            await pilot.pause()
+
+            assert len(rendered) == 1
+            assert rendered[0][0] == "read_file"
+            assert rendered[0][1]["content"] == "hello"
+
+    asyncio.run(exercise())
 
 
 def test_ctrl_c_copies_selection(monkeypatch):

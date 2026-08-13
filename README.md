@@ -16,12 +16,15 @@ A terminal-based coding agent with a [Textual](https://textual.textualize.io/) T
 - Uses your terminal's native color scheme (ANSI), so the UI matches your system theme — like opencode
 - Async agent loop — the UI stays responsive while the LLM responds and tools run
 - Tools: `read_file`, `list_files`, `glob_files`, `tree_files`, `edit_file`, `run_command`, `ask_user`
+- **Command safety** — `run_command` blocks destructive commands before they execute (`rm -rf /`, `rm -rf ~`, disk formatting/partitioning, shutdown/reboot, `chmod -R`/`chown -R` on `/` or `~`, fork bombs, `curl | sh`, `dd` to raw block devices, ...) and shows a `Blocked command` line in the log with the reason
+- `FUICA_BLOCKED_COMMANDS` — comma-separated extra substrings (e.g. `git push --force`) that are always blocked, case-insensitive
 - `ask_user` — when the agent needs a decision, it pops a modal with predefined choices and a free-text answer field instead of guessing
 - Tool calls accepted as `tool: name({...})`, `<tool: name(...)>`, or DSML markup (`<|DSML|>invoke name="..." />`)
 - Multiline input — `Shift+Enter` or `Ctrl+J` for a new line, `Enter` to send
 - Prompt history — `Up`/`Down` arrows recall previous prompts, like a shell
 - Paste images from the clipboard with `Ctrl+V` and send them to vision-capable models
 - Thinking step before every tool call; tool calls are announced as `Agent calling <tool>`, kept in the conversation history
+- Tool results are shown as readable `Tool result` panels in the log after each call (raw JSON still available with `FUICA_DEBUG=1`)
 
 ## Requirements
 
@@ -63,6 +66,7 @@ Configure the LLM connection via environment variables (a `.env` file is loaded 
 | `FUICA_REASONING_EFFORT` | Reasoning mode: off/low/medium/high/max | `medium`   |
 | `FUICA_MAX_OUTPUT_TOKENS` | Max output tokens per response | OpenCode Go `32768`, local `8192` |
 | `FUICA_MAX_AUTO_CONTINUATIONS` | Max silent auto-continuations per response | `10` |
+| `FUICA_BLOCKED_COMMANDS` | Comma-separated extra command substrings that are always blocked (e.g. `git push --force,aws s3 rm`) | (unset) |
 
 ### OpenCode Go
 
