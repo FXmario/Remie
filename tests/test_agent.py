@@ -20,6 +20,7 @@ from fuica.agent import (
     get_config,
     get_connection_error_message,
     get_full_system_prompt,
+    get_model_context_limit,
     get_tool_summary,
     glob_files_tool,
     load_config,
@@ -873,6 +874,11 @@ class TestConnectionConfig:
     def test_opencode_go_constants(self):
         assert OPENCODE_GO_BASE_URL == "https://opencode.ai/zen/go/v1"
         assert "deepseek-v4-flash" in OPENCODE_GO_MODELS
+
+    def test_model_context_limit_lookup(self):
+        assert get_model_context_limit("kimi-k3", "opencode-go") == 256_000
+        assert get_model_context_limit("unknown-model", "opencode-go") == 128_000
+        assert get_model_context_limit("any", "local") is None
 
     def test_opencode_models_filter_unsupported_ids(self):
         import asyncio

@@ -1,6 +1,7 @@
 import asyncio
 
 import httpx
+from openai import BadRequestError
 from PIL import Image
 from rich.panel import Panel
 
@@ -431,6 +432,68 @@ def test_ctrl_c_quits_without_selection():
             await pilot.press("ctrl+c")
             await pilot.pause()
             assert app.is_running is False
+
+    asyncio.run(exercise())
+
+
+def test_conversation_compaction_keeps_system_and_recent(monkeypatch):
+    async def exercise():
+        async def fake_stream(_conversation, usage_box=None, reasoning_box=None, finish_box=None):
+            if False:
+                yield ""
+
+        monkeypatch.setattr(tui, "stream_llm_call", fake_stream)
+
+        app = AgentApp()
+        app._prompt_history = []
+        async with app.run_test() as pilot:
+            app.conversation = [
+                {"role": "system", "content": "sys"},
+                {"role": "user", "content": "old" * 200},
+                {"role": "assistant", "content": "old" * 200},
+                {"role": "user", "content": "tool_result(" + "x" * 500 + ")"},
+                {"role": "user", "content": "recent"},
+            ]
+            assert app._conversation_too_large(500) is True
+            app._compact_conversation()
+            assert app.conversation[0]["role"] == "system"
+            assert "omitted" in app.conversation[1]["content"]
+            assert app.conversation[-1]["content"] == "recent"
+            assert len(app.conversation) == 6
+
+    asyncio.run(exercise())
+
+
+def test_context_full_error_notifies_clearly(monkeypatch):
+    async def exercise():
+        class FakeRequest:
+            method = "POST"
+            url = "http://test/v1"
+
+        class FakeResponse:
+            request = FakeRequest()
+            status_code = 400
+            headers = {"x-request-id": "abc"}
+
+        async def failing_stream(_conversation, usage_box=None, reasoning_box=None, finish_box=None):
+            raise BadRequestError(
+                "maximum context length is 131072 tokens",
+                response=FakeResponse(),
+                body=None,
+            )
+            yield ""
+
+        monkeypatch.setattr(tui, "stream_llm_call", failing_stream)
+        notifications = []
+
+        app = AgentApp()
+        monkeypatch.setattr(app, "notify", lambda *a, **k: notifications.append(k))
+        async with app.run_test() as pilot:
+            await app.run_agent_turn("hello")
+            await pilot.pause()
+
+            assert notifications
+            assert notifications[0].get("title") == "Context window full"
 
     asyncio.run(exercise())
 

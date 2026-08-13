@@ -47,6 +47,21 @@ OPENCODE_GO_MODELS = [
 MAX_OUTPUT_TOKENS = int(os.environ.get("FUICA_MAX_OUTPUT_TOKENS", "8192"))
 TRUNCATED_REASONS = {"length", "max_tokens", "max_completion_tokens"}
 
+OPENCODE_GO_DEFAULT_CONTEXT_LIMIT = 128_000
+MODEL_CONTEXT_LIMITS: dict[str, int] = {
+    "grok-4.5": 256_000,
+    "glm-5.2": 128_000,
+    "glm-5.1": 128_000,
+    "kimi-k3": 256_000,
+    "kimi-k2.7-code": 128_000,
+    "kimi-k2.6": 128_000,
+    "mimo-v2.5": 128_000,
+    "mimo-v2.5-pro": 128_000,
+    "hy3": 128_000,
+    "deepseek-v4-pro": 128_000,
+    "deepseek-v4-flash": 128_000,
+}
+
 
 class UnsupportedModelError(RuntimeError):
     """Raised when a configured provider needs an unsupported API format."""
@@ -159,6 +174,13 @@ async def fetch_opencode_go_models(api_key: str) -> list[str]:
             return models or list(OPENCODE_GO_MODELS)
         except (httpx.HTTPError, ValueError, KeyError, TypeError):
             return list(OPENCODE_GO_MODELS)
+
+
+def get_model_context_limit(model: str, provider: str = "local") -> int | None:
+    """Best-known context window for a model/provider pair (used for compaction)."""
+    if provider != "opencode-go":
+        return None
+    return MODEL_CONTEXT_LIMITS.get(model, OPENCODE_GO_DEFAULT_CONTEXT_LIMIT)
 
 
 SYSTEM_PROMPT = """

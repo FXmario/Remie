@@ -14,7 +14,7 @@ import httpx
 from PIL import Image as PILImage
 from PIL import ImageGrab
 from PIL import ImageSequence
-from openai import APIConnectionError, APITimeoutError
+from openai import APIConnectionError, APITimeoutError, BadRequestError
 from openai.types.chat import ChatCompletionMessageParam
 from rich.console import RenderableType
 from rich.markdown import Markdown
@@ -56,6 +56,7 @@ from fuica.agent import (
     get_config,
     get_connection_error_message,
     get_full_system_prompt,
+    get_model_context_limit,
     get_tool_summary,
     render_assistant_panel,
     render_user_message,
@@ -67,7 +68,11 @@ from fuica.agent import (
 
 REASONING_EFFORTS = ("off", "low", "medium", "high", "max")
 PROMPT_HISTORY_LIMIT = 100
-MAX_AUTO_CONTINUATIONS = 4
+MAX_AUTO_CONTINUATIONS = int(
+    os.environ.get("FUICA_MAX_AUTO_CONTINUATIONS", "10")
+)
+COMPACTION_CONTEXT_RATIO = 0.8
+COMPACTION_KEEP_MESSAGES = 10
 PROVIDER_BASE_URLS = {
     "opencode-go": OPENCODE_GO_BASE_URL,
 }
@@ -894,6 +899,31 @@ class AgentApp(App):
             except asyncio.QueueEmpty:
                 break
 
+    def _context_limit(self) -> int | None:
+        config = get_config()
+        return get_model_context_limit(config.model, config.provider)
+
+    def _conversation_too_large(self, limit: int | None) -> bool:
+        if not limit:
+            return False
+        return estimate_conversation_tokens(self.conversation) >= limit * COMPACTION_CONTEXT_RATIO
+
+    def _compact_conversation(self) -> None:
+        """Trim old context when the window is nearly full so long tasks continue."""
+        if len(self.conversation) <= 2:
+            return
+        tail = self.conversation[1:][-COMPACTION_KEEP_MESSAGES:]
+        self.conversation = self.conversation[:1] + [
+            {
+                "role": "system",
+                "content": (
+                    "(Earlier conversation was omitted because the context "
+                    "window was nearly full. Continue based on the most "
+                    "recent messages below.)"
+                ),
+            }
+        ] + tail
+
     async def run_agent_turn(self, user_content: str | list) -> None:
         log = self.query_one("#log", StreamingRichLog)
         completed = False
@@ -905,6 +935,11 @@ class AgentApp(App):
                 if self._stop_requested:
                     log.write("[dim]Stopped by user[/]")
                     break
+                if self._conversation_too_large(self._context_limit()):
+                    self._compact_conversation()
+                    log.write(
+                        "[dim]Context window nearly full — older messages compacted.[/]"
+                    )
                 full_text = ""
                 log.begin_stream()
                 tool_detected = False
@@ -1056,6 +1091,18 @@ class AgentApp(App):
         except UnsupportedModelError as error:
             log.replace_stream()
             self.notify(str(error), title="Unsupported model", severity="error")
+        except BadRequestError as error:
+            log.replace_stream()
+            message = str(error)
+            if "context" in message.lower() or "maximum context length" in message.lower():
+                self.notify(
+                    "The conversation exceeded the model's context window. "
+                    "Clear the log or start a new session.",
+                    title="Context window full",
+                    severity="error",
+                )
+            else:
+                self.notify(message, title="Request error", severity="error")
         except Exception as error:
             log.replace_stream()
             self.notify(
