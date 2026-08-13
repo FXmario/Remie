@@ -703,6 +703,29 @@ class TestSystemPrompt:
         assert "multiple valid approaches" in prompt
         assert "ask the user which they prefer" in prompt
 
+    def test_loads_agents_md_from_cwd(self, tmp_path, monkeypatch):
+        (tmp_path / "AGENTS.md").write_text(
+            "Use type hints everywhere.", encoding="utf-8"
+        )
+        monkeypatch.chdir(tmp_path)
+        prompt = get_full_system_prompt()
+        assert "Project instructions" in prompt
+        assert "Use type hints everywhere." in prompt
+
+    def test_ignores_missing_agents_md(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        prompt = get_full_system_prompt()
+        assert "Project instructions" not in prompt
+
+    def test_truncates_oversized_agents_md(self, tmp_path, monkeypatch):
+        (tmp_path / "AGENTS.md").write_text(
+            "x" * 20_000, encoding="utf-8"
+        )
+        monkeypatch.chdir(tmp_path)
+        prompt = get_full_system_prompt()
+        assert "AGENTS.md truncated" in prompt
+        assert prompt.count("x") <= 8000 + 64
+
 
 class TestGetToolSummary:
     def test_known_tools_return_summary(self):

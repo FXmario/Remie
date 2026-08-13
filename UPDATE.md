@@ -7,7 +7,7 @@ Since `fuica` is installed as a **uv tool** (a snapshot installed into uv's tool
 The project is under git, so pull the latest changes:
 
 ```bash
-cd /home/mario/Work/FuiAgent
+cd /home/fuica/Work/agents/FuiAgent
 git pull
 ```
 
@@ -24,7 +24,7 @@ uv sync
 Because the tool was installed from a **path** (not a registry package), the `fuica` command in your PATH runs from uv's tool directory, not from the repo. Reinstalling is required to pick up new code:
 
 ```bash
-uv tool install /home/mario/Work/FuiAgent --force
+uv tool install /home/fuica/Work/agents/FuiAgent --force
 ```
 
 The `--force` flag is important, especially since `pyproject.toml` keeps version `0.1.0`. If the version number never bumps, `uv tool upgrade fuiagent` would consider the tool "up to date" and skip the reinstall.
@@ -38,9 +38,9 @@ uv tool upgrade fuiagent --force
 ## Quick recap
 
 ```bash
-cd /home/mario/Work/FuiAgent
+cd /home/fuica/Work/agents/FuiAgent
 git pull && uv sync
-uv tool install /home/mario/Work/FuiAgent --force
+uv tool install /home/fuica/Work/agents/FuiAgent --force
 ```
 
 After that, typing `fuica` in any directory will run the updated version.

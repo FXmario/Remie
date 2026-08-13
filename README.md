@@ -38,12 +38,18 @@ uv sync
 To install the agent as a global command and use it from any project:
 
 ```bash
-uv tool install /your/project/location/FuiAgent
+uv tool install /home/fuica/Work/agents/FuiAgent --force
 cd ~/Projects/my-other-project
 fuica
 ```
 
 The agent operates on the directory where `fuica` is launched, so relative tool paths target the current project.
+
+### Project context
+
+If the current project has an `AGENTS.md` at its root, its contents are added to the
+agent's system prompt so it follows the project's conventions automatically. No
+`AGENTS.md` is required — the agent otherwise explores the project with its tools.
 
 Configure the LLM connection via environment variables (a `.env` file is loaded automatically):
 

@@ -59,6 +59,7 @@ def get_max_output_tokens(provider: str = "local") -> int:
     return 32_768 if provider == "opencode-go" else 8_192
 
 OPENCODE_GO_DEFAULT_CONTEXT_LIMIT = 128_000
+PROJECT_CONTEXT_MAX_CHARS = 8000
 MODEL_CONTEXT_LIMITS: dict[str, int] = {
     "grok-4.5": 256_000,
     "glm-5.2": 128_000,
@@ -500,12 +501,32 @@ def get_tool_str_representation(tool_name: str) -> str:
     """
 
 
+def load_project_context() -> str:
+    """
+    Load project instructions from AGENTS.md in the launch directory.
+    Returns an empty string when there is no AGENTS.md.
+    """
+    agents_file = Path.cwd() / "AGENTS.md"
+    if not agents_file.is_file():
+        return ""
+    try:
+        content = agents_file.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return ""
+    if len(content) > PROJECT_CONTEXT_MAX_CHARS:
+        content = (
+            content[:PROJECT_CONTEXT_MAX_CHARS].rstrip()
+            + "\n\n(AGENTS.md truncated for context.)\n"
+        )
+    return f"\n\n## Project instructions (from AGENTS.md)\n{content}"
+
+
 def get_full_system_prompt():
     tool_str_repr = ""
     for tool_name in TOOL_REGISTRY:
         tool_str_repr += "TOOL\n===" + get_tool_str_representation(tool_name)
         tool_str_repr += f"\n{'=' * 15}\n"
-    return SYSTEM_PROMPT.format(tool_list_repr=tool_str_repr)
+    return SYSTEM_PROMPT.format(tool_list_repr=tool_str_repr) + load_project_context()
 
 
 def extract_thinking(text: str) -> str:
