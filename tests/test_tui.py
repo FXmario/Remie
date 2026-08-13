@@ -701,6 +701,20 @@ def test_token_speed_shown_and_cleared():
     assert "tok/s" not in badge.render().plain
 
 
+def test_connection_screen_has_submit_and_cancel_only():
+    async def exercise():
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            await pilot.press("ctrl+p")
+            await pilot.pause()
+            screen = app.screen
+            assert screen.query_one("#submit-button")
+            assert screen.query_one("#cancel-button")
+            assert not screen.query("#refresh-button")
+
+    asyncio.run(exercise())
+
+
 def test_connection_screen_restores_provider_and_effort():
     async def exercise():
         previous = get_config()

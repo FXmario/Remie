@@ -589,10 +589,6 @@ class ConnectionScreen(ModalScreen):
         width: 100%;
         align: center middle;
     }
-
-    #connection-dialog Button {
-        margin-top: 1;
-    }
     """
 
     def compose(self) -> ComposeResult:
@@ -643,7 +639,6 @@ class ConnectionScreen(ModalScreen):
                     prompt="Select reasoning effort...",
                 )
             with Horizontal(classes="row"):
-                yield Button("Refresh models", id="refresh-button")
                 yield Button("Submit", variant="primary", id="submit-button")
                 yield Button("Cancel", id="cancel-button")
 
@@ -678,10 +673,6 @@ class ConnectionScreen(ModalScreen):
             return
         if event.button.id == "submit-button":
             self._connect()
-        elif event.button.id == "refresh-button":
-            api_key = self.query_one("#api-key-input", Input).value.strip()
-            if api_key:
-                await self._refresh_models(api_key)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         """Submit modal fields without leaking them to the chat input."""
