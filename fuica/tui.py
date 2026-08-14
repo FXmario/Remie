@@ -57,7 +57,6 @@ from fuica.agent import (
     get_connection_error_message,
     get_full_system_prompt,
     get_model_context_limit,
-    get_tool_summary,
     render_assistant_panel,
     render_user_message,
     run_tool,
@@ -66,6 +65,8 @@ from fuica.agent import (
     strip_protocol_lines,
 )
 
+from fuica.tools import get_tool_summary
+
 REASONING_EFFORTS = ("off", "low", "medium", "high", "max")
 PROMPT_HISTORY_LIMIT = 100
 MAX_AUTO_CONTINUATIONS = int(
@@ -73,6 +74,13 @@ MAX_AUTO_CONTINUATIONS = int(
 )
 COMPACTION_CONTEXT_RATIO = 0.8
 COMPACTION_KEEP_MESSAGES = 10
+
+# The streaming preview re-renders the whole accumulated Markdown, which is
+# expensive (parse + Pygments + layout). Throttling with an interval that grows
+# with the text size keeps the re-layout work roughly constant over time while
+# staying responsive early on and for slow streams.
+STREAM_UPDATE_MIN_INTERVAL = 0.05
+STREAM_UPDATE_CHARS_PER_SECOND = 50_000
 PROVIDER_BASE_URLS = {
     "opencode-go": OPENCODE_GO_BASE_URL,
 }
@@ -224,6 +232,21 @@ def _has_tool_call(text: str) -> bool:
         for line in text.splitlines()
         if line.strip()
     )
+
+
+def _stream_update_interval(text_len: int) -> float:
+    """Minimum seconds between streaming preview re-renders for a given size."""
+    return max(
+        STREAM_UPDATE_MIN_INTERVAL,
+        text_len / STREAM_UPDATE_CHARS_PER_SECOND,
+    )
+
+
+def _should_update_stream(
+    accumulated_len: int, last_update: float, now: float
+) -> bool:
+    """Whether the streaming preview should re-render now (throttled)."""
+    return now - last_update >= _stream_update_interval(accumulated_len)
 
 
 def _format_tokens(count: int) -> str:
@@ -1086,29 +1109,57 @@ class AgentApp(App):
                 full_text = ""
                 log.begin_stream()
                 tool_detected = False
+                tool_rendered = False
                 usage_box: dict[str, int] = {}
                 reasoning_box: list[str] = []
                 finish_box: dict[str, Any] = {}
                 badge = self.query_one(ModelBadge)
                 stream_started = time.monotonic()
+                last_preview_update = stream_started
+                reasoning_text = ""
+                reasoning_chunks_done = 0
                 async for delta in stream_llm_call(
                     self.conversation, usage_box, reasoning_box, finish_box
                 ):
                     if self._stop_requested:
                         break
                     full_text += delta
-                    if not tool_detected and _has_tool_call(full_text):
-                        tool_detected = True
-                    elapsed = time.monotonic() - stream_started
-                    if elapsed > 0:
-                        badge.set_speed(estimate_tokens(full_text) / elapsed)
-                    reasoning_text = "".join(reasoning_box)
+                    # A complete tool-call line only exists once its trailing
+                    # newline has arrived, so only rescan at line boundaries
+                    # instead of re-scanning the whole accumulating text on
+                    # every token.
+                    if not tool_detected:
+                        if "\n" in delta or _has_tool_call(delta):
+                            tool_detected = _has_tool_call(full_text)
+                    now = time.monotonic()
+                    # Re-rendering the entire accumulated Markdown (parse +
+                    # Pygments + layout) per token is the main CPU cost of
+                    # streaming. Throttle the preview with an interval that
+                    # grows with the text size, but force an immediate render
+                    # when a tool call is first detected so the preview mode
+                    # switches without delay.
+                    should_render = _should_update_stream(
+                        len(full_text), last_preview_update, now
+                    ) or (tool_detected and not tool_rendered)
+                    if tool_detected:
+                        tool_rendered = True
+                    if not should_render:
+                        continue
+                    last_preview_update = now
+                    if len(reasoning_box) > reasoning_chunks_done:
+                        reasoning_text += "".join(
+                            reasoning_box[reasoning_chunks_done:]
+                        )
+                        reasoning_chunks_done = len(reasoning_box)
                     if tool_detected:
                         shown = reasoning_text or extract_thinking(full_text)
                     elif reasoning_text:
                         shown = reasoning_text
                     else:
                         shown = ""
+                    elapsed = now - stream_started
+                    if elapsed > 0:
+                        badge.set_speed(estimate_tokens(full_text) / elapsed)
                     if shown:
                         log.update_stream(
                             _safe_stream_markdown(shown, self._code_theme()),

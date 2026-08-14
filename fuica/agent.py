@@ -204,7 +204,7 @@ def get_model_context_limit(model: str, provider: str = "local") -> int | None:
 
 SYSTEM_PROMPT = """
 You are a coding assistant whose goal it is to help us solve coding tasks. 
-You have access to a series of tools you can execute. Hear are the tools you can execute:
+You have access to a series of tools you can execute. Here are the tools you can execute:
 
 {tool_list_repr}
 
