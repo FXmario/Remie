@@ -206,7 +206,9 @@ def _is_tmux() -> bool:
     return bool(os.environ.get("TMUX"))
 
 
-def _safe_stream_markdown(text: str, code_theme: str) -> RenderableType:
+def _safe_stream_markdown(
+    text: str, code_theme: str, style: str = ""
+) -> RenderableType:
     """Render partial Markdown safely during streaming.
 
     Auto-closes incomplete code fences so Pygments highlighting engages
@@ -217,9 +219,16 @@ def _safe_stream_markdown(text: str, code_theme: str) -> RenderableType:
     if fence_count % 2 == 1:
         text = text + "\n```"
     try:
-        return Markdown(text, code_theme=code_theme, hyperlinks=True)
+        return Markdown(
+            text, code_theme=code_theme, hyperlinks=True, style=style or "none"
+        )
     except Exception:
-        return Text.from_markup(escape(text))
+        return Text.from_markup(escape(text), style=style or None)
+
+
+def _safe_reasoning_markdown(text: str, code_theme: str) -> RenderableType:
+    """Render reasoning content gray so it reads as secondary text."""
+    return _safe_stream_markdown(text, code_theme, style="grey62")
 
 
 def _has_tool_call(text: str) -> bool:
@@ -1181,7 +1190,7 @@ class AgentApp(App):
                         badge.set_speed(estimate_tokens(full_text) / elapsed)
                     if shown:
                         log.update_stream(
-                            _safe_stream_markdown(shown, self._code_theme()),
+                            _safe_reasoning_markdown(shown, self._code_theme()),
                             title="Reasoning",
                             border_style="dim",
                         )
@@ -1230,7 +1239,7 @@ class AgentApp(App):
                     if reasoning_text:
                         renderables.append(
                             Panel(
-                                _safe_stream_markdown(
+                                _safe_reasoning_markdown(
                                     reasoning_text, self._code_theme()
                                 ),
                                 title="Reasoning",
@@ -1253,7 +1262,7 @@ class AgentApp(App):
                 if reasoning_text:
                     replacements.append(
                         Panel(
-                            _safe_stream_markdown(
+                            _safe_reasoning_markdown(
                                 reasoning_text, self._code_theme()
                             ),
                             title="Reasoning",
