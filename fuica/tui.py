@@ -14,8 +14,6 @@ import httpx
 from PIL import Image as PILImage
 from PIL import ImageGrab
 from PIL import ImageSequence
-from openai import APIConnectionError, APITimeoutError, BadRequestError
-from openai.types.chat import ChatCompletionMessageParam
 from rich.console import RenderableType
 from rich.markdown import Markdown
 from rich.markup import escape
@@ -44,6 +42,7 @@ from textual.widgets import (
 from textual_image.widget import SixelImage as TerminalImage
 
 from fuica.agent import (
+    LLMRequestError,
     OPENCODE_GO_BASE_URL,
     OPENCODE_GO_MODELS,
     UnsupportedModelError,
@@ -707,11 +706,12 @@ class ConnectionScreen(ModalScreen):
                     id="api-key-input",
                 )
                 yield Label("Model")
+                model_list = list(OPENCODE_GO_MODELS)
+                if current.model and current.model not in model_list:
+                    model_list = [current.model] + model_list
                 yield Select(
-                    [_model_option(model) for model in OPENCODE_GO_MODELS],
-                    value=current.model
-                    if current.model in OPENCODE_GO_MODELS
-                    else OPENCODE_GO_MODELS[0],
+                    [_model_option(model) for model in model_list],
+                    value=current.model if current.model in model_list else model_list[0],
                     id="model-select",
                     prompt="Select model...",
                 )
@@ -767,11 +767,17 @@ class ConnectionScreen(ModalScreen):
 
     async def _refresh_models(self, api_key: str) -> None:
         select = self.query_one("#model-select", Select)
+        previously_selected = select.value
         select.loading = True
         models = await fetch_opencode_go_models(api_key)
         select.loading = False
         select.set_options([_model_option(model) for model in models])
-        select.value = models[0] if models else OPENCODE_GO_MODELS[0]
+        # Keep the user's selection when it is still offered by the live list;
+        # only fall back to the first model when it is gone.
+        if previously_selected in models:
+            select.value = previously_selected
+        elif models:
+            select.value = models[0]
 
     def _connect(self) -> None:
         provider = self.query_one("#provider-select", Select).value
@@ -929,7 +935,7 @@ class AgentApp(App):
 
     def __init__(self) -> None:
         super().__init__()
-        self.conversation: list[ChatCompletionMessageParam] = []
+        self.conversation: list[dict[str, Any]] = []
         self.theme = "ansi-dark"
         self._agent_running = False
         self._stop_requested = False
@@ -966,6 +972,19 @@ class AgentApp(App):
         prompt = self.query_one("#prompt", PromptTextArea)
         self.query_one(ModelBadge).update_config(get_config())
         prompt.focus()
+        self._prefetch_model_context()
+
+    @work(exclusive=False)
+    async def _prefetch_model_context(self) -> None:
+        """Populate the live context-window cache when connected to OpenCode Go,
+        so compaction uses the actual model window without opening the picker."""
+        config = get_config()
+        if config.provider != "opencode-go" or not config.api_key:
+            return
+        try:
+            await fetch_opencode_go_models(config.api_key)
+        except Exception:
+            pass
 
     def set_pending_image(self, image: PILImage.Image) -> None:
         self._pending_image = image
@@ -1296,8 +1315,6 @@ class AgentApp(App):
                         {"role": "user", "content": f"tool_result({result_json})"}
                     )
         except (
-            APITimeoutError,
-            APIConnectionError,
             httpx.TimeoutException,
             httpx.TransportError,
         ) as error:
@@ -1308,7 +1325,7 @@ class AgentApp(App):
         except UnsupportedModelError as error:
             log.replace_stream()
             self.notify(str(error), title="Unsupported model", severity="error")
-        except BadRequestError as error:
+        except LLMRequestError as error:
             log.replace_stream()
             message = str(error)
             if "context" in message.lower() or "maximum context length" in message.lower():

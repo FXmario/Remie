@@ -1,45 +1,52 @@
+import asyncio
+import contextlib
+import subprocess
+
 import pytest
 import httpx
-import subprocess
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.text import Text
 
 from fuica.agent import (
+    LLMRequestError,
     OPENCODE_GO_BASE_URL,
     OPENCODE_GO_MODELS,
-    RUN_COMMAND_MAX_OUTPUT,
-    RUN_COMMAND_TIMEOUT,
-    TOOL_REGISTRY,
-    ask_user_tool,
     configure_openai,
-    edit_file_tool,
     estimate_conversation_tokens,
     estimate_tokens,
     extract_thinking,
     extract_tool_invocations,
     fetch_opencode_go_models,
-    get_blocked_command_reason,
     get_config,
     get_connection_error_message,
-    get_custom_blocked_commands,
     get_full_system_prompt,
     get_max_output_tokens,
     get_model_context_limit,
-    get_tool_summary,
-    glob_files_tool,
     load_config,
-    list_files_tool,
-    read_file_tool,
     render_assistant_message,
     render_assistant_panel,
     render_user_message,
-    resolve_abs_path,
-    run_command_tool,
     run_tool,
     save_config,
     stream_llm_call,
     strip_protocol_lines,
+)
+
+from fuica.tools import (
+    RUN_COMMAND_MAX_OUTPUT,
+    RUN_COMMAND_TIMEOUT,
+    TOOL_REGISTRY,
+    ask_user_tool,
+    edit_file_tool,
+    get_blocked_command_reason,
+    get_custom_blocked_commands,
+    get_tool_summary,
+    glob_files_tool,
+    list_files_tool,
+    read_file_tool,
+    resolve_abs_path,
+    run_command_tool,
     tree_files_tool,
 )
 
@@ -628,55 +635,81 @@ class TestStripProtocolLines:
         assert strip_protocol_lines(text) == "hello"
 
 
+class FakeStreamResponse:
+    def __init__(self, status_code=200, lines=(), body=""):
+        self.status_code = status_code
+        self._lines = list(lines)
+        self._body = body
+
+    async def aiter_lines(self):
+        for line in self._lines:
+            yield line
+
+    async def aread(self):
+        return self._body.encode()
+
+    def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+class FakeHttpClient:
+    def __init__(self, response):
+        self._response = response
+        self.calls = []
+
+    def stream(self, method, url, **kwargs):
+        self.calls.append((method, url, kwargs))
+
+        @contextlib.asynccontextmanager
+        async def _enter():
+            yield self._response
+
+        return _enter()
+
+
+def _patch_llm_stream(monkeypatch, lines, status_code=200, body=""):
+    import fuica.agent as agent
+
+    monkeypatch.setattr(
+        agent,
+        "_config",
+        agent.ConnectionConfig(
+            base_url="http://test/v1",
+            api_key="test-key",
+            model="test-model",
+            provider="local",
+            reasoning_effort="medium",
+        ),
+    )
+    fake = FakeHttpClient(
+        FakeStreamResponse(status_code=status_code, lines=lines, body=body)
+    )
+    monkeypatch.setattr(agent, "http_client", fake)
+    return fake
+
+
 class TestStreamLlmUsageAndReasoning:
     def test_captures_usage_and_reasoning(self, monkeypatch):
         import asyncio
 
-        class FakeUsage:
-            prompt_tokens = 100
-            completion_tokens = 50
+        _patch_llm_stream(
+            monkeypatch,
+            [
+                'data: {"choices":[{"delta":{"reasoning_content":"think..."}}]}',
+                'data: {"choices":[{"delta":{"content":"hi"}}]}',
+                'data: {"usage":{"prompt_tokens":100,"completion_tokens":50}}',
+                "data: [DONE]",
+            ],
+        )
 
-        class FakeDelta:
-            def __init__(self, content=None, reasoning_content=None):
-                self.content = content
-                self.reasoning_content = reasoning_content
-
-        class FakeChoice:
-            def __init__(self, delta):
-                self.delta = delta
-
-        class FakeChunk:
-            def __init__(self, choices, usage=None):
-                self.choices = choices
-                self.usage = usage
-
-        class FakeCompletions:
-            async def create(self, **kwargs):
-                async def gen():
-                    yield FakeChunk(
-                        [FakeChoice(FakeDelta(reasoning_content="think..."))]
-                    )
-                    yield FakeChunk([FakeChoice(FakeDelta(content="hi"))])
-                    yield FakeChunk([], usage=FakeUsage())
-
-                return gen()
-
-        class FakeChat:
-            completions = FakeCompletions()
-
-        class FakeClient:
-            chat = FakeChat()
-
-        monkeypatch.setattr("fuica.agent.openai_client", FakeClient())
-
-        conversation = []
         usage_box = {}
         reasoning_box = []
 
         async def collect():
-            return [d async for d in stream_llm_call(
-                conversation, usage_box, reasoning_box
-            )]
+            return [d async for d in stream_llm_call([], usage_box, reasoning_box)]
 
         chunks = asyncio.run(collect())
         assert chunks == ["hi"]
@@ -686,30 +719,14 @@ class TestStreamLlmUsageAndReasoning:
     def test_captures_truncated_finish_reason(self, monkeypatch):
         import asyncio
 
-        class FakeDelta:
-            content = "partial"
-
-        class FakeChoice:
-            def __init__(self, delta, finish_reason):
-                self.delta = delta
-                self.finish_reason = finish_reason
-
-        class FakeChunk:
-            def __init__(self, choice):
-                self.choices = [choice] if choice else []
-
-        class FakeCompletions:
-            async def create(self, **kwargs):
-                async def gen():
-                    yield FakeChunk(FakeChoice(FakeDelta(), None))
-                    yield FakeChunk(FakeChoice(FakeDelta(), "length"))
-
-                return gen()
-
-        class FakeClient:
-            chat = type("FakeChat", (), {"completions": FakeCompletions()})()
-
-        monkeypatch.setattr("fuica.agent.openai_client", FakeClient())
+        _patch_llm_stream(
+            monkeypatch,
+            [
+                'data: {"choices":[{"delta":{"content":"partial"},"finish_reason":null}]}',
+                'data: {"choices":[{"delta":{"content":"partial"},"finish_reason":"length"}]}',
+                "data: [DONE]",
+            ],
+        )
 
         finish_box = {}
 
@@ -723,29 +740,13 @@ class TestStreamLlmUsageAndReasoning:
     def test_stop_finish_reason_not_truncated(self, monkeypatch):
         import asyncio
 
-        class FakeDelta:
-            content = "done"
-
-        class FakeChoice:
-            def __init__(self, delta, finish_reason):
-                self.delta = delta
-                self.finish_reason = finish_reason
-
-        class FakeChunk:
-            def __init__(self, choice):
-                self.choices = [choice] if choice else []
-
-        class FakeCompletions:
-            async def create(self, **kwargs):
-                async def gen():
-                    yield FakeChunk(FakeChoice(FakeDelta(), "stop"))
-
-                return gen()
-
-        class FakeClient:
-            chat = type("FakeChat", (), {"completions": FakeCompletions()})()
-
-        monkeypatch.setattr("fuica.agent.openai_client", FakeClient())
+        _patch_llm_stream(
+            monkeypatch,
+            [
+                'data: {"choices":[{"delta":{"content":"done"},"finish_reason":"stop"}]}',
+                "data: [DONE]",
+            ],
+        )
 
         finish_box = {}
 
@@ -759,26 +760,10 @@ class TestStreamLlmUsageAndReasoning:
     def test_no_boxes_keeps_plain_stream(self, monkeypatch):
         import asyncio
 
-        class FakeDelta:
-            content = "hi"
-
-        class FakeChoice:
-            delta = FakeDelta()
-
-        class FakeChunk:
-            choices = [FakeChoice()]
-
-        class FakeCompletions:
-            async def create(self, **kwargs):
-                async def gen():
-                    yield FakeChunk()
-
-                return gen()
-
-        class FakeClient:
-            chat = type("FakeChat", (), {"completions": FakeCompletions()})()
-
-        monkeypatch.setattr("fuica.agent.openai_client", FakeClient())
+        _patch_llm_stream(
+            monkeypatch,
+            ['data: {"choices":[{"delta":{"content":"hi"}}]}', "data: [DONE]"],
+        )
 
         async def collect():
             return [d async for d in stream_llm_call([])]
@@ -789,28 +774,16 @@ class TestStreamLlmUsageAndReasoning:
         import asyncio
         import fuica.agent as agent
 
-        captured: list[dict] = []
-
-        class FakeDelta:
-            content = "hi"
-
-        class FakeChoice:
-            delta = FakeDelta()
-
-        class FakeChunk:
-            choices = [FakeChoice()]
-
-        class FakeCompletions:
-            async def create(self, **kwargs):
-                captured.append(kwargs)
-
-                async def gen():
-                    yield FakeChunk()
-
-                return gen()
-
-        class FakeClient:
-            chat = type("FakeChat", (), {"completions": FakeCompletions()})()
+        _patch_llm_stream(
+            monkeypatch,
+            ['data: {"choices":[{"delta":{"content":"hi"}}]}', "data: [DONE]"],
+        )
+        fake = FakeHttpClient(
+            FakeStreamResponse(
+                lines=['data: {"choices":[{"delta":{"content":"hi"}}]}', "data: [DONE]"]
+            )
+        )
+        monkeypatch.setattr(agent, "http_client", fake)
 
         previous = agent.get_config()
         try:
@@ -820,13 +793,12 @@ class TestStreamLlmUsageAndReasoning:
                 "model",
                 reasoning_effort="high",
             )
-            monkeypatch.setattr(agent, "openai_client", FakeClient())
 
             async def collect():
                 return [d async for d in stream_llm_call([])]
 
             assert asyncio.run(collect()) == ["hi"]
-            assert captured[-1]["reasoning_effort"] == "high"
+            assert fake.calls[-1][2]["json"]["reasoning_effort"] == "high"
 
             agent.configure_openai(
                 "http://localhost:1234/v1",
@@ -834,9 +806,8 @@ class TestStreamLlmUsageAndReasoning:
                 "model",
                 reasoning_effort="off",
             )
-            monkeypatch.setattr(agent, "openai_client", FakeClient())
             assert asyncio.run(collect()) == ["hi"]
-            assert "reasoning_effort" not in captured[-1]
+            assert "reasoning_effort" not in fake.calls[-1][2]["json"]
         finally:
             agent.configure_openai(
                 previous.base_url,
@@ -845,6 +816,23 @@ class TestStreamLlmUsageAndReasoning:
                 previous.provider,
                 previous.reasoning_effort,
             )
+
+    def test_raises_llm_request_error_on_non_2xx(self, monkeypatch):
+        import asyncio
+
+        _patch_llm_stream(
+            monkeypatch,
+            lines=[],
+            status_code=400,
+            body='{"error":{"message":"bad request"}}',
+        )
+
+        async def collect():
+            return [d async for d in stream_llm_call([])]
+
+        with pytest.raises(LLMRequestError) as exc_info:
+            asyncio.run(collect())
+        assert exc_info.value.status_code == 400
 
 
 class TestSystemPrompt:
@@ -1032,6 +1020,9 @@ class TestConnectionConfig:
 
     def test_fetch_opencode_go_models_falls_back_on_error(self, monkeypatch):
         import asyncio
+        import fuica.agent as agent
+
+        monkeypatch.setattr(agent, "_opencode_go_model_context", {"stale": 999})
 
         async def fake_get(self, url, headers=None):
             raise httpx.ConnectError("boom")
@@ -1039,9 +1030,14 @@ class TestConnectionConfig:
         monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
         models = asyncio.run(fetch_opencode_go_models("invalid"))
         assert models == OPENCODE_GO_MODELS
+        # A failed fetch must not touch the cached context windows.
+        assert agent._opencode_go_model_context == {"stale": 999}
 
     def test_fetch_opencode_go_models_parses_payload(self, monkeypatch):
         import asyncio
+        import fuica.agent as agent
+
+        monkeypatch.setattr(agent, "_opencode_go_model_context", {})
 
         class FakeResponse:
             def raise_for_status(self):
@@ -1052,6 +1048,7 @@ class TestConnectionConfig:
                     "data": [
                         {"id": "kimi-k3", "context_length": 256000},
                         {"id": "grok-4.5"},
+                        {"id": "brand-new-model"},
                     ]
                 }
 
@@ -1060,13 +1057,60 @@ class TestConnectionConfig:
 
         monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
         models = asyncio.run(fetch_opencode_go_models("valid"))
-        assert models == ["kimi-k3", "grok-4.5"]
+        # All live models are returned, including ones not in the bundled list.
+        assert models == ["kimi-k3", "grok-4.5", "brand-new-model"]
+        # Context windows are cached live for compaction; models without a
+        # reported window fall back to the default.
+        assert get_model_context_limit("kimi-k3", "opencode-go") == 256_000
+        assert get_model_context_limit("grok-4.5", "opencode-go") == 128_000
+
+    def test_opencode_models_returns_all_live_ids(self):
+        import asyncio
+
+        class FakeResponse:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {"data": [{"id": "gpt-5.6-luna"}, {"id": "kimi-k3"}]}
+
+        async def fake_get(self, url, headers=None):
+            return FakeResponse()
+
+        monkeypatch = pytest.MonkeyPatch()
+        monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+        try:
+            models = asyncio.run(fetch_opencode_go_models("valid"))
+        finally:
+            monkeypatch.undo()
+        # No allowlist filtering: every model the API lists becomes available.
+        assert models == ["gpt-5.6-luna", "kimi-k3"]
+
+    def test_opencode_models_fallback_when_payload_is_empty(self, monkeypatch):
+        import asyncio
+
+        class FakeResponse:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {"data": []}
+
+        async def fake_get(self, url, headers=None):
+            return FakeResponse()
+
+        monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+        models = asyncio.run(fetch_opencode_go_models("valid"))
+        assert models == list(OPENCODE_GO_MODELS)  # bundled list is the fallback
 
     def test_opencode_go_constants(self):
         assert OPENCODE_GO_BASE_URL == "https://opencode.ai/zen/go/v1"
         assert "deepseek-v4-flash" in OPENCODE_GO_MODELS
 
-    def test_model_context_limit_lookup(self):
+    def test_model_context_limit_uses_live_cache(self, monkeypatch):
+        import fuica.agent as agent
+
+        monkeypatch.setattr(agent, "_opencode_go_model_context", {"kimi-k3": 256_000})
         assert get_model_context_limit("kimi-k3", "opencode-go") == 256_000
         assert get_model_context_limit("unknown-model", "opencode-go") == 128_000
         assert get_model_context_limit("any", "local") is None
@@ -1097,24 +1141,3 @@ class TestConnectionConfig:
                 os.environ.pop("FUICA_MAX_OUTPUT_TOKENS", None)
             else:
                 os.environ["FUICA_MAX_OUTPUT_TOKENS"] = old
-
-    def test_opencode_models_filter_unsupported_ids(self):
-        import asyncio
-
-        class FakeResponse:
-            def raise_for_status(self):
-                pass
-
-            def json(self):
-                return {"data": [{"id": "gpt-5.6-luna"}, {"id": "kimi-k3"}]}
-
-        async def fake_get(self, url, headers=None):
-            return FakeResponse()
-
-        monkeypatch = pytest.MonkeyPatch()
-        monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
-        try:
-            models = asyncio.run(fetch_opencode_go_models("valid"))
-        finally:
-            monkeypatch.undo()
-        assert models == ["kimi-k3"]

@@ -9,8 +9,6 @@ from typing import Any
 
 import httpx
 from dotenv import load_dotenv
-from openai import APIConnectionError, APITimeoutError, AsyncOpenAI
-from openai.types.chat import ChatCompletionMessageParam
 from rich.console import RenderableType
 from rich.markup import escape
 from rich.markdown import Markdown
@@ -37,6 +35,9 @@ CONFIG_FILE = CONFIG_DIR / "config.json"
 
 OPENCODE_GO_BASE_URL = "https://opencode.ai/zen/go/v1"
 
+# Bundled fallback model list, used only when the OpenCode Go models API is
+# unreachable. The live list (and each model's context window) is fetched from
+# the API when connecting, so this does not restrict which models can be used.
 OPENCODE_GO_MODELS = [
     "deepseek-v4-flash",
     "deepseek-v4-pro",
@@ -67,23 +68,24 @@ def get_max_output_tokens(provider: str = "local") -> int:
 
 OPENCODE_GO_DEFAULT_CONTEXT_LIMIT = 128_000
 PROJECT_CONTEXT_MAX_CHARS = 8000
-MODEL_CONTEXT_LIMITS: dict[str, int] = {
-    "grok-4.5": 256_000,
-    "glm-5.2": 128_000,
-    "glm-5.1": 128_000,
-    "kimi-k3": 256_000,
-    "kimi-k2.7-code": 128_000,
-    "kimi-k2.6": 128_000,
-    "mimo-v2.5": 128_000,
-    "mimo-v2.5-pro": 128_000,
-    "hy3": 128_000,
-    "deepseek-v4-pro": 128_000,
-    "deepseek-v4-flash": 128_000,
-}
+
+# Live context windows for OpenCode Go models, populated from the models API
+# (each model reports its own context_length). Used for context compaction so
+# the budget tracks the actual model instead of a hardcoded table.
+_opencode_go_model_context: dict[str, int] = {}
 
 
 class UnsupportedModelError(RuntimeError):
     """Raised when a configured provider needs an unsupported API format."""
+
+
+class LLMRequestError(RuntimeError):
+    """Raised when the LLM server responds with a non-2xx status."""
+
+    def __init__(self, status_code: int, message: str):
+        self.status_code = status_code
+        self.message = message
+        super().__init__(message)
 
 
 @dataclass
@@ -139,10 +141,13 @@ def save_config(config: ConnectionConfig) -> None:
 
 _config = load_config()
 
-openai_client = AsyncOpenAI(
-    base_url=_config.base_url,
-    api_key=_config.api_key,
-    http_client=httpx.AsyncClient(verify=False),
+# Shared transport for chat-completion requests. TLS verification is disabled
+# to match the previous SDK behavior (local llama.cpp servers commonly use
+# self-signed certs). The read timeout applies between SSE chunks, so a stalled
+# stream still errors out while a slow but alive stream keeps flowing.
+http_client = httpx.AsyncClient(
+    verify=False,
+    timeout=httpx.Timeout(connect=10, read=600, write=60, pool=10),
 )
 
 
@@ -158,8 +163,8 @@ def configure_openai(
     provider: str = "local",
     reasoning_effort: str = "medium",
 ) -> ConnectionConfig:
-    """Rebuild the OpenAI client with a new connection configuration."""
-    global _config, openai_client
+    """Update the active connection configuration."""
+    global _config
     _config = ConnectionConfig(
         base_url=base_url,
         api_key=api_key,
@@ -167,16 +172,13 @@ def configure_openai(
         provider=provider,
         reasoning_effort=reasoning_effort,
     )
-    openai_client = AsyncOpenAI(
-        base_url=base_url,
-        api_key=api_key,
-        http_client=httpx.AsyncClient(verify=False),
-    )
     return _config
 
 
 async def fetch_opencode_go_models(api_key: str) -> list[str]:
-    """Fetch the OpenCode Go model list, falling back to a hardcoded list."""
+    """Fetch the live OpenCode Go model list and each model's context window;
+    fall back to a bundled list when the API is unreachable or returns nothing
+    usable. The fetched context windows are cached for context compaction."""
     async with httpx.AsyncClient(timeout=10) as client:
         try:
             response = await client.get(
@@ -185,21 +187,29 @@ async def fetch_opencode_go_models(api_key: str) -> list[str]:
             )
             response.raise_for_status()
             payload = response.json()
-            models = [
-                item["id"]
-                for item in payload.get("data", [])
-                if item.get("id") in OPENCODE_GO_MODELS
-            ]
+            models = []
+            for item in payload.get("data", []):
+                model_id = item.get("id")
+                if not model_id:
+                    continue
+                context = item.get("context_length")
+                if isinstance(context, int) and context > 0:
+                    _opencode_go_model_context[model_id] = context
+                models.append(model_id)
             return models or list(OPENCODE_GO_MODELS)
-        except (httpx.HTTPError, ValueError, KeyError, TypeError):
+        except (httpx.HTTPError, ValueError, KeyError, TypeError, AttributeError):
             return list(OPENCODE_GO_MODELS)
 
 
 def get_model_context_limit(model: str, provider: str = "local") -> int | None:
-    """Best-known context window for a model/provider pair (used for compaction)."""
+    """Best-known context window for a model/provider pair (used for compaction).
+
+    OpenCode Go context windows come from the live model list fetched at
+    connect time; models without a reported window fall back to the default.
+    """
     if provider != "opencode-go":
         return None
-    return MODEL_CONTEXT_LIMITS.get(model, OPENCODE_GO_DEFAULT_CONTEXT_LIMIT)
+    return _opencode_go_model_context.get(model, OPENCODE_GO_DEFAULT_CONTEXT_LIMIT)
 
 
 SYSTEM_PROMPT = """
@@ -373,51 +383,61 @@ def extract_dsml_invocations(text: str) -> list[tuple[str, dict[str, Any]]]:
 
 
 async def stream_llm_call(
-    conversation: list[ChatCompletionMessageParam],
+    conversation: list[dict[str, Any]],
     usage_box: dict[str, int] | None = None,
     reasoning_box: list[str] | None = None,
     finish_box: dict[str, Any] | None = None,
 ) -> AsyncIterator[str]:
-    if (
-        _config.base_url.rstrip("/") == OPENCODE_GO_BASE_URL
-        and _config.model not in OPENCODE_GO_MODELS
-    ):
-        raise UnsupportedModelError(
-            f"The model '{_config.model}' does not support Chat Completions yet."
-        )
-    kwargs: dict[str, Any] = {
+    payload: dict[str, Any] = {
         "model": _config.model,
         "messages": conversation,
         "max_tokens": get_max_output_tokens(_config.provider),
         "stream": True,
     }
     if _config.reasoning_effort != "off":
-        kwargs["reasoning_effort"] = _config.reasoning_effort
+        payload["reasoning_effort"] = _config.reasoning_effort
     if usage_box is not None and _config.base_url.rstrip("/") == OPENCODE_GO_BASE_URL:
-        kwargs["stream_options"] = {"include_usage": True}
-    stream = await openai_client.chat.completions.create(**kwargs)
-    async for chunk in stream:
-        usage = getattr(chunk, "usage", None)
-        if usage_box is not None and usage is not None:
-            usage_box["prompt_tokens"] = usage.prompt_tokens or 0
-            usage_box["completion_tokens"] = usage.completion_tokens or 0
-        if not chunk.choices:
-            continue
-        delta = chunk.choices[0].delta
-        if finish_box is not None:
-            finish_reason = chunk.choices[0].finish_reason
-            if finish_reason is not None:
-                finish_box["finish_reason"] = finish_reason
-                finish_box["truncated"] = finish_reason in TRUNCATED_REASONS
-        if reasoning_box is not None:
-            reason = getattr(delta, "reasoning_content", None) or getattr(
-                delta, "reasoning", None
+        payload["stream_options"] = {"include_usage": True}
+    url = f"{_config.base_url.rstrip('/')}/chat/completions"
+    headers = {"Authorization": f"Bearer {_config.api_key}"}
+    async with http_client.stream("POST", url, json=payload, headers=headers) as response:
+        if response.status_code >= 400:
+            body = (await response.aread()).decode("utf-8", errors="replace").strip()
+            raise LLMRequestError(
+                response.status_code, body or f"HTTP {response.status_code}"
             )
-            if reason:
-                reasoning_box.append(reason)
-        content = delta.content
-        if content:
-            yield content
+        async for raw_line in response.aiter_lines():
+            line = raw_line.strip()
+            if not line.startswith("data:"):
+                continue
+            data = line[len("data:") :].strip()
+            if not data or data == "[DONE]":
+                continue
+            try:
+                chunk = json.loads(data)
+            except json.JSONDecodeError:
+                continue
+            choices = chunk.get("choices") or []
+            if not choices:
+                usage = chunk.get("usage")
+                if usage_box is not None and usage is not None:
+                    usage_box["prompt_tokens"] = usage.get("prompt_tokens") or 0
+                    usage_box["completion_tokens"] = usage.get("completion_tokens") or 0
+                continue
+            choice = choices[0]
+            if finish_box is not None:
+                finish_reason = choice.get("finish_reason")
+                if finish_reason is not None:
+                    finish_box["finish_reason"] = finish_reason
+                    finish_box["truncated"] = finish_reason in TRUNCATED_REASONS
+            delta = choice.get("delta") or {}
+            if reasoning_box is not None:
+                reason = delta.get("reasoning_content") or delta.get("reasoning")
+                if reason:
+                    reasoning_box.append(reason)
+            content = delta.get("content")
+            if content:
+                yield content
 
 
 def get_connection_error_message(error: Exception) -> str | None:
@@ -427,12 +447,12 @@ def get_connection_error_message(error: Exception) -> str | None:
     except RuntimeError:
         request = None
     url = str(getattr(request, "url", "")) or _config.base_url
-    if isinstance(error, (APITimeoutError, httpx.TimeoutException)):
+    if isinstance(error, httpx.TimeoutException):
         return (
             f"The LLM request to {url} timed out. "
             "Check that the model server is responding."
         )
-    if isinstance(error, (APIConnectionError, httpx.TransportError)):
+    if isinstance(error, httpx.TransportError):
         return (
             f"Could not connect to the LLM server at {url}. Check that it is running."
         )
@@ -497,7 +517,7 @@ def estimate_tokens(text: str) -> int:
 
 
 def estimate_conversation_tokens(
-    conversation: list[ChatCompletionMessageParam],
+    conversation: list[dict[str, Any]],
 ) -> int:
     """
     Rough token estimate for the whole conversation, summing string content

@@ -1,12 +1,13 @@
 import asyncio
 
 import httpx
-from openai import BadRequestError
+import pytest
 from PIL import Image
 from rich.panel import Panel
 
 import fuica.tui as tui
 from fuica.agent import (
+    LLMRequestError,
     ConnectionConfig,
     OPENCODE_GO_BASE_URL,
     configure_openai,
@@ -28,6 +29,17 @@ from fuica.tui import (
     _is_tmux,
     _load_status_gif,
 )
+
+
+@pytest.fixture(autouse=True)
+def _no_network_on_mount(monkeypatch):
+    """Keep the app's mount-time model prefetch offline during tests, since the
+    active config may be a saved OpenCode Go connection."""
+
+    async def _noop_fetch(api_key):
+        return ["kimi-k3"]
+
+    monkeypatch.setattr(tui, "fetch_opencode_go_models", _noop_fetch)
 
 
 def test_tmux_detection(monkeypatch):
@@ -666,20 +678,10 @@ def test_conversation_compaction_keeps_system_and_recent(monkeypatch):
 
 def test_context_full_error_notifies_clearly(monkeypatch):
     async def exercise():
-        class FakeRequest:
-            method = "POST"
-            url = "http://test/v1"
-
-        class FakeResponse:
-            request = FakeRequest()
-            status_code = 400
-            headers = {"x-request-id": "abc"}
-
         async def failing_stream(_conversation, usage_box=None, reasoning_box=None, finish_box=None):
-            raise BadRequestError(
+            raise LLMRequestError(
+                400,
                 "maximum context length is 131072 tokens",
-                response=FakeResponse(),
-                body=None,
             )
             yield ""
 
@@ -978,8 +980,14 @@ def test_connection_screen_has_submit_and_cancel_only():
     asyncio.run(exercise())
 
 
-def test_connection_screen_restores_provider_and_effort():
+def test_connection_screen_restores_provider_and_effort(monkeypatch):
     async def exercise():
+        async def fake_fetch(api_key):
+            return ["kimi-k3"]
+
+        # The app prefetches the live model list on mount; keep it offline.
+        monkeypatch.setattr(tui, "fetch_opencode_go_models", fake_fetch)
+
         previous = get_config()
         configure_openai(
             OPENCODE_GO_BASE_URL,
@@ -1000,6 +1008,165 @@ def test_connection_screen_restores_provider_and_effort():
                 assert screen.query_one("#base-url-input").display is False
                 assert screen.query_one("#base-url-label").display is False
                 assert screen.query_one("#model-select").disabled is False
+        finally:
+            configure_openai(
+                previous.base_url,
+                previous.api_key,
+                previous.model,
+                previous.provider,
+                previous.reasoning_effort,
+            )
+
+    asyncio.run(exercise())
+
+
+def test_connection_screen_preserves_saved_model_not_in_bundled_list(monkeypatch):
+    async def exercise():
+        async def fake_fetch(api_key):
+            return ["kimi-k3", "live-only-model"]
+
+        monkeypatch.setattr(tui, "fetch_opencode_go_models", fake_fetch)
+
+        previous = get_config()
+        # Empty API key so no live refresh fires; the picker must still show
+        # the saved model even though it is not in the bundled fallback list.
+        configure_openai(
+            OPENCODE_GO_BASE_URL,
+            "",
+            "saved-custom-model",
+            provider="opencode-go",
+            reasoning_effort="medium",
+        )
+        try:
+            app = AgentApp()
+            async with app.run_test() as pilot:
+                await pilot.press("ctrl+p")
+                await pilot.pause()
+                screen = app.screen
+                select = screen.query_one("#model-select")
+                options = [value for _, value in select._options]
+                assert "saved-custom-model" in options
+                assert select.value == "saved-custom-model"
+        finally:
+            configure_openai(
+                previous.base_url,
+                previous.api_key,
+                previous.model,
+                previous.provider,
+                previous.reasoning_effort,
+            )
+
+    asyncio.run(exercise())
+
+
+def test_connection_screen_refresh_keeps_selected_live_model(monkeypatch):
+    async def exercise():
+        async def fake_fetch(api_key):
+            return ["kimi-k3", "live-only-model"]
+
+        monkeypatch.setattr(tui, "fetch_opencode_go_models", fake_fetch)
+
+        previous = get_config()
+        configure_openai(
+            OPENCODE_GO_BASE_URL,
+            "key",
+            "kimi-k3",
+            provider="opencode-go",
+            reasoning_effort="medium",
+        )
+        try:
+            app = AgentApp()
+            async with app.run_test() as pilot:
+                await pilot.press("ctrl+p")
+                await pilot.pause()
+                screen = app.screen
+                select = screen.query_one("#model-select")
+                options = [value for _, value in select._options]
+                # The live refresh must not clobber the user's selected model
+                # when it is still offered by the live list.
+                assert "kimi-k3" in options
+                assert "live-only-model" in options
+                assert select.value == "kimi-k3"
+        finally:
+            configure_openai(
+                previous.base_url,
+                previous.api_key,
+                previous.model,
+                previous.provider,
+                previous.reasoning_effort,
+            )
+
+    asyncio.run(exercise())
+
+
+def test_startup_prefetch_populates_context_cache(monkeypatch):
+    async def exercise():
+        import fuica.agent as agent
+
+        fetched = []
+
+        async def fake_fetch(api_key):
+            fetched.append(api_key)
+            return ["kimi-k3"]
+
+        monkeypatch.setattr(tui, "fetch_opencode_go_models", fake_fetch)
+        monkeypatch.setattr(agent, "_opencode_go_model_context", {"kimi-k3": 256_000})
+
+        previous = get_config()
+        configure_openai(
+            OPENCODE_GO_BASE_URL,
+            "key",
+            "kimi-k3",
+            provider="opencode-go",
+            reasoning_effort="off",
+        )
+        try:
+            app = AgentApp()
+            async with app.run_test() as pilot:
+                for _ in range(50):
+                    if fetched:
+                        break
+                    await pilot.pause()
+                assert fetched == ["key"]
+                assert (
+                    agent.get_model_context_limit("kimi-k3", "opencode-go") == 256_000
+                )
+        finally:
+            configure_openai(
+                previous.base_url,
+                previous.api_key,
+                previous.model,
+                previous.provider,
+                previous.reasoning_effort,
+            )
+
+    asyncio.run(exercise())
+
+
+def test_startup_prefetch_skips_local_provider(monkeypatch):
+    async def exercise():
+        fetched = []
+
+        async def fake_fetch(api_key):
+            fetched.append(api_key)
+            return ["kimi-k3"]
+
+        monkeypatch.setattr(tui, "fetch_opencode_go_models", fake_fetch)
+
+        previous = get_config()
+        configure_openai(
+            "http://localhost:7070/v1",
+            "key",
+            "local-model",
+            provider="local",
+            reasoning_effort="off",
+        )
+        try:
+            app = AgentApp()
+            async with app.run_test() as pilot:
+                await pilot.pause()
+                await pilot.pause()
+                assert fetched == []
         finally:
             configure_openai(
                 previous.base_url,
