@@ -1,5 +1,5 @@
 [project]
-name = "fuiagent"
+name = "remie"
 version = "0.1.0"
 description = "Prototype Coding Agent"
 readme = "README.md"
@@ -14,7 +14,7 @@ dependencies = [
 ]
 
 [project.scripts]
-fuica = "fuica.tui:main"
+remie = "remie.tui:main"
 
 [tool.uv]
 package = true
@@ -23,4 +23,4 @@ package = true
 dev = ["pytest>=8"]
 
 [tool.setuptools.packages.find]
-include = ["fuica*"]
+include = ["remie*"]

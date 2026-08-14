@@ -41,7 +41,7 @@ from textual.widgets import (
 )
 from textual_image.widget import SixelImage as TerminalImage
 
-from fuica.agent import (
+from remie.agent import (
     LLMRequestError,
     OPENCODE_GO_BASE_URL,
     OPENCODE_GO_MODELS,
@@ -64,12 +64,12 @@ from fuica.agent import (
     strip_protocol_lines,
 )
 
-from fuica.tools import get_tool_summary
+from remie.tools import get_tool_summary
 
 REASONING_EFFORTS = ("off", "low", "medium", "high", "max")
 PROMPT_HISTORY_LIMIT = 100
 MAX_AUTO_CONTINUATIONS = int(
-    os.environ.get("FUICA_MAX_AUTO_CONTINUATIONS", "10")
+    os.environ.get("REMIE_MAX_AUTO_CONTINUATIONS", "10")
 )
 COMPACTION_CONTEXT_RATIO = 0.8
 COMPACTION_KEEP_MESSAGES = 10
@@ -852,9 +852,8 @@ class AskUserScreen(ModalScreen):
         margin-bottom: 1;
     }
 
-    #ask-dialog .option-row {
-        height: auto;
-        align: left middle;
+    #ask-dialog #ask-options {
+        margin-bottom: 1;
     }
 
     #ask-dialog Button {
@@ -875,11 +874,11 @@ class AskUserScreen(ModalScreen):
         with Vertical(id="ask-dialog"):
             yield Label(self.question, id="ask-question")
             if self.options:
-                with Horizontal(classes="option-row"):
-                    for index, option in enumerate(self.options):
-                        yield Button(
-                            option, id=f"ask-option-{index}", variant="primary"
-                        )
+                yield Select(
+                    [(option, option) for option in self.options],
+                    prompt="Select an option...",
+                    id="ask-options",
+                )
             yield Input(placeholder="Type an answer...", id="ask-input")
             with Horizontal(classes="row"):
                 yield Button("Submit", variant="primary", id="ask-submit")
@@ -887,6 +886,10 @@ class AskUserScreen(ModalScreen):
 
     def on_mount(self) -> None:
         self.query_one("#ask-input", Input).focus()
+
+    def on_select_changed(self, event: Select.Changed) -> None:
+        if event.select.id == "ask-options" and event.value is not Select.NULL:
+            self.dismiss(event.value)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id
@@ -900,12 +903,6 @@ class AskUserScreen(ModalScreen):
             else:
                 self.notify("Enter an answer first", severity="warning")
             return
-        if button_id and button_id.startswith("ask-option-"):
-            try:
-                index = int(button_id.rsplit("-", 1)[1])
-                self.dismiss(self.options[index])
-            except (ValueError, IndexError):
-                pass
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         event.stop()
@@ -926,9 +923,9 @@ class AgentScreen(Screen):
 
 
 class AgentApp(App):
-    """Textual TUI for the FuiAgent coding assistant."""
+    """Textual TUI for the Remie coding assistant."""
 
-    TITLE = "FuiAgent"
+    TITLE = "Remie"
     CSS = CSS
     ENABLE_COMMAND_PALETTE = False
     BINDINGS: ClassVar[list[BindingType]] = [
@@ -955,7 +952,7 @@ class AgentApp(App):
         self._history_draft = ""
         self._total_input_tokens = 0
         self._total_output_tokens = 0
-        self.debug_mode = os.environ.get("FUICA_DEBUG", "").lower() in {
+        self.debug_mode = os.environ.get("REMIE_DEBUG", "").lower() in {
             "1",
             "true",
             "yes",

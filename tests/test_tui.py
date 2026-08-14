@@ -4,16 +4,17 @@ import httpx
 import pytest
 from PIL import Image
 from rich.panel import Panel
+from textual.widgets import Select
 
-import fuica.tui as tui
-from fuica.agent import (
+import remie.tui as tui
+from remie.agent import (
     LLMRequestError,
     ConnectionConfig,
     OPENCODE_GO_BASE_URL,
     configure_openai,
     get_config,
 )
-from fuica.tui import (
+from remie.tui import (
     MAX_AUTO_CONTINUATIONS,
     AgentApp,
     AgentScreen,
@@ -433,9 +434,32 @@ def test_ask_user_modal_renders_question_and_options():
             await pilot.pause()
             screen = app.screen
             assert screen.query_one("#ask-question").render().plain == "pick one"
-            assert screen.query_one("#ask-option-0")
-            assert screen.query_one("#ask-option-2")
+            select = screen.query_one("#ask-options", Select)
+            values = [value for _, value in select._options if value is not Select.NULL]
+            assert values == ["a", "b", "c"]
             assert screen.query_one("#ask-input")
+
+    asyncio.run(exercise())
+
+
+def test_ask_user_selecting_option_dismisses():
+    async def exercise():
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            await app.push_screen(AskUserScreen("pick one", ["a", "b"]))
+            await pilot.pause()
+            screen = app.screen
+            select = screen.query_one("#ask-options", Select)
+            dismissed = []
+            monkeypatch = pytest.MonkeyPatch()
+            monkeypatch.setattr(screen, "dismiss", lambda value: dismissed.append(value))
+            try:
+                screen.on_select_changed(Select.Changed(select, "b"))
+                screen.on_select_changed(Select.Changed(select, Select.NULL))
+            finally:
+                monkeypatch.undo()
+            # A real option dismisses with its value; an empty selection does not.
+            assert dismissed == ["b"]
 
     asyncio.run(exercise())
 
@@ -1101,7 +1125,7 @@ def test_connection_screen_refresh_keeps_selected_live_model(monkeypatch):
 
 def test_startup_prefetch_populates_context_cache(monkeypatch):
     async def exercise():
-        import fuica.agent as agent
+        import remie.agent as agent
 
         fetched = []
 

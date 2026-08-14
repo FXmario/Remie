@@ -1,4 +1,4 @@
-# FuiAgent
+# Remie
 
 A terminal-based coding agent with a [Textual](https://textual.textualize.io/) TUI. It chats with a local LLM (OpenAI-compatible endpoint) and can call tools to read, list, and edit files on your project.
 
@@ -17,14 +17,14 @@ A terminal-based coding agent with a [Textual](https://textual.textualize.io/) T
 - Async agent loop — the UI stays responsive while the LLM responds and tools run
 - Tools: `read_file`, `list_files`, `glob_files`, `tree_files`, `edit_file`, `run_command`, `ask_user`
 - **Command safety** — `run_command` blocks destructive commands before they execute (`rm -rf /`, `rm -rf ~`, disk formatting/partitioning, shutdown/reboot, `chmod -R`/`chown -R` on `/` or `~`, fork bombs, `curl | sh`, `dd` to raw block devices, ...) and shows a `Blocked command` line in the log with the reason
-- `FUICA_BLOCKED_COMMANDS` — comma-separated extra substrings (e.g. `git push --force`) that are always blocked, case-insensitive
+- `REMIE_BLOCKED_COMMANDS` — comma-separated extra substrings (e.g. `git push --force`) that are always blocked, case-insensitive
 - `ask_user` — when the agent needs a decision, it pops a modal with predefined choices and a free-text answer field instead of guessing
 - Tool calls accepted as `tool: name({...})`, `<tool: name(...)>`, or DSML markup (`<|DSML|>invoke name="..." />`)
 - Multiline input — `Shift+Enter` or `Ctrl+J` for a new line, `Enter` to send
 - Prompt history — `Up`/`Down` arrows recall previous prompts, like a shell
 - Paste images from the clipboard with `Ctrl+V` and send them to vision-capable models
 - Thinking step before every tool call; tool calls are announced as `Agent calling <tool>`, kept in the conversation history
-- Tool results are shown as readable `Tool result` panels in the log after each call (raw JSON still available with `FUICA_DEBUG=1`)
+- Tool results are shown as readable `Tool result` panels in the log after each call (raw JSON still available with `REMIE_DEBUG=1`)
 
 ## Requirements
 
@@ -42,12 +42,12 @@ uv sync
 To install the agent as a global command and use it from any project:
 
 ```bash
-uv tool install /home/fuica/Work/agents/FuiAgent --force
+uv tool install /home/fuica/Work/agents/Remie --force
 cd ~/Projects/my-other-project
-fuica
+remie
 ```
 
-The agent operates on the directory where `fuica` is launched, so relative tool paths target the current project.
+The agent operates on the directory where `remie` is launched, so relative tool paths target the current project.
 
 ### Project context
 
@@ -62,11 +62,11 @@ Configure the LLM connection via environment variables (a `.env` file is loaded 
 | `LLAMA_BASE_URL`  | Base URL of the local LLM server   | `http://localhost:7070/v1` |
 | `LLAMA_API_KEY`   | API key for the server             | `llama-cpp`   |
 | `LLAMA_MODEL`     | Model name                         | `local-model` |
-| `FUICA_DEBUG`            | Show raw tool calls (name + params) | (unset)       |
-| `FUICA_REASONING_EFFORT` | Reasoning mode: off/low/medium/high/max | `medium`   |
-| `FUICA_MAX_OUTPUT_TOKENS` | Max output tokens per response | OpenCode Go `32768`, local `8192` |
-| `FUICA_MAX_AUTO_CONTINUATIONS` | Max silent auto-continuations per response | `10` |
-| `FUICA_BLOCKED_COMMANDS` | Comma-separated extra command substrings that are always blocked (e.g. `git push --force,aws s3 rm`) | (unset) |
+| `REMIE_DEBUG`            | Show raw tool calls (name + params) | (unset)       |
+| `REMIE_REASONING_EFFORT` | Reasoning mode: off/low/medium/high/max | `medium`   |
+| `REMIE_MAX_OUTPUT_TOKENS` | Max output tokens per response | OpenCode Go `32768`, local `8192` |
+| `REMIE_MAX_AUTO_CONTINUATIONS` | Max silent auto-continuations per response | `10` |
+| `REMIE_BLOCKED_COMMANDS` | Comma-separated extra command substrings that are always blocked (e.g. `git push --force,aws s3 rm`) | (unset) |
 
 ### OpenCode Go
 
@@ -86,18 +86,18 @@ The Local provider exposes an editable Base URL field, defaulting to
 `http://localhost:7070/v1`. Managed providers use their built-in endpoint.
 
 The active connection (provider, base URL, API key, model, and reasoning effort) is saved to
-`~/.config/fuiagent/config.json` and reused on the next launch.
+`~/.config/remie/config.json` and reused on the next launch.
 
 When the agent calls a tool, the log shows a human-readable line like `Agent calling the read a file`.
-Tool results are hidden by default. Set `FUICA_DEBUG=1` to show the raw function name, JSON parameters,
+Tool results are hidden by default. Set `REMIE_DEBUG=1` to show the raw function name, JSON parameters,
 and `tool_result` payloads (e.g. `Agent calling read_file({"filename": "main.py"})`); a `· debug` marker appears in the header.
 
 ## Usage
 
-Run the agent with the `fuica` command (installed by `uv sync`), or launch it directly:
+Run the agent with the `remie` command (installed by `uv sync`), or launch it directly:
 
 ```bash
-fuica
+remie
 # or
 uv run main.py
 ```
@@ -126,10 +126,10 @@ The system prompt instructs the model to emit a short `thinking:` line before a 
 tool: read_file({"filename": "main.py"})
 ```
 
-`fuica/agent.py` parses those lines, runs the requested tool, and feeds the result back as a `tool_result(...)` message until the model responds without a tool call.
+`remie/agent.py` parses those lines, runs the requested tool, and feeds the result back as a `tool_result(...)` message until the model responds without a tool call.
 
 ## Project layout
 
 - `main.py` — entry point; launches the TUI
-- `fuica/agent.py` — LLM client, system prompt, tool registry, and parsing helpers
-- `fuica/tui.py` — the Textual `AgentApp`, theme detection, and the `fuica` CLI entry point
+- `remie/agent.py` — LLM client, system prompt, tool registry, and parsing helpers
+- `remie/tui.py` — the Textual `AgentApp`, theme detection, and the `remie` CLI entry point

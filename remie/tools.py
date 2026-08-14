@@ -1,4 +1,4 @@
-"""Tool implementations for the FuiAgent coding assistant."""
+"""Tool implementations for the Remie coding assistant."""
 
 import difflib
 import fnmatch
@@ -266,13 +266,13 @@ _DD_SAFE_DEVICES = {"null", "zero", "random", "urandom", "stdin", "stdout"}
 
 def get_custom_blocked_commands() -> list[str]:
     """
-    Extra blocked substrings from the FUICA_BLOCKED_COMMANDS environment
+    Extra blocked substrings from the REMIE_BLOCKED_COMMANDS environment
     variable (comma-separated, case-insensitive). Example:
-    FUICA_BLOCKED_COMMANDS="git push --force,aws s3 rm"
+    REMIE_BLOCKED_COMMANDS="git push --force,aws s3 rm"
     """
     return [
         item.strip().lower()
-        for item in os.environ.get("FUICA_BLOCKED_COMMANDS", "").split(",")
+        for item in os.environ.get("REMIE_BLOCKED_COMMANDS", "").split(",")
         if item.strip()
     ]
 
@@ -284,7 +284,7 @@ def get_blocked_command_reason(command: str) -> str | None:
     Blocks command strings that match a destructive pattern (recursive
     deletion of / or ~, disk formatting/partitioning, shutdown, fork bombs,
     piping a downloaded script into a shell, ...) as well as any custom
-    substrings listed in FUICA_BLOCKED_COMMANDS.
+    substrings listed in REMIE_BLOCKED_COMMANDS.
     """
     low = command.lower().strip()
     for pattern, reason in DANGEROUS_COMMAND_PATTERNS:

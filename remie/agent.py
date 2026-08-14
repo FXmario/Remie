@@ -15,7 +15,7 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.text import Text
 
-from fuica.tools import (
+from remie.tools import (
     TOOL_REGISTRY,
     edit_file_tool,
     get_tool_str_representation,
@@ -29,7 +29,7 @@ from fuica.tools import (
 load_dotenv()
 
 CONFIG_DIR = Path(
-    os.environ.get("FUICA_CONFIG_DIR", "~/.config/fuiagent")
+    os.environ.get("REMIE_CONFIG_DIR", "~/.config/remie")
 ).expanduser()
 CONFIG_FILE = CONFIG_DIR / "config.json"
 
@@ -58,7 +58,7 @@ TRUNCATED_REASONS = {"length", "max_tokens", "max_completion_tokens"}
 def get_max_output_tokens(provider: str = "local") -> int:
     """Per-provider output token budget. Env override wins; OpenCode Go gets a
     large budget so long responses aren't cut off by an artificial cap."""
-    env_value = os.environ.get("FUICA_MAX_OUTPUT_TOKENS")
+    env_value = os.environ.get("REMIE_MAX_OUTPUT_TOKENS")
     if env_value:
         try:
             return int(env_value)
@@ -107,7 +107,7 @@ def _default_config() -> ConnectionConfig:
         api_key=os.environ.get("LLAMA_API_KEY", "llama-cpp"),
         model=os.environ.get("LLAMA_MODEL", "local-model"),
         provider=provider,
-        reasoning_effort=os.environ.get("FUICA_REASONING_EFFORT", "medium"),
+        reasoning_effort=os.environ.get("REMIE_REASONING_EFFORT", "medium"),
     )
 
 

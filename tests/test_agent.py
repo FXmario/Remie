@@ -8,7 +8,7 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.text import Text
 
-from fuica.agent import (
+from remie.agent import (
     LLMRequestError,
     OPENCODE_GO_BASE_URL,
     OPENCODE_GO_MODELS,
@@ -33,7 +33,7 @@ from fuica.agent import (
     strip_protocol_lines,
 )
 
-from fuica.tools import (
+from remie.tools import (
     RUN_COMMAND_MAX_OUTPUT,
     RUN_COMMAND_TIMEOUT,
     TOOL_REGISTRY,
@@ -277,7 +277,7 @@ class TestRunCommandTool:
             raise subprocess.TimeoutExpired(cmd, kwargs["timeout"])
 
         monkeypatch.setattr(
-            "fuica.tools.subprocess.run", fake_run, raising=False
+            "remie.tools.subprocess.run", fake_run, raising=False
         )
         result = run_command_tool("sleep 60")
         assert result["timed_out"] is True
@@ -290,7 +290,7 @@ class TestRunCommandTool:
             stderr = ""
 
         monkeypatch.setattr(
-            "fuica.tools.subprocess.run",
+            "remie.tools.subprocess.run",
             lambda *a, **k: FakeResult(),
             raising=False,
         )
@@ -406,7 +406,7 @@ class TestCommandSafety:
         assert result["blocked"] is True
 
     def test_custom_blocked_commands_from_env(self, monkeypatch):
-        monkeypatch.setenv("FUICA_BLOCKED_COMMANDS", "git push --force, aws s3 rm")
+        monkeypatch.setenv("REMIE_BLOCKED_COMMANDS", "git push --force, aws s3 rm")
         assert get_custom_blocked_commands() == ["git push --force", "aws s3 rm"]
         assert "git push --force" in get_blocked_command_reason("git push --force")
         assert get_blocked_command_reason("git push") is None
@@ -414,7 +414,7 @@ class TestCommandSafety:
         assert get_blocked_command_reason("echo hi") is None
 
     def test_custom_blocked_commands_empty_by_default(self, monkeypatch):
-        monkeypatch.delenv("FUICA_BLOCKED_COMMANDS", raising=False)
+        monkeypatch.delenv("REMIE_BLOCKED_COMMANDS", raising=False)
         assert get_custom_blocked_commands() == []
         assert get_blocked_command_reason("git push") is None
 
@@ -671,7 +671,7 @@ class FakeHttpClient:
 
 
 def _patch_llm_stream(monkeypatch, lines, status_code=200, body=""):
-    import fuica.agent as agent
+    import remie.agent as agent
 
     monkeypatch.setattr(
         agent,
@@ -772,7 +772,7 @@ class TestStreamLlmUsageAndReasoning:
 
     def test_sends_reasoning_effort_and_omits_off(self, monkeypatch):
         import asyncio
-        import fuica.agent as agent
+        import remie.agent as agent
 
         _patch_llm_stream(
             monkeypatch,
@@ -989,7 +989,7 @@ class TestConnectionConfig:
             )
 
     def test_saved_config_round_trips_provider_and_effort(self, tmp_path, monkeypatch):
-        import fuica.agent as agent
+        import remie.agent as agent
 
         config_file = tmp_path / "config.json"
         monkeypatch.setattr(agent, "CONFIG_FILE", config_file)
@@ -1005,7 +1005,7 @@ class TestConnectionConfig:
         assert load_config() == original
 
     def test_load_config_derives_provider_for_legacy_file(self, tmp_path, monkeypatch):
-        import fuica.agent as agent
+        import remie.agent as agent
 
         config_file = tmp_path / "config.json"
         config_file.write_text(
@@ -1020,7 +1020,7 @@ class TestConnectionConfig:
 
     def test_fetch_opencode_go_models_falls_back_on_error(self, monkeypatch):
         import asyncio
-        import fuica.agent as agent
+        import remie.agent as agent
 
         monkeypatch.setattr(agent, "_opencode_go_model_context", {"stale": 999})
 
@@ -1035,7 +1035,7 @@ class TestConnectionConfig:
 
     def test_fetch_opencode_go_models_parses_payload(self, monkeypatch):
         import asyncio
-        import fuica.agent as agent
+        import remie.agent as agent
 
         monkeypatch.setattr(agent, "_opencode_go_model_context", {})
 
@@ -1108,7 +1108,7 @@ class TestConnectionConfig:
         assert "deepseek-v4-flash" in OPENCODE_GO_MODELS
 
     def test_model_context_limit_uses_live_cache(self, monkeypatch):
-        import fuica.agent as agent
+        import remie.agent as agent
 
         monkeypatch.setattr(agent, "_opencode_go_model_context", {"kimi-k3": 256_000})
         assert get_model_context_limit("kimi-k3", "opencode-go") == 256_000
@@ -1118,26 +1118,26 @@ class TestConnectionConfig:
     def test_max_output_tokens_defaults_by_provider(self):
         import os
 
-        old = os.environ.get("FUICA_MAX_OUTPUT_TOKENS")
-        os.environ.pop("FUICA_MAX_OUTPUT_TOKENS", None)
+        old = os.environ.get("REMIE_MAX_OUTPUT_TOKENS")
+        os.environ.pop("REMIE_MAX_OUTPUT_TOKENS", None)
         try:
             assert get_max_output_tokens("opencode-go") == 32_768
             assert get_max_output_tokens("local") == 8_192
         finally:
             if old is None:
-                os.environ.pop("FUICA_MAX_OUTPUT_TOKENS", None)
+                os.environ.pop("REMIE_MAX_OUTPUT_TOKENS", None)
             else:
-                os.environ["FUICA_MAX_OUTPUT_TOKENS"] = old
+                os.environ["REMIE_MAX_OUTPUT_TOKENS"] = old
 
     def test_max_output_tokens_env_override(self):
         import os
 
-        old = os.environ.get("FUICA_MAX_OUTPUT_TOKENS")
-        os.environ["FUICA_MAX_OUTPUT_TOKENS"] = "4000"
+        old = os.environ.get("REMIE_MAX_OUTPUT_TOKENS")
+        os.environ["REMIE_MAX_OUTPUT_TOKENS"] = "4000"
         try:
             assert get_max_output_tokens("opencode-go") == 4000
         finally:
             if old is None:
-                os.environ.pop("FUICA_MAX_OUTPUT_TOKENS", None)
+                os.environ.pop("REMIE_MAX_OUTPUT_TOKENS", None)
             else:
-                os.environ["FUICA_MAX_OUTPUT_TOKENS"] = old
+                os.environ["REMIE_MAX_OUTPUT_TOKENS"] = old
