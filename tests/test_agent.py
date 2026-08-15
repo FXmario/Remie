@@ -283,6 +283,55 @@ class TestRunCommandTool:
         assert result["timed_out"] is True
         assert result["exit_code"] == 124
 
+    def test_timeout_hint_advises_against_retry(self, monkeypatch):
+        import time
+
+        def fake_run(*args, **kwargs):
+            time.sleep(1)
+            cmd = kwargs.get("args", args[0] if args else "")
+            raise subprocess.TimeoutExpired(cmd, kwargs["timeout"])
+
+        monkeypatch.setattr(
+            "remie.tools.subprocess.run", fake_run, raising=False
+        )
+        result = run_command_tool("sleep 60")
+        assert "[command timed out after 30s]" in result["stderr"]
+        assert "Do not retry the exact same command unchanged" in result["stderr"]
+
+    def test_timeout_override_via_env(self, monkeypatch):
+        import importlib
+        import time
+        import remie.tools as tools
+
+        monkeypatch.setenv("REMIE_COMMAND_TIMEOUT", "5")
+        reloaded = importlib.reload(tools)
+        assert reloaded.RUN_COMMAND_TIMEOUT == 5
+        try:
+            def fake_run(*args, **kwargs):
+                time.sleep(1)
+                cmd = kwargs.get("args", args[0] if args else "")
+                raise subprocess.TimeoutExpired(cmd, kwargs["timeout"])
+
+            monkeypatch.setattr(
+                "remie.tools.subprocess.run", fake_run, raising=False
+            )
+            result = reloaded.run_command_tool("sleep 60")
+            assert result["timed_out"] is True
+            assert "[command timed out after 5s]" in result["stderr"]
+        finally:
+            importlib.reload(tools)
+
+    def test_invalid_timeout_env_falls_back(self, monkeypatch):
+        import importlib
+        import remie.tools as tools
+
+        monkeypatch.setenv("REMIE_COMMAND_TIMEOUT", "not-a-number")
+        reloaded = importlib.reload(tools)
+        try:
+            assert reloaded.RUN_COMMAND_TIMEOUT == 30
+        finally:
+            importlib.reload(tools)
+
     def test_output_is_truncated(self, monkeypatch):
         class FakeResult:
             returncode = 0

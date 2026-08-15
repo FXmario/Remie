@@ -204,7 +204,16 @@ def edit_file_tool(path: str, old_str: str, new_str: str) -> dict[str, Any]:
     }
 
 
-RUN_COMMAND_TIMEOUT = 30
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, default))
+    except ValueError:
+        return default
+
+
+#: Maximum seconds a shell command may run before it is killed. Configurable via
+#: REMIE_COMMAND_TIMEOUT (e.g. long-running test suites).
+RUN_COMMAND_TIMEOUT = _env_int("REMIE_COMMAND_TIMEOUT", 30)
 RUN_COMMAND_MAX_OUTPUT = 30_000
 TIMED_OUT_EXIT_CODE = 124
 
@@ -347,6 +356,14 @@ def run_command_tool(command: str, cwd: str = ".") -> dict[str, Any]:
         stdout = error.stdout or ""
         stderr = error.stderr or ""
         timed_out = True
+        hint = (
+            f"\n\n[command timed out after {RUN_COMMAND_TIMEOUT}s] The command was "
+            "killed before finishing. Do not retry the exact same command "
+            "unchanged; instead reduce its scope (fewer files, shorter input, "
+            "one step at a time) or increase REMIE_COMMAND_TIMEOUT and try again."
+        )
+        budget = max(RUN_COMMAND_MAX_OUTPUT - len(stdout) - len(hint) - 10, 1)
+        stderr = _truncate_stream(stderr, budget).rstrip("\n") + hint
 
     truncated = False
     if len(stdout) + len(stderr) > RUN_COMMAND_MAX_OUTPUT:
