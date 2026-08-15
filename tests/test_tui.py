@@ -3,7 +3,10 @@ import asyncio
 import httpx
 import pytest
 from PIL import Image
+from rich.console import Group
 from rich.panel import Panel
+from rich.syntax import Syntax
+from rich.text import Text
 from textual.widgets import Select
 
 import remie.tui as tui
@@ -619,7 +622,10 @@ def test_tool_results_rendered_in_turn(monkeypatch, tmp_path):
         monkeypatch.setattr(
             tui,
             "_render_tool_result",
-            lambda name, result: rendered.append((name, result)) or Panel(""),
+            lambda name, result, code_theme="ansi_dark": rendered.append(
+                (name, result)
+            )
+            or Panel(""),
         )
 
         app = AgentApp()
@@ -1261,6 +1267,105 @@ def test_turn_updates_badge_tokens(monkeypatch):
             assert app._total_output_tokens == 50
 
     asyncio.run(exercise())
+
+
+def test_plain_write_exposes_plain_text():
+    inner = tui._make_syntax("x = 1", "python", "ansi_dark")
+    wrapped = tui._PlainWrite("x = 1", inner)
+    assert wrapped.plain == "x = 1"
+
+
+def test_make_syntax_highlights_with_lexer():
+    syntax = tui._make_syntax('def f():\n    return 1', "python", "ansi_dark")
+    assert isinstance(syntax, Syntax)
+    assert syntax.lexer.name == "Python"
+
+
+def test_make_syntax_falls_back_to_plain_text():
+    renderable = tui._make_syntax("x", "no-such-lexer", "ansi_dark")
+    assert isinstance(renderable, Text)
+    assert renderable.plain == "x"
+
+
+def test_guess_lexer_name_known_and_unknown():
+    assert tui._guess_lexer_name("main.py") == "Python"
+    assert tui._guess_lexer_name("script.js") == "JavaScript"
+    assert tui._guess_lexer_name("README.md") == "Markdown"
+    assert tui._guess_lexer_name("file.xyzunknown") is None
+
+
+def test_command_output_lexer_detection():
+    assert tui._command_output_lexer('{"a": 1, "b": [2, 3]}') == "json"
+    assert tui._command_output_lexer('[1, 2, 3]') == "json"
+    assert tui._command_output_lexer(
+        "--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b"
+    ) == "diff"
+    assert (
+        tui._command_output_lexer(
+            'Traceback (most recent call last):\n  File "main.py", line 1\n    x'
+        )
+        == "pytb"
+    )
+    assert tui._command_output_lexer("just some plain text") is None
+    assert tui._command_output_lexer("") is None
+    assert tui._command_output_lexer(
+        'not json {"unterminated'
+    ) is None
+
+
+def test_read_file_result_is_highlighted_python(tmp_path):
+    path = tmp_path / "sample.py"
+    path.write_text("def f():\n    return 'x'\n", encoding="utf-8")
+    result = {"file_path": str(path), "content": path.read_text(encoding="utf-8")}
+    panel = tui._render_read_file_result(result, "ansi_dark")
+    assert panel.title == "Tool result · read_file"
+    renderable = panel.renderable
+    assert isinstance(renderable, Group)
+    # The body is wrapped by _PlainWrite and keeps plain text extractable.
+    body = list(renderable.renderables)[-1]
+    assert isinstance(body, tui._PlainWrite)
+    assert "def f():" in body.plain
+
+
+def test_run_command_json_output_is_highlighted():
+    result = {
+        "exit_code": 0,
+        "stdout": '{"status": "ok", "count": 3}',
+        "stderr": "",
+        "timed_out": False,
+    }
+    panel = tui._render_run_command_result(result, "ansi_dark")
+    rendered = panel.renderable
+    assert isinstance(rendered, Group)
+    body = list(rendered.renderables)[-1]
+    assert isinstance(body, tui._PlainWrite)
+    assert '{"status": "ok", "count": 3}' in body.plain
+
+
+def test_run_command_plain_output_is_plain_text():
+    result = {
+        "exit_code": 0,
+        "stdout": "hello\nworld\n",
+        "stderr": "",
+        "timed_out": False,
+    }
+    panel = tui._render_run_command_result(result, "ansi_dark")
+    assert isinstance(panel.renderable, Text)
+    assert "hello\nworld" in panel.renderable.plain
+
+
+def test_render_tool_result_dispatch_highlighted():
+    panel = tui._render_tool_result(
+        "read_file", {"file_path": "a.py", "content": "x = 1\n"}
+    )
+    assert panel is not None
+    assert panel.title == "Tool result · read_file"
+
+    command_panel = tui._render_tool_result(
+        "run_command",
+        {"exit_code": 0, "stdout": "[1, 2]", "stderr": "", "timed_out": False},
+    )
+    assert command_panel is not None
 
 
 def test_final_answer_strips_protocol_lines(monkeypatch):

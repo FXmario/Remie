@@ -24,7 +24,7 @@ A terminal-based coding agent with a [Textual](https://textual.textualize.io/) T
 - Prompt history — `Up`/`Down` arrows recall previous prompts, like a shell
 - Paste images from the clipboard with `Ctrl+V` and send them to vision-capable models
 - Thinking step before every tool call; tool calls are announced as `Agent calling <tool>`, kept in the conversation history
-- Tool results are shown as readable `Tool result` panels in the log after each call (raw JSON still available with `REMIE_DEBUG=1`)
+- Tool results are shown as readable `Tool result` panels in the log after each call — file contents (`read_file`) are syntax-highlighted by file extension, and `run_command` output is smart-highlighted when it looks like JSON, a unified diff, or a Python traceback (raw JSON still available with `REMIE_DEBUG=1`)
 
 ## Requirements
 

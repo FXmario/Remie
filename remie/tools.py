@@ -396,13 +396,13 @@ TOOL_REGISTRY = {
 }
 
 TOOL_SUMMARIES = {
-    "read_file": "read a file",
-    "list_files": "list the files in a directory",
-    "edit_file": "edit a file",
-    "run_command": "run a shell command",
-    "glob_files": "find files matching a glob pattern",
-    "tree_files": "show the directory tree",
-    "ask_user": "ask the user a question",
+    "read_file": "reading a file",
+    "list_files": "trying to get list the files in a directory",
+    "edit_file": "editing a file",
+    "run_command": "running a shell command",
+    "glob_files": "finding files matching a glob pattern",
+    "tree_files": "showing the directory tree",
+    "ask_user": "asking the user a question",
 }
 
 
