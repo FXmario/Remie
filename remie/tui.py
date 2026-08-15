@@ -72,6 +72,9 @@ PROMPT_HISTORY_LIMIT = 100
 MAX_AUTO_CONTINUATIONS = int(
     os.environ.get("REMIE_MAX_AUTO_CONTINUATIONS", "10")
 )
+MAX_EMPTY_RESPONSE_RETRIES = int(
+    os.environ.get("REMIE_MAX_EMPTY_RESPONSE_RETRIES", "2")
+)
 COMPACTION_CONTEXT_RATIO = 0.8
 COMPACTION_KEEP_MESSAGES = 10
 
@@ -1259,6 +1262,7 @@ class AgentApp(App):
             self._agent_running = True
             self.conversation.append({"role": "user", "content": user_content})
             continuations = 0
+            empty_retries = 0
             while True:
                 if self._stop_requested:
                     log.write("[dim]Stopped by user[/]")
@@ -1350,6 +1354,38 @@ class AgentApp(App):
                     self._total_input_tokens, self._total_output_tokens
                 )
                 tool_invocations = extract_tool_invocations(full_text)
+                content = strip_protocol_lines(full_text).strip()
+                if not tool_invocations and not content:
+                    # The model produced no usable output (e.g. only reasoning,
+                    # or the stream ended prematurely). Don't silently mark the
+                    # turn done: retry a bounded number of times.
+                    if empty_retries < MAX_EMPTY_RESPONSE_RETRIES:
+                        empty_retries += 1
+                        log.replace_stream()
+                        log.write(
+                            "[dim]Agent produced no output — retrying…[/]"
+                        )
+                        self.conversation.append(
+                            {
+                                "role": "assistant",
+                                "content": reasoning_text or "(no output)",
+                            }
+                        )
+                        continue
+                    log.replace_stream()
+                    if reasoning_text:
+                        log.write(
+                            Panel(
+                                _safe_reasoning_markdown(
+                                    reasoning_text, self._code_theme()
+                                ),
+                                title="Reasoning",
+                                border_style="dim",
+                                padding=(0, 1),
+                            )
+                        )
+                    log.write("[bold red]Agent stopped: empty response[/]")
+                    break
                 if (
                     finish_box.get("truncated")
                     and continuations < MAX_AUTO_CONTINUATIONS

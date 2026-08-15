@@ -806,6 +806,57 @@ class TestStreamLlmUsageAndReasoning:
         assert finish_box["finish_reason"] == "stop"
         assert finish_box["truncated"] is False
 
+    def test_marks_stream_complete_on_done(self, monkeypatch):
+        import asyncio
+
+        _patch_llm_stream(
+            monkeypatch,
+            [
+                'data: {"choices":[{"delta":{"content":"hi"},"finish_reason":null}]}',
+                "data: [DONE]",
+            ],
+        )
+
+        finish_box = {}
+
+        async def collect():
+            return [d async for d in stream_llm_call([], finish_box=finish_box)]
+
+        assert asyncio.run(collect()) == ["hi"]
+        assert finish_box["stream_complete"] is True
+
+    def test_marks_stream_complete_on_finish_reason_without_done(self, monkeypatch):
+        import asyncio
+
+        _patch_llm_stream(
+            monkeypatch,
+            ['data: {"choices":[{"delta":{"content":"hi"},"finish_reason":"stop"}]}'],
+        )
+
+        finish_box = {}
+
+        async def collect():
+            return [d async for d in stream_llm_call([], finish_box=finish_box)]
+
+        assert asyncio.run(collect()) == ["hi"]
+        assert finish_box["stream_complete"] is True
+
+    def test_marks_stream_incomplete_on_early_end(self, monkeypatch):
+        import asyncio
+
+        _patch_llm_stream(
+            monkeypatch,
+            ['data: {"choices":[{"delta":{"content":"partial"},"finish_reason":null}]}'],
+        )
+
+        finish_box = {}
+
+        async def collect():
+            return [d async for d in stream_llm_call([], finish_box=finish_box)]
+
+        assert asyncio.run(collect()) == ["partial"]
+        assert finish_box.get("stream_complete") is False
+
     def test_no_boxes_keeps_plain_stream(self, monkeypatch):
         import asyncio
 

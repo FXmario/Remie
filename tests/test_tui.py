@@ -1269,6 +1269,96 @@ def test_turn_updates_badge_tokens(monkeypatch):
     asyncio.run(exercise())
 
 
+def test_empty_response_is_retried_and_completes(monkeypatch):
+    async def exercise():
+        calls = 0
+
+        async def empty_then_reply(
+            _conversation, usage_box=None, reasoning_box=None, finish_box=None
+        ):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return
+            yield "reply"
+
+        monkeypatch.setattr(tui, "stream_llm_call", empty_then_reply)
+
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            await app.run_agent_turn("hello")
+            await pilot.pause()
+
+            assert calls == 2
+            assert app._agent_running is False
+            assistant_msgs = [
+                m["content"] for m in app.conversation if m["role"] == "assistant"
+            ]
+            assert assistant_msgs == ["(no output)", "reply"]
+
+    asyncio.run(exercise())
+
+
+def test_empty_response_gives_up_with_notice(monkeypatch):
+    async def exercise():
+        async def always_empty(
+            _conversation, usage_box=None, reasoning_box=None, finish_box=None
+        ):
+            if reasoning_box is not None:
+                reasoning_box.append("reasoning only")
+            return
+            yield
+
+        monkeypatch.setattr(tui, "stream_llm_call", always_empty)
+
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            await app.run_agent_turn("hello")
+            await pilot.pause()
+
+            assert app._agent_running is False
+            log_lines = [
+                strip.text for strip in app.query_one("#log").lines
+            ]
+            joined = "\n".join(log_lines)
+            assert "Agent stopped: empty response" in joined
+            assistant_msgs = [
+                m["content"] for m in app.conversation if m["role"] == "assistant"
+            ]
+            assert assistant_msgs == ["reasoning only", "reasoning only"]
+
+    asyncio.run(exercise())
+
+
+def test_empty_response_stops_when_user_stops(monkeypatch):
+    async def exercise():
+        async def slow_empty(
+            _conversation, usage_box=None, reasoning_box=None, finish_box=None
+        ):
+            await asyncio.sleep(0.1)
+            return
+            yield
+
+        monkeypatch.setattr(tui, "stream_llm_call", slow_empty)
+
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            task = asyncio.create_task(app.run_agent_turn("hello"))
+            await asyncio.sleep(0.15)
+            app.action_stop_agent()
+            await task
+            await pilot.pause()
+
+            assert app._agent_running is False
+            log_lines = [
+                strip.text for strip in app.query_one("#log").lines
+            ]
+            joined = "\n".join(log_lines)
+            assert "Stopped by user" in joined
+
+    asyncio.run(exercise())
+
+
 def test_plain_write_exposes_plain_text():
     inner = tui._make_syntax("x = 1", "python", "ansi_dark")
     wrapped = tui._PlainWrite("x = 1", inner)

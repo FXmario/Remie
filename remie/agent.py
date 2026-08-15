@@ -433,12 +433,16 @@ async def stream_llm_call(
             raise LLMRequestError(
                 response.status_code, body or f"HTTP {response.status_code}"
             )
+        saw_done = False
         async for raw_line in response.aiter_lines():
             line = raw_line.strip()
             if not line.startswith("data:"):
                 continue
             data = line[len("data:") :].strip()
-            if not data or data == "[DONE]":
+            if not data:
+                continue
+            if data == "[DONE]":
+                saw_done = True
                 continue
             try:
                 chunk = json.loads(data)
@@ -465,6 +469,10 @@ async def stream_llm_call(
             content = delta.get("content")
             if content:
                 yield content
+        if finish_box is not None:
+            finish_box["stream_complete"] = (
+                saw_done or bool(finish_box.get("finish_reason"))
+            )
 
 
 def get_connection_error_message(error: Exception) -> str | None:
