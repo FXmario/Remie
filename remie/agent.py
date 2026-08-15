@@ -141,14 +141,39 @@ def save_config(config: ConnectionConfig) -> None:
 
 _config = load_config()
 
-# Shared transport for chat-completion requests. TLS verification is disabled
-# to match the previous SDK behavior (local llama.cpp servers commonly use
-# self-signed certs). The read timeout applies between SSE chunks, so a stalled
-# stream still errors out while a slow but alive stream keeps flowing.
+# Shared HTTP timeout for chat-completion requests. The read timeout applies
+# between SSE chunks, so a stalled stream still errors out while a slow but
+# alive stream keeps flowing.
+HTTP_TIMEOUT = httpx.Timeout(connect=10, read=600, write=60, pool=10)
+
+# Local (llama.cpp) servers commonly use self-signed certificates, so TLS
+# verification stays disabled for the local client to match the previous SDK
+# behavior. Remote providers (e.g. OpenCode Go) use a separate client with
+# certificate verification enabled.
 http_client = httpx.AsyncClient(
     verify=False,
-    timeout=httpx.Timeout(connect=10, read=600, write=60, pool=10),
+    timeout=HTTP_TIMEOUT,
 )
+
+_remote_client: httpx.AsyncClient | None = None
+
+
+def _get_http_client() -> httpx.AsyncClient:
+    """Return the HTTP client for the active connection.
+
+    Local providers keep TLS verification disabled (self-signed certs are
+    common on llama.cpp servers); any other provider uses a lazily-created
+    client with certificate verification enabled.
+    """
+    global _remote_client
+    if _config.provider == "local":
+        return http_client
+    if _remote_client is None:
+        _remote_client = httpx.AsyncClient(
+            verify=True,
+            timeout=HTTP_TIMEOUT,
+        )
+    return _remote_client
 
 
 def get_config() -> ConnectionConfig:
@@ -400,7 +425,9 @@ async def stream_llm_call(
         payload["stream_options"] = {"include_usage": True}
     url = f"{_config.base_url.rstrip('/')}/chat/completions"
     headers = {"Authorization": f"Bearer {_config.api_key}"}
-    async with http_client.stream("POST", url, json=payload, headers=headers) as response:
+    async with _get_http_client().stream(
+        "POST", url, json=payload, headers=headers
+    ) as response:
         if response.status_code >= 400:
             body = (await response.aread()).decode("utf-8", errors="replace").strip()
             raise LLMRequestError(

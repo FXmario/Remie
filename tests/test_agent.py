@@ -1141,3 +1141,94 @@ class TestConnectionConfig:
                 os.environ.pop("REMIE_MAX_OUTPUT_TOKENS", None)
             else:
                 os.environ["REMIE_MAX_OUTPUT_TOKENS"] = old
+
+
+class TestHttpClientTlsVerification:
+    """TLS verification is disabled only for local llama.cpp servers; remote
+    providers (e.g. OpenCode Go) must use a client with verification on."""
+
+    def _restore(self, previous) -> None:
+        import remie.agent as agent
+
+        agent.configure_openai(
+            previous.base_url,
+            previous.api_key,
+            previous.model,
+            previous.provider,
+            previous.reasoning_effort,
+        )
+
+    def test_local_provider_uses_unverified_client(self):
+        import ssl
+        import remie.agent as agent
+
+        previous = agent.get_config()
+        try:
+            agent.configure_openai(
+                "http://localhost:7070/v1",
+                "key",
+                "local-model",
+                provider="local",
+                reasoning_effort="off",
+            )
+            client = agent._get_http_client()
+            assert client is agent.http_client
+            verify_mode = client._transport._pool._ssl_context.verify_mode
+            assert verify_mode == ssl.CERT_NONE
+        finally:
+            self._restore(previous)
+
+    def test_remote_provider_uses_verified_client_and_caches(self):
+        import ssl
+        import remie.agent as agent
+
+        previous = agent.get_config()
+        try:
+            agent.configure_openai(
+                OPENCODE_GO_BASE_URL,
+                "key",
+                "kimi-k3",
+                provider="opencode-go",
+                reasoning_effort="off",
+            )
+            client = agent._get_http_client()
+            assert client is not agent.http_client
+            verify_mode = client._transport._pool._ssl_context.verify_mode
+            assert verify_mode == ssl.CERT_REQUIRED
+            # The remote client is reused across requests, not recreated.
+            assert agent._get_http_client() is client
+        finally:
+            agent._remote_client = None
+            self._restore(previous)
+
+    def test_remote_stream_uses_verified_client(self, monkeypatch):
+        import asyncio
+        import remie.agent as agent
+
+        previous = agent.get_config()
+        fake = FakeHttpClient(
+            FakeStreamResponse(
+                lines=['data: {"choices":[{"delta":{"content":"hi"}}]}', "data: [DONE]"]
+            )
+        )
+        monkeypatch.setattr(agent, "_remote_client", fake)
+        try:
+            agent.configure_openai(
+                OPENCODE_GO_BASE_URL,
+                "key",
+                "kimi-k3",
+                provider="opencode-go",
+                reasoning_effort="off",
+            )
+
+            async def collect():
+                return [d async for d in agent.stream_llm_call([])]
+
+            assert asyncio.run(collect()) == ["hi"]
+            # The stream went through the remote (verified) client, not the
+            # unverified local one.
+            assert fake.calls
+            assert fake.calls[0][0] == "POST"
+        finally:
+            agent._remote_client = None
+            self._restore(previous)
