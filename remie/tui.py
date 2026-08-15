@@ -78,12 +78,14 @@ MAX_EMPTY_RESPONSE_RETRIES = int(
 COMPACTION_CONTEXT_RATIO = 0.8
 COMPACTION_KEEP_MESSAGES = 10
 
-# The streaming preview re-renders the whole accumulated Markdown, which is
-# expensive (parse + Pygments + layout). Throttling with an interval that grows
-# with the text size keeps the re-layout work roughly constant over time while
-# staying responsive early on and for slow streams.
-STREAM_UPDATE_MIN_INTERVAL = 0.05
+# The streaming preview re-renders the accumulated Markdown, which is
+# expensive (parse + Pygments + layout). Two mitigations keep the UI
+# responsive: throttling with an interval that grows with the text size, and
+# rendering only a bounded tail window of the text so the per-update cost stays
+# roughly constant no matter how long the generated answer gets.
+STREAM_UPDATE_MIN_INTERVAL = 0.1
 STREAM_UPDATE_CHARS_PER_SECOND = 50_000
+STREAM_PREVIEW_MAX_CHARS = 3000
 PROVIDER_BASE_URLS = {
     "opencode-go": OPENCODE_GO_BASE_URL,
 }
@@ -218,8 +220,14 @@ def _safe_stream_markdown(
     Auto-closes incomplete code fences so Pygments highlighting engages
     as soon as the opening fence and language arrive.  Falls back to
     plain escaped text if the Markdown parser rejects the content.
+
+    When the text contains no code fence, the full Markdown + Pygments path is
+    skipped entirely (it is the dominant cost of streaming re-renders) and the
+    text is shown as plain styled text instead.
     """
     fence_count = text.count("\n```") + (1 if text.startswith("```") else 0)
+    if fence_count == 0:
+        return Text.from_markup(escape(text), style=style or None)
     if fence_count % 2 == 1:
         text = text + "\n```"
     try:
@@ -259,6 +267,23 @@ def _should_update_stream(
 ) -> bool:
     """Whether the streaming preview should re-render now (throttled)."""
     return now - last_update >= _stream_update_interval(accumulated_len)
+
+
+def _preview_window(text: str, limit: int = STREAM_PREVIEW_MAX_CHARS) -> str:
+    """Return a bounded tail window of text for the live preview.
+
+    Keeps per-update rendering cost roughly constant regardless of how long
+    the generated answer gets. The cut is moved forward to the next newline so
+    the preview never starts mid-line; empty and short inputs are unchanged.
+    """
+    if len(text) <= limit:
+        return text
+    start = text.rfind("\n", 0, len(text) - limit)
+    if start == -1:
+        start = len(text) - limit
+    else:
+        start += 1
+    return text[start:]
 
 
 def _format_tokens(count: int) -> str:
@@ -1326,15 +1351,17 @@ class AgentApp(App):
                     elapsed = now - stream_started
                     if elapsed > 0:
                         badge.set_speed(estimate_tokens(full_text) / elapsed)
+                    preview = _preview_window(full_text)
                     if shown:
+                        preview_shown = _preview_window(shown)
                         log.update_stream(
-                            _safe_reasoning_markdown(shown, self._code_theme()),
+                            _safe_reasoning_markdown(preview_shown, self._code_theme()),
                             title="Reasoning",
                             border_style="dim",
                         )
-                    else:
+                    elif preview:
                         log.update_stream(
-                            _safe_stream_markdown(full_text, self._code_theme()),
+                            _safe_stream_markdown(preview, self._code_theme()),
                         )
                 if self._stop_requested:
                     log.replace_stream()

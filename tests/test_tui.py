@@ -46,6 +46,46 @@ def _no_network_on_mount(monkeypatch):
     monkeypatch.setattr(tui, "fetch_opencode_go_models", _noop_fetch)
 
 
+def test_preview_window_short_text_unchanged():
+    assert tui._preview_window("hello") == "hello"
+
+
+def test_preview_window_bounds_tail():
+    text = "x" * 5000
+    window = tui._preview_window(text)
+    assert len(window) <= tui.STREAM_PREVIEW_MAX_CHARS
+    assert window == text[-tui.STREAM_PREVIEW_MAX_CHARS:]
+
+
+def test_preview_window_starts_at_line_boundary():
+    chunk = "\n".join(f"line-{i}" for i in range(100))
+    window = tui._preview_window(chunk, limit=200)
+    assert len(window) <= 200 + max(
+        len(line) + 1 for line in chunk.splitlines()
+    )
+    assert window.startswith("line-") or window == chunk
+    assert window == chunk[-len(window):]
+
+
+def test_safe_stream_markdown_plain_without_fence():
+    result = tui._safe_stream_markdown("just some **text**", "ansi_dark")
+    from rich.text import Text
+    assert isinstance(result, Text)
+
+
+def test_safe_stream_markdown_uses_markdown_with_fence():
+    result = tui._safe_stream_markdown("```python\nx = 1\n```", "ansi_dark")
+    from rich.markdown import Markdown
+    assert isinstance(result, Markdown)
+
+
+def test_safe_stream_markdown_reasoning_keeps_grey_style():
+    result = tui._safe_reasoning_markdown("plain reasoning", "ansi_dark")
+    from rich.text import Text
+    assert isinstance(result, Text)
+    assert result.style is not None
+
+
 def test_tmux_detection(monkeypatch):
     monkeypatch.delenv("TMUX", raising=False)
     assert not _is_tmux()
