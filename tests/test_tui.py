@@ -143,7 +143,116 @@ def test_status_indicator_starts_ready():
     indicator = StatusIndicator()
 
     assert indicator._state == "ready"
-    assert len(indicator._frames["working"][0]) > 1
+    assert len(indicator._ensure_loaded("working")[0]) > 1
+
+
+def test_status_gifs_load_lazily():
+    indicator = StatusIndicator()
+    # Nothing loads at construction; each state loads on first use and caches.
+    assert indicator._frames == {}
+    frames, durations = indicator._ensure_loaded("working")
+    assert len(frames) > 1
+    assert indicator._ensure_loaded("working") is indicator._frames["working"]
+    assert "done" not in indicator._frames
+
+
+def test_stream_update_interval_is_bounded_by_preview_window():
+    # The interval never grows past the preview cap: for text longer than the
+    # preview window the cost is constant, so the throttle stays at the floor
+    # instead of scaling with the (unbounded) accumulated text.
+    assert tui._stream_update_interval(0) == tui.STREAM_UPDATE_MIN_INTERVAL
+    assert tui._stream_update_interval(100) == tui.STREAM_UPDATE_MIN_INTERVAL
+    huge = tui.STREAM_PREVIEW_MAX_CHARS * 100
+    assert tui._stream_update_interval(huge) == tui.STREAM_UPDATE_MIN_INTERVAL
+    assert tui._stream_update_interval(huge) < (
+        huge / tui.STREAM_UPDATE_CHARS_PER_SECOND
+    )
+
+
+def test_push_message_updates_conversation_token_cache(monkeypatch):
+    async def exercise():
+        async def fake_stream(
+            _conversation, usage_box=None, reasoning_box=None, finish_box=None
+        ):
+            if False:
+                yield ""
+
+        monkeypatch.setattr(tui, "stream_llm_call", fake_stream)
+
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            app.conversation = [{"role": "system", "content": "sys"}]
+            app._cached_conv_tokens = tui.estimate_conversation_tokens(
+                app.conversation
+            )
+            before = app._cached_conv_tokens
+
+            app._push_message("user", "hello world")
+            assert app.conversation[-1] == {"role": "user", "content": "hello world"}
+            assert app._cached_conv_tokens == before + tui.estimate_message_tokens(
+                {"role": "user", "content": "hello world"}
+            )
+
+            app._push_message("user", "a" * 400 + "\n" * 300)
+            assert app._cached_conv_tokens == before + tui.estimate_tokens(
+                "hello world"
+            ) + tui.estimate_tokens("a" * 400 + "\n" * 300)
+
+    asyncio.run(exercise())
+
+
+def test_conversation_too_large_uses_cached_tokens(monkeypatch):
+    async def exercise():
+        async def fake_stream(
+            _conversation, usage_box=None, reasoning_box=None, finish_box=None
+        ):
+            if False:
+                yield ""
+
+        monkeypatch.setattr(tui, "stream_llm_call", fake_stream)
+
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            app.conversation = [
+                {"role": "system", "content": "sys"},
+                {"role": "user", "content": "x" * 200},
+            ]
+            app._cached_conv_tokens = tui.estimate_conversation_tokens(
+                app.conversation
+            )
+            limit = app._cached_conv_tokens // tui.COMPACTION_CONTEXT_RATIO
+            assert app._conversation_too_large(limit) is True
+            assert app._conversation_too_large(None) is False
+            assert app._conversation_too_large(10**9) is False
+
+    asyncio.run(exercise())
+
+
+def test_compaction_recomputes_token_cache(monkeypatch):
+    async def exercise():
+        async def fake_stream(
+            _conversation, usage_box=None, reasoning_box=None, finish_box=None
+        ):
+            if False:
+                yield ""
+
+        monkeypatch.setattr(tui, "stream_llm_call", fake_stream)
+
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            app.conversation = [
+                {"role": "system", "content": "sys"},
+                {"role": "user", "content": "old" * 200},
+                {"role": "assistant", "content": "old" * 200},
+                {"role": "user", "content": "recent"},
+            ]
+            app._cached_conv_tokens = 999_999
+            app._compact_conversation()
+            assert app._cached_conv_tokens == tui.estimate_conversation_tokens(
+                app.conversation
+            )
+
+    asyncio.run(exercise())
 
 
 def test_model_badge_includes_vendor():

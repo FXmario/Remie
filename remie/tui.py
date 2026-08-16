@@ -49,7 +49,9 @@ from remie.agent import (
     UnsupportedModelError,
     configure_openai,
     estimate_conversation_tokens,
+    estimate_message_tokens,
     estimate_tokens,
+    estimate_tokens_from_counts,
     extract_thinking,
     extract_tool_invocations,
     fetch_opencode_go_models,
@@ -83,6 +85,11 @@ COMPACTION_KEEP_MESSAGES = 10
 # responsive: throttling with an interval that grows with the text size, and
 # rendering only a bounded tail window of the text so the per-update cost stays
 # roughly constant no matter how long the generated answer gets.
+#
+# Because the per-update render cost is bounded by the preview window, the
+# throttle interval is clamped to that same window: it never grows beyond the
+# minimum once the text is long enough that the preview is capped, so long
+# answers keep streaming at a steady rate instead of slowing down over time.
 STREAM_UPDATE_MIN_INTERVAL = 0.1
 STREAM_UPDATE_CHARS_PER_SECOND = 50_000
 STREAM_PREVIEW_MAX_CHARS = 3000
@@ -255,10 +262,17 @@ def _has_tool_call(text: str) -> bool:
 
 
 def _stream_update_interval(text_len: int) -> float:
-    """Minimum seconds between streaming preview re-renders for a given size."""
+    """Minimum seconds between streaming preview re-renders for a given size.
+
+    The length is clamped to the preview window because that bounds the actual
+    render cost: `_preview_window` never renders more than
+    `STREAM_PREVIEW_MAX_CHARS`, so the throttle interval must not keep growing
+    with the (unbounded) accumulated text.
+    """
     return max(
         STREAM_UPDATE_MIN_INTERVAL,
-        text_len / STREAM_UPDATE_CHARS_PER_SECOND,
+        min(text_len, STREAM_PREVIEW_MAX_CHARS)
+        / STREAM_UPDATE_CHARS_PER_SECOND,
     )
 
 
@@ -599,42 +613,55 @@ def _load_status_gif(name: str) -> tuple[list[PILImage.Image], list[float]]:
 class StatusIndicator(Vertical):
     """Animated Sixel/unicode status indicator with a text fallback."""
 
+    STATUSES = ("ready", "working", "done")
+
     def __init__(self) -> None:
         super().__init__(id="status")
-        self._frames = {
-            status: _load_status_gif(f"{status}.gif")
-            for status in ("ready", "working", "done")
-        }
+        self._frames: dict[str, tuple[list[PILImage.Image], list[float]]] = {}
         self._state = "ready"
         self._frame_index = 0
         self._timer = None
 
+    def _ensure_loaded(self, status: str) -> tuple[list[PILImage.Image], list[float]]:
+        """Return the frames/durations for a status, loading them on first use.
+
+        GIFs are loaded lazily per state so startup only decodes the initial
+        "ready" frames instead of all three animations up front.
+        """
+        if status not in self._frames:
+            self._frames[status] = _load_status_gif(f"{status}.gif")
+        return self._frames[status]
+
     def compose(self) -> ComposeResult:
-        yield TerminalImage(self._frames[self._state][0][0], id="status-gif")
+        yield TerminalImage(
+            self._ensure_loaded(self._state)[0][0], id="status-gif"
+        )
 
     def on_mount(self) -> None:
         if not _is_tmux():
             self._schedule_next_frame()
 
     def _schedule_next_frame(self) -> None:
-        durations = self._frames[self._state][1]
+        durations = self._ensure_loaded(self._state)[1]
         self._timer = self.set_timer(durations[self._frame_index], self._advance)
 
     def _advance(self) -> None:
-        frames = self._frames[self._state][0]
+        frames = self._ensure_loaded(self._state)[0]
         self._frame_index = (self._frame_index + 1) % len(frames)
         self.query_one("#status-gif", TerminalImage).image = frames[self._frame_index]
         if not _is_tmux():
             self._schedule_next_frame()
 
     def set_status(self, status: str) -> None:
-        if status not in self._frames:
+        if status not in self.STATUSES:
             raise ValueError(f"Unknown status: {status}")
         if self._timer is not None:
             self._timer.stop()
         self._state = status
         self._frame_index = 0
-        self.query_one("#status-gif", TerminalImage).image = self._frames[status][0][0]
+        self.query_one("#status-gif", TerminalImage).image = (
+            self._ensure_loaded(status)[0][0]
+        )
         if not _is_tmux():
             self._schedule_next_frame()
 
@@ -1107,6 +1134,7 @@ class AgentApp(App):
     def __init__(self) -> None:
         super().__init__()
         self.conversation: list[dict[str, Any]] = []
+        self._cached_conv_tokens = 0
         self.theme = "ansi-dark"
         self._agent_running = False
         self._stop_requested = False
@@ -1139,6 +1167,7 @@ class AgentApp(App):
 
     def on_mount(self) -> None:
         self.conversation = [{"role": "system", "content": get_full_system_prompt()}]
+        self._cached_conv_tokens = estimate_conversation_tokens(self.conversation)
         self.sub_title = ""
         prompt = self.query_one("#prompt", PromptTextArea)
         self.query_one(ModelBadge).update_config(get_config())
@@ -1259,10 +1288,20 @@ class AgentApp(App):
         config = get_config()
         return get_model_context_limit(config.model, config.provider)
 
+    def _push_message(self, role: str, content: Any) -> None:
+        """Append a message to the conversation and keep the running token
+        estimate current so compaction checks stay O(1)."""
+        message = {"role": role, "content": content}
+        self.conversation.append(message)
+        self._cached_conv_tokens += estimate_message_tokens(message)
+
     def _conversation_too_large(self, limit: int | None) -> bool:
         if not limit:
             return False
-        return estimate_conversation_tokens(self.conversation) >= limit * COMPACTION_CONTEXT_RATIO
+        tokens = self._cached_conv_tokens or estimate_conversation_tokens(
+            self.conversation
+        )
+        return tokens >= limit * COMPACTION_CONTEXT_RATIO
 
     def _compact_conversation(self) -> None:
         """Trim old context when the window is nearly full so long tasks continue."""
@@ -1279,13 +1318,14 @@ class AgentApp(App):
                 ),
             }
         ] + tail
+        self._cached_conv_tokens = estimate_conversation_tokens(self.conversation)
 
     async def run_agent_turn(self, user_content: str | list) -> None:
         log = self.query_one("#log", StreamingRichLog)
         completed = False
         try:
             self._agent_running = True
-            self.conversation.append({"role": "user", "content": user_content})
+            self._push_message("user", user_content)
             continuations = 0
             empty_retries = 0
             while True:
@@ -1298,6 +1338,8 @@ class AgentApp(App):
                         "[dim]Context window nearly full — older messages compacted.[/]"
                     )
                 full_text = ""
+                full_chars = 0
+                full_newlines = 0
                 log.begin_stream()
                 tool_detected = False
                 tool_rendered = False
@@ -1315,6 +1357,10 @@ class AgentApp(App):
                     if self._stop_requested:
                         break
                     full_text += delta
+                    # Keep O(1) counters for the token-speed estimate so the
+                    # badge does not re-scan the whole accumulation per update.
+                    full_chars += len(delta)
+                    full_newlines += delta.count("\n")
                     # A complete tool-call line only exists once its trailing
                     # newline has arrived, so only rescan at line boundaries
                     # instead of re-scanning the whole accumulating text on
@@ -1350,7 +1396,10 @@ class AgentApp(App):
                         shown = ""
                     elapsed = now - stream_started
                     if elapsed > 0:
-                        badge.set_speed(estimate_tokens(full_text) / elapsed)
+                        badge.set_speed(
+                            estimate_tokens_from_counts(full_chars, full_newlines)
+                            / elapsed
+                        )
                     preview = _preview_window(full_text)
                     if shown:
                         preview_shown = _preview_window(shown)
@@ -1369,9 +1418,7 @@ class AgentApp(App):
                     break
                 self.query_one(ModelBadge).set_speed(None)
                 reasoning_text = "".join(reasoning_box) or extract_thinking(full_text)
-                input_tokens = usage_box.get("prompt_tokens") or (
-                    estimate_conversation_tokens(self.conversation)
-                )
+                input_tokens = usage_box.get("prompt_tokens") or self._cached_conv_tokens
                 output_tokens = usage_box.get("completion_tokens") or estimate_tokens(
                     full_text
                 )
@@ -1392,11 +1439,8 @@ class AgentApp(App):
                         log.write(
                             "[dim]Agent produced no output — retrying…[/]"
                         )
-                        self.conversation.append(
-                            {
-                                "role": "assistant",
-                                "content": reasoning_text or "(no output)",
-                            }
+                        self._push_message(
+                            "assistant", reasoning_text or "(no output)"
                         )
                         continue
                     log.replace_stream()
@@ -1418,9 +1462,7 @@ class AgentApp(App):
                     and continuations < MAX_AUTO_CONTINUATIONS
                     and not tool_invocations
                 ):
-                    self.conversation.append(
-                        {"role": "assistant", "content": full_text}
-                    )
+                    self._push_message("assistant", full_text)
                     partial = strip_protocol_lines(full_text).strip()
                     if partial:
                         log.replace_stream(
@@ -1449,9 +1491,7 @@ class AgentApp(App):
                             render_assistant_panel(content, self._code_theme())
                         )
                     log.replace_stream(*renderables)
-                    self.conversation.append(
-                        {"role": "assistant", "content": full_text}
-                    )
+                    self._push_message("assistant", full_text)
                     completed = True
                     self._set_status("done")
                     return
@@ -1475,12 +1515,12 @@ class AgentApp(App):
                         )
                     else:
                         tool_line = (
-                            "[bold cyan]Agent the "
+                            "[bold cyan]Agent "
                             f"{escape(get_tool_summary(name))}[/]"
                         )
                     replacements.append(tool_line)
                 log.replace_stream(*replacements)
-                self.conversation.append({"role": "assistant", "content": full_text})
+                self._push_message("assistant", full_text)
                 for name, args in tool_invocations:
                     if self._stop_requested:
                         log.write("[dim]Stopped by user[/]")
@@ -1519,9 +1559,7 @@ class AgentApp(App):
                         log.write(
                             f"[bold magenta]tool_result:[/] {escape(result_json)}"
                         )
-                    self.conversation.append(
-                        {"role": "user", "content": f"tool_result({result_json})"}
-                    )
+                    self._push_message("user", f"tool_result({result_json})")
         except (
             httpx.TimeoutException,
             httpx.TransportError,

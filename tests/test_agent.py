@@ -14,7 +14,9 @@ from remie.agent import (
     OPENCODE_GO_MODELS,
     configure_openai,
     estimate_conversation_tokens,
+    estimate_message_tokens,
     estimate_tokens,
+    estimate_tokens_from_counts,
     extract_thinking,
     extract_tool_invocations,
     fetch_opencode_go_models,
@@ -623,6 +625,53 @@ class TestEstimateTokens:
 
     def test_minimum_one_for_non_empty(self):
         assert estimate_tokens("x") == 1
+
+
+class TestEstimateTokensFromCounts:
+    def test_matches_estimate_tokens_parity(self):
+        samples = [
+            "",
+            "hello world",
+            "a" * 40 + "\n" * 30,
+            "x",
+            "line\nline\nline\nline\n" * 100,
+        ]
+        for text in samples:
+            assert estimate_tokens_from_counts(
+                len(text), text.count("\n")
+            ) == estimate_tokens(text)
+
+    def test_zero_chars_is_zero(self):
+        assert estimate_tokens_from_counts(0, 0) == 0
+        assert estimate_tokens_from_counts(0, 5) == 0
+
+    def test_minimum_one_for_non_empty(self):
+        assert estimate_tokens_from_counts(1, 0) == 1
+
+
+class TestEstimateMessageTokens:
+    def test_string_content(self):
+        message = {"role": "user", "content": "efghijkl"}
+        assert estimate_message_tokens(message) == estimate_tokens("efghijkl")
+
+    def test_multimodal_text_parts(self):
+        message = {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "abcd"},
+                {"type": "text", "text": "efgh"},
+                {"type": "image_url", "image_url": {"url": "data:..."}},
+            ],
+        }
+        assert estimate_message_tokens(message) == estimate_tokens("abcd") + (
+            estimate_tokens("efgh")
+        )
+
+    def test_ignores_non_text_content(self):
+        assert estimate_message_tokens({"role": "user", "content": []}) == 0
+        assert estimate_message_tokens(
+            {"role": "user", "content": [{"image": "base64"}]}
+        ) == 0
 
 
 class TestEstimateConversationTokens:
