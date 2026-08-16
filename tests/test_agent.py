@@ -33,6 +33,7 @@ from remie.agent import (
     save_config,
     stream_llm_call,
     strip_protocol_lines,
+    supports_reasoning_effort,
 )
 
 from remie.tools import (
@@ -699,6 +700,47 @@ class TestEstimateConversationTokens:
 
     def test_empty_conversation(self):
         assert estimate_conversation_tokens([]) == 0
+
+
+class TestSupportsReasoningEffort:
+    def test_local_always_supports(self):
+        for model in ("local-model", "minimax-m3", "anything"):
+            assert supports_reasoning_effort(model, "local") is True
+
+    def test_opencode_go_unsupported_models(self):
+        unsupported = [
+            "grok-4.5",
+            "gpt-5.6-luna",
+            "minimax-m3",
+            "minimax-m2.7",
+            "minimax-m2.5",
+            "qwen3.8-max",
+            "qwen3.7-max",
+            "qwen3.7-plus",
+            "qwen3.6-plus",
+            "qwen3.5-plus",
+        ]
+        for model in unsupported:
+            assert supports_reasoning_effort(model, "opencode-go") is False
+
+    def test_opencode_go_reasoning_models(self):
+        supported = [
+            "deepseek-v4-flash",
+            "deepseek-v4-pro",
+            "kimi-k3",
+            "kimi-k2.7-code",
+            "kimi-k2.6",
+            "glm-5.2",
+            "glm-5.1",
+            "mimo-v2.5",
+            "mimo-v2.5-pro",
+            "hy3",
+        ]
+        for model in supported:
+            assert supports_reasoning_effort(model, "opencode-go") is True
+
+    def test_unknown_model_defaults_to_supported(self):
+        assert supports_reasoning_effort("brand-new-model", "opencode-go") is True
 
 
 class TestStripProtocolLines:

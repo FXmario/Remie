@@ -65,6 +65,7 @@ from remie.agent import (
     save_config,
     stream_llm_call,
     strip_protocol_lines,
+    supports_reasoning_effort,
 )
 
 from remie.tools import get_tool_summary
@@ -847,6 +848,10 @@ class ConnectionScreen(ModalScreen):
 
     BINDINGS = [("escape", "dismiss", "Cancel")]
 
+    def __init__(self) -> None:
+        super().__init__()
+        self._stashed_effort: str | None = None
+
     CSS = """
     ConnectionScreen {
         align: center middle;
@@ -916,7 +921,7 @@ class ConnectionScreen(ModalScreen):
                     id="model-select",
                     prompt="Select model...",
                 )
-                yield Label("Reasoning effort")
+                yield Label("Reasoning effort", id="reasoning-effort-label")
                 yield Select(
                     [(effort.title(), effort) for effort in REASONING_EFFORTS],
                     value=current.reasoning_effort
@@ -932,6 +937,7 @@ class ConnectionScreen(ModalScreen):
     def on_mount(self) -> None:
         provider = self.query_one("#provider-select", Select).value
         self._set_provider_fields(provider)
+        self._update_reasoning_fields()
         self.query_one("#api-key-input", Input).focus()
 
     def _set_provider_fields(self, provider: object) -> None:
@@ -943,6 +949,31 @@ class ConnectionScreen(ModalScreen):
         base_url_input.disabled = not is_local
         self.query_one("#model-select", Select).disabled = is_local
 
+    def _update_reasoning_fields(self) -> None:
+        """Enable or fade the reasoning-effort picker for the selected model.
+
+        Models that don't accept `reasoning_effort` get the effort snapped to
+        "off" and the control disabled (dimmed); the prior effort is stashed
+        and restored when a supported model is selected again.
+        """
+        model = self._selected_model()
+        provider = self.query_one("#provider-select", Select).value
+        supported = supports_reasoning_effort(model, provider)
+        select = self.query_one("#reasoning-effort-select", Select)
+        label = self.query_one("#reasoning-effort-label", Label)
+        if supported:
+            select.disabled = False
+            label.disabled = False
+            if self._stashed_effort is not None:
+                select.value = self._stashed_effort
+                self._stashed_effort = None
+        else:
+            if select.value != "off":
+                self._stashed_effort = select.value
+            select.value = "off"
+            select.disabled = True
+            label.disabled = True
+
     async def on_select_changed(self, event: Select.Changed) -> None:
         if event.select.id == "provider-select":
             self._set_provider_fields(event.value)
@@ -953,6 +984,8 @@ class ConnectionScreen(ModalScreen):
                 api_key = self.query_one("#api-key-input", Input).value.strip()
                 if api_key:
                     await self._refresh_models(api_key)
+        if event.select.id in {"provider-select", "model-select"}:
+            self._update_reasoning_fields()
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "cancel-button":
@@ -979,6 +1012,7 @@ class ConnectionScreen(ModalScreen):
             select.value = previously_selected
         elif models:
             select.value = models[0]
+        self._update_reasoning_fields()
 
     def _connect(self) -> None:
         provider = self.query_one("#provider-select", Select).value
@@ -1000,6 +1034,8 @@ class ConnectionScreen(ModalScreen):
         effort = self.query_one("#reasoning-effort-select", Select).value
         if not isinstance(effort, str):
             effort = "medium"
+        if not supports_reasoning_effort(model, str(provider)):
+            effort = "off"
         config = configure_openai(
             base_url,
             api_key,

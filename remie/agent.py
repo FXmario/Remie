@@ -54,6 +54,36 @@ OPENCODE_GO_MODELS = [
 
 TRUNCATED_REASONS = {"length", "max_tokens", "max_completion_tokens"}
 
+# OpenCode Go models served via the Anthropic /messages or OpenAI /responses
+# endpoints. They do not accept OpenAI's `reasoning_effort` parameter, so the
+# reasoning-effort picker in the connection modal should be faded for them.
+# Derived from the OpenCode Go endpoint mapping in the docs (aug 2026).
+NON_REASONING_EFFORT_MODELS = {
+    "grok-4.5",
+    "gpt-5.6-luna",
+    "minimax-m3",
+    "minimax-m2.7",
+    "minimax-m2.5",
+    "qwen3.8-max",
+    "qwen3.7-max",
+    "qwen3.7-plus",
+    "qwen3.6-plus",
+    "qwen3.5-plus",
+}
+
+
+def supports_reasoning_effort(model: str, provider: str = "local") -> bool:
+    """Return True when a connection can send `reasoning_effort`.
+
+    Local (llama.cpp) servers vary by build and model, so reasoning effort is
+    always offered there. For OpenCode Go, only models on the
+    `/chat/completions` endpoint accept the parameter; unknown models default to
+    supported.
+    """
+    if provider != "opencode-go":
+        return True
+    return model not in NON_REASONING_EFFORT_MODELS
+
 
 def get_max_output_tokens(provider: str = "local") -> int:
     """Per-provider output token budget. Env override wins; OpenCode Go gets a

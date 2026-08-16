@@ -1159,6 +1159,165 @@ def test_connection_screen_has_submit_and_cancel_only():
     asyncio.run(exercise())
 
 
+def test_reasoning_effort_fades_for_unsupported_model(monkeypatch):
+    async def exercise():
+        async def fake_fetch(api_key):
+            return ["minimax-m3", "glm-5.2"]
+
+        monkeypatch.setattr(tui, "fetch_opencode_go_models", fake_fetch)
+        previous = get_config()
+        configure_openai(
+            OPENCODE_GO_BASE_URL,
+            "key",
+            "minimax-m3",
+            provider="opencode-go",
+            reasoning_effort="high",
+        )
+        try:
+            app = AgentApp()
+            async with app.run_test() as pilot:
+                await pilot.press("ctrl+p")
+                await pilot.pause()
+                screen = app.screen
+                assert isinstance(screen, ConnectionScreen)
+                effort = screen.query_one("#reasoning-effort-select", Select)
+                label = screen.query_one("#reasoning-effort-label")
+                assert effort.value == "off"
+                assert effort.disabled is True
+                assert label.disabled is True
+        finally:
+            configure_openai(
+                previous.base_url,
+                previous.api_key,
+                previous.model,
+                previous.provider,
+                previous.reasoning_effort,
+            )
+
+    asyncio.run(exercise())
+
+
+def test_reasoning_effort_restores_on_switch_back(monkeypatch):
+    async def exercise():
+        async def fake_fetch(api_key):
+            return ["minimax-m3", "glm-5.2"]
+
+        monkeypatch.setattr(tui, "fetch_opencode_go_models", fake_fetch)
+        previous = get_config()
+        configure_openai(
+            OPENCODE_GO_BASE_URL,
+            "key",
+            "minimax-m3",
+            provider="opencode-go",
+            reasoning_effort="medium",
+        )
+        try:
+            app = AgentApp()
+            async with app.run_test() as pilot:
+                await pilot.press("ctrl+p")
+                await pilot.pause()
+                screen = app.screen
+                assert isinstance(screen, ConnectionScreen)
+                effort = screen.query_one("#reasoning-effort-select", Select)
+                # Initial state: unsupported model -> faded at "off".
+                assert effort.value == "off"
+                assert effort.disabled is True
+
+                model_select = screen.query_one("#model-select", Select)
+                model_select.value = "glm-5.2"
+                await screen.on_select_changed(
+                    Select.Changed(model_select, "glm-5.2")
+                )
+                await pilot.pause()
+                assert effort.disabled is False
+                assert effort.value == "medium"
+                assert screen.query_one("#reasoning-effort-label").disabled is False
+        finally:
+            configure_openai(
+                previous.base_url,
+                previous.api_key,
+                previous.model,
+                previous.provider,
+                previous.reasoning_effort,
+            )
+
+    asyncio.run(exercise())
+
+
+def test_local_keeps_reasoning_effort_enabled(monkeypatch):
+    async def exercise():
+        previous = get_config()
+        configure_openai(
+            "http://localhost:7070/v1",
+            "key",
+            "minimax-m3",
+            provider="local",
+            reasoning_effort="off",
+        )
+        try:
+            app = AgentApp()
+            async with app.run_test() as pilot:
+                await pilot.press("ctrl+p")
+                await pilot.pause()
+                screen = app.screen
+                assert isinstance(screen, ConnectionScreen)
+                effort = screen.query_one("#reasoning-effort-select", Select)
+                assert effort.disabled is False
+                assert screen.query_one("#reasoning-effort-label").disabled is False
+        finally:
+            configure_openai(
+                previous.base_url,
+                previous.api_key,
+                previous.model,
+                previous.provider,
+                previous.reasoning_effort,
+            )
+
+    asyncio.run(exercise())
+
+
+def test_connect_clamps_effort_for_unsupported_model(monkeypatch):
+    async def exercise():
+        async def fake_fetch(api_key):
+            return ["grok-4.5", "glm-5.2"]
+
+        monkeypatch.setattr(tui, "fetch_opencode_go_models", fake_fetch)
+        previous = get_config()
+        configure_openai(
+            OPENCODE_GO_BASE_URL,
+            "key",
+            "grok-4.5",
+            provider="opencode-go",
+            reasoning_effort="high",
+        )
+        saved = []
+        monkeypatch.setattr(tui, "save_config", lambda config: saved.append(config))
+        try:
+            app = AgentApp()
+            async with app.run_test() as pilot:
+                await pilot.press("ctrl+p")
+                await pilot.pause()
+                screen = app.screen
+                assert isinstance(screen, ConnectionScreen)
+                effort = screen.query_one("#reasoning-effort-select", Select)
+                assert effort.value == "off"
+                screen._connect()
+                await pilot.pause()
+                assert saved
+                assert saved[-1].reasoning_effort == "off"
+                assert saved[-1].model == "grok-4.5"
+        finally:
+            configure_openai(
+                previous.base_url,
+                previous.api_key,
+                previous.model,
+                previous.provider,
+                previous.reasoning_effort,
+            )
+
+    asyncio.run(exercise())
+
+
 def test_connection_screen_restores_provider_and_effort(monkeypatch):
     async def exercise():
         async def fake_fetch(api_key):
