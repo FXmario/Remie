@@ -40,7 +40,6 @@ from remie.tui import (
     _load_status_gif,
 )
 from remie.tools import (
-    create_memory,
     delete_memory,
     find_memory_by_id,
     get_active_memory_id,
@@ -1034,8 +1033,13 @@ def test_ctrl_m_opens_memory_picker(monkeypatch):
             assert len(app.screen_stack) == 2
             assert isinstance(app.screen, MemoryScreen)
             assert app.screen.query_one("#memory-select", Select)
-            assert app.screen.query_one("#new-memory-input")
+            # No free-text "new memory name" input: memories are created
+            # automatically by the agent, so the picker only offers
+            # Switch / Delete / Cancel.
+            assert not app.screen.query("#new-memory-input")
+            assert app.screen.query_one("#memory-switch")
             assert app.screen.query_one("#memory-delete")
+            assert app.screen.query_one("#memory-cancel")
 
     asyncio.run(exercise())
 
@@ -1061,19 +1065,43 @@ def test_memory_picker_switch_updates_active(monkeypatch):
     asyncio.run(exercise())
 
 
-def test_memory_picker_create_new_memory(monkeypatch):
+def test_memory_picker_auto_creates_default_memory(monkeypatch):
     async def exercise():
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            # Fresh project: no memories yet. Opening the picker auto-creates
+            # the default "general" memory and activates it, so there is
+            # always something to select instead of a manual name field.
+            await pilot.press("ctrl+o")
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, MemoryScreen)
+            general = find_memory_by_id(get_active_memory_id())
+            assert general is not None
+            assert general["name"] == "general"
+            select_options = [
+                value for _, value in screen.query_one("#memory-select", Select)._options
+            ]
+            assert general["id"] in select_options
+            assert screen.query_one("#memory-select", Select).value == general["id"]
+
+    asyncio.run(exercise())
+
+def test_memory_picker_switch_to_existing_memory(monkeypatch):
+    async def exercise():
+        notes = memory_tool("add", "standalone notes", name="notes")
+
         app = AgentApp()
         async with app.run_test() as pilot:
             await pilot.press("ctrl+o")
             await pilot.pause()
             screen = app.screen
             assert isinstance(screen, MemoryScreen)
-            memory = create_memory("notes")
-            screen._switch(memory["id"])
+            screen._switch(notes["id"])
             await pilot.pause()
-            assert get_active_memory_id() == memory["id"]
-            assert find_memory_by_id(memory["id"])["name"] == "notes"
+            assert get_active_memory_id() == notes["id"]
+            assert find_memory_by_id(notes["id"])["name"] == "notes"
+            assert "standalone notes" in memory_tool("read", name="notes")["content"]
             assert len(app.screen_stack) == 1
 
     asyncio.run(exercise())

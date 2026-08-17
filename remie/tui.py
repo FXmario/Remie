@@ -74,8 +74,8 @@ from remie.agent import (
 )
 
 from remie.tools import (
-    create_memory,
     delete_memory,
+    ensure_general_memory,
     find_memory_by_id,
     get_active_memory_id,
     get_tool_summary,
@@ -1178,10 +1178,6 @@ class MemoryScreen(ModalScreen):
     #memory-dialog Button {
         margin-right: 1;
     }
-
-    #memory-dialog #new-memory-input {
-        margin-top: 1;
-    }
     """
 
     def __init__(self) -> None:
@@ -1192,6 +1188,17 @@ class MemoryScreen(ModalScreen):
         self._memories = list_memories()
 
     def compose(self) -> ComposeResult:
+        # Auto-create the default memory (and activate it) when none exist, so
+        # the picker always has something to select and switch to. Memories are
+        # also created on the fly by the agent's memory tool when it saves a
+        # note under a new name.
+        if not list_memories():
+            memory = ensure_general_memory()
+            if not get_active_memory_id():
+                set_active_memory_id(memory["id"])
+            app = self.app
+            if isinstance(app, AgentApp):
+                app._refresh_system_prompt()
         self._refresh_memories()
         active = get_active_memory_id()
         with Vertical(id="memory-dialog"):
@@ -1201,10 +1208,6 @@ class MemoryScreen(ModalScreen):
                 value=active if active else Select.NULL,
                 prompt="Select active memory...",
                 id="memory-select",
-            )
-            yield Input(
-                placeholder="New memory name...",
-                id="new-memory-input",
             )
             with Horizontal(classes="row"):
                 yield Button("Switch", variant="primary", id="memory-switch")
@@ -1220,7 +1223,7 @@ class MemoryScreen(ModalScreen):
 
     def _switch(self, memory_id: str | None) -> None:
         if not memory_id:
-            self.notify("Enter or pick a memory name", severity="warning")
+            self.notify("Pick a memory to switch to", severity="warning")
             return
         memory = find_memory_by_id(memory_id)
         if memory is None:
@@ -1275,29 +1278,9 @@ class MemoryScreen(ModalScreen):
             self.dismiss()
             return
         if event.button.id == "memory-switch":
-            new_name = self.query_one("#new-memory-input", Input).value.strip()
-            if new_name:
-                try:
-                    memory = create_memory(new_name)
-                except ValueError as error:
-                    self.notify(str(error), severity="warning")
-                    return
-                self._switch(memory["id"])
-            else:
-                self._switch(self._selected_id())
+            self._switch(self._selected_id())
         elif event.button.id == "memory-delete":
             await self._delete_current()
-
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        event.stop()
-        new_name = self.query_one("#new-memory-input", Input).value.strip()
-        if new_name:
-            try:
-                memory = create_memory(new_name)
-            except ValueError as error:
-                self.notify(str(error), severity="warning")
-                return
-            self._switch(memory["id"])
 
 
 class AgentScreen(Screen):
