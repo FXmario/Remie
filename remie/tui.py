@@ -72,7 +72,12 @@ from remie.agent import (
     supports_reasoning_effort,
 )
 
-from remie.tools import get_tool_summary
+from remie.tools import (
+    get_active_memory_name,
+    get_tool_summary,
+    list_memory_names,
+    set_active_memory_name,
+)
 
 REASONING_EFFORTS = ("off", "low", "medium", "high", "max")
 PROMPT_HISTORY_LIMIT = 100
@@ -1143,6 +1148,96 @@ class AskUserScreen(ModalScreen):
             self.dismiss(answer)
 
 
+class MemoryScreen(ModalScreen):
+    """Modal to view and switch between named agent memories."""
+
+    BINDINGS = [("escape", "dismiss", "Cancel")]
+
+    CSS = """
+    MemoryScreen {
+        align: center middle;
+    }
+
+    #memory-dialog {
+        width: 60;
+        height: auto;
+        max-height: 70%;
+        padding: 1 2;
+        border: round $primary;
+        background: $surface;
+    }
+
+    #memory-dialog Label {
+        margin-top: 1;
+    }
+
+    #memory-dialog Button {
+        margin-right: 1;
+    }
+
+    #memory-dialog #new-memory-input {
+        margin-top: 1;
+    }
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._names: list[str] = []
+
+    def compose(self) -> ComposeResult:
+        self._names = list_memory_names()
+        with Vertical(id="memory-dialog"):
+            yield Label("Memories", id="dialog-title")
+            yield Select(
+                [(name, name) for name in self._names],
+                value=get_active_memory_name(),
+                prompt="Select active memory...",
+                id="memory-select",
+            )
+            yield Input(
+                placeholder="New memory name...",
+                id="new-memory-input",
+            )
+            with Horizontal(classes="row"):
+                yield Button("Switch", variant="primary", id="memory-switch")
+                yield Button("Cancel", id="memory-cancel")
+
+    def on_mount(self) -> None:
+        self.query_one("#memory-select", Select).focus()
+
+    def _switch(self, name: str | None) -> None:
+        if not name:
+            self.notify("Enter or pick a memory name", severity="warning")
+            return
+        name = set_active_memory_name(name)
+        app = self.app
+        if isinstance(app, AgentApp):
+            app._refresh_system_prompt()
+            app.notify(f"Active memory: {name}", title="Memory")
+        self.dismiss()
+
+    def on_select_changed(self, event: Select.Changed) -> None:
+        if event.select.id == "memory-select" and event.value is not Select.NULL:
+            # Select posts a Changed with the preset value on mount; skip it so
+            # the modal doesn't immediately dismiss itself.
+            if event.value != get_active_memory_name():
+                self._switch(event.value)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "memory-cancel":
+            self.dismiss()
+            return
+        if event.button.id == "memory-switch":
+            new_name = self.query_one("#new-memory-input", Input).value.strip()
+            self._switch(new_name or self.query_one("#memory-select", Select).value)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        event.stop()
+        new_name = self.query_one("#new-memory-input", Input).value.strip()
+        if new_name:
+            self._switch(new_name)
+
+
 class AgentScreen(Screen):
     """Default screen. Overrides ctrl+c copy to confirm the selection copy."""
 
@@ -1163,6 +1258,7 @@ class AgentApp(App):
     BINDINGS: ClassVar[list[BindingType]] = [
         ("ctrl+c,super+c", "copy_or_quit", "Copy/Quit"),
         ("ctrl+l", "clear_log", "Clear log"),
+        ("ctrl+m", "open_memory", "Memories"),
         ("ctrl+p", "open_connection", "Connect"),
         ("ctrl+t", "toggle_theme", "Toggle theme"),
         ("escape", "stop_agent", "Stop agent"),
@@ -1738,6 +1834,12 @@ class AgentApp(App):
         if self._agent_running:
             return
         await self.push_screen(ConnectionScreen())
+
+    async def action_open_memory(self) -> None:
+        """Open the memory picker. Ignored while the agent is busy."""
+        if self._agent_running:
+            return
+        await self.push_screen(MemoryScreen())
 
 
 def run_tui() -> None:

@@ -47,17 +47,21 @@ from remie.tools import (
     TOOL_REGISTRY,
     ask_user_tool,
     edit_file_tool,
+    get_active_memory_name,
     get_blocked_command_reason,
     get_custom_blocked_commands,
     get_tool_summary,
     glob_files_tool,
     list_files_tool,
+    list_memory_names,
+    memory_dir,
     memory_file_path,
     memory_tool,
     read_file_tool,
     resolve_abs_path,
     run_command_tool,
     session_file_path,
+    set_active_memory_name,
     tree_files_tool,
 )
 
@@ -786,6 +790,63 @@ class TestMemoryTool:
         assert result["action"] == "add"
         assert "hi there" in run_tool("memory", {"action": "read"})["content"]
 
+    def test_named_memory_is_isolated(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        memory_tool("add", "design note", name="design")
+        assert "design note" in memory_tool("read", name="design")["content"]
+        # The default memory stays empty.
+        assert memory_tool("read")["content"] == ""
+        assert memory_file_path("design").is_file()
+        assert not memory_file_path().exists()
+
+    def test_named_memory_clear(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        memory_tool("add", "x", name="design")
+        memory_tool("clear", name="design")
+        assert memory_tool("read", name="design")["content"] == ""
+
+    def test_memory_tool_defaults_to_active(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        set_active_memory_name("design")
+        memory_tool("add", "active note")
+        # Default name resolves to the active memory.
+        assert "active note" in memory_tool("read")["content"]
+        assert "active note" in memory_tool("read", name="design")["content"]
+        assert memory_tool("read", name="general")["content"] == ""
+
+    def test_list_action(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        memory_tool("add", "a", name="design")
+        memory_tool("add", "b", name="papers")
+        names = memory_tool("list")["memories"]
+        assert "general" in names and "design" in names and "papers" in names
+
+    def test_memory_name_sanitized(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        result = memory_tool("add", "x", name="My Design Notes!")
+        assert result["name"] == "my-design-notes"
+
+    def test_active_memory_get_set(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        assert get_active_memory_name() == "general"
+        assert set_active_memory_name("  Design  ") == "design"
+        assert get_active_memory_name() == "design"
+
+    def test_legacy_memory_migrates_on_first_use(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        legacy = tmp_path / ".remie" / "memory.md"
+        legacy.parent.mkdir(parents=True, exist_ok=True)
+        legacy.write_text("- [old] legacy note\n", encoding="utf-8")
+        content = memory_tool("read")["content"]
+        assert "legacy note" in content
+        assert not legacy.exists()
+        assert memory_file_path("general").is_file()
+
+    def test_list_memory_names_helper(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        memory_tool("add", "a", name="design")
+        assert list_memory_names() == ["design", "general"]
+
 
 class TestLoadAgentMemory:
     def test_absent_returns_empty(self, tmp_path, monkeypatch):
@@ -798,6 +859,15 @@ class TestLoadAgentMemory:
         section = load_agent_memory()
         assert "## Agent memory" in section
         assert "the project uses ruff" in section
+
+    def test_reads_active_memory_only(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        set_active_memory_name("design")
+        memory_tool("add", "active-memory fact", name="design")
+        memory_tool("add", "general fact", name="general")
+        section = load_agent_memory()
+        assert "active-memory fact" in section
+        assert "general fact" not in section
 
     def test_truncates_at_limit(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)

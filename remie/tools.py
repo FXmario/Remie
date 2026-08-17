@@ -16,8 +16,64 @@ def _remie_dir() -> Path:
     return Path.cwd() / ".remie"
 
 
-def memory_file_path() -> Path:
-    return _remie_dir() / "memory.md"
+DEFAULT_MEMORY_NAME = "general"
+
+
+def _sanitize_memory_name(name: str) -> str:
+    """Coerce a memory name to a safe file stem."""
+    cleaned = re.sub(r"[^a-zA-Z0-9._-]+", "-", str(name).strip().lower()).strip(".-")
+    return cleaned or DEFAULT_MEMORY_NAME
+
+
+def memory_dir() -> Path:
+    return _remie_dir() / "memory"
+
+
+def memory_file_path(name: str = DEFAULT_MEMORY_NAME) -> Path:
+    return memory_dir() / f"{_sanitize_memory_name(name)}.md"
+
+
+def active_memory_file_path() -> Path:
+    return _remie_dir() / "active_memory"
+
+
+def get_active_memory_name() -> str:
+    """Return the project's active memory name (default 'general')."""
+    path = active_memory_file_path()
+    try:
+        name = _sanitize_memory_name(path.read_text(encoding="utf-8").strip())
+    except (OSError, UnicodeError):
+        return DEFAULT_MEMORY_NAME
+    return name or DEFAULT_MEMORY_NAME
+
+
+def set_active_memory_name(name: str) -> str:
+    """Persist the active memory name; returns the sanitized name."""
+    name = _sanitize_memory_name(name)
+    path = active_memory_file_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(name, encoding="utf-8")
+    return name
+
+
+def list_memory_names() -> list[str]:
+    """Return all existing memory names plus the default, sorted."""
+    directory = memory_dir()
+    names = set([DEFAULT_MEMORY_NAME])
+    if directory.is_dir():
+        for entry in directory.iterdir():
+            if entry.is_file() and entry.suffix == ".md":
+                names.add(entry.stem)
+    return sorted(names)
+
+
+def _migrate_legacy_memory() -> None:
+    """Move the old single-file .remie/memory.md to memory/general.md once."""
+    legacy = _remie_dir() / "memory.md"
+    target = memory_file_path(DEFAULT_MEMORY_NAME)
+    if legacy.is_file() and not target.exists():
+        target.parent.mkdir(parents=True, exist_ok=True)
+        legacy.rename(target)
 
 
 def session_file_path() -> Path:
@@ -416,34 +472,37 @@ def ask_user_tool(
     return {"question": question, "options": options or []}
 
 
-def memory_tool(action: str, text: str = "") -> dict[str, Any]:
+def memory_tool(action: str, text: str = "", name: str = "") -> dict[str, Any]:
     """
-    Persists a note to the project memory file (.remie/memory.md), reads it, or
-    clears it. Use to remember durable facts, decisions, user preferences, and
-    open tasks across sessions; do not log routine progress.
+    Persists a note to a project memory file (.remie/memory/<name>.md), reads
+    it, or clears it. Use to remember durable facts, decisions, user
+    preferences, and open tasks across sessions; do not log routine progress.
     :param action: 'add' to append a timestamped note, 'read' to return all
-        notes, or 'clear' to wipe the memory file.
+        notes, 'clear' to wipe the memory file, or 'list' to list names.
     :param text: The note to add (ignored unless action is 'add').
+    :param name: The memory to target; defaults to the active memory.
     :return: A dictionary with the action taken and the full memory content.
     """
+    _migrate_legacy_memory()
     action = (action or "read").strip().lower()
+    if action == "list":
+        return {"action": "list", "memories": list_memory_names()}
+    resolved = _sanitize_memory_name(name) if name else get_active_memory_name()
+    path = memory_file_path(resolved)
     if action == "add":
-        path = memory_file_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         timestamp = _dt.datetime.now().isoformat(timespec="seconds")
         line = f"- [{timestamp}] {text.strip()}"
         existing = path.read_text(encoding="utf-8") if path.exists() else ""
         content = f"{existing.rstrip()}\n{line}\n" if existing.strip() else f"{line}\n"
         path.write_text(content, encoding="utf-8")
-        return {"action": "add", "file": str(path), "content": content}
+        return {"action": "add", "name": resolved, "file": str(path), "content": content}
     if action == "clear":
-        path = memory_file_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("", encoding="utf-8")
-        return {"action": "clear", "file": str(path), "content": ""}
-    path = memory_file_path()
+        return {"action": "clear", "name": resolved, "file": str(path), "content": ""}
     content = path.read_text(encoding="utf-8") if path.exists() else ""
-    return {"action": "read", "file": str(path), "content": content}
+    return {"action": "read", "name": resolved, "file": str(path), "content": content}
 
 
 TOOL_REGISTRY = {

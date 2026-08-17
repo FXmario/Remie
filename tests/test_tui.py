@@ -28,6 +28,7 @@ from remie.tui import (
     AgentScreen,
     AskUserScreen,
     ConnectionScreen,
+    MemoryScreen,
     ModelBadge,
     PromptSubmitted,
     PromptTextArea,
@@ -37,6 +38,11 @@ from remie.tui import (
     _has_tool_call,
     _is_tmux,
     _load_status_gif,
+)
+from remie.tools import (
+    get_active_memory_name,
+    memory_tool,
+    set_active_memory_name,
 )
 
 
@@ -1012,6 +1018,76 @@ def test_memory_tool_add_refreshes_system_prompt(monkeypatch):
             await app.run_agent_turn("save it")
             await pilot.pause()
             assert "remember X" in app.conversation[0]["content"]
+
+    asyncio.run(exercise())
+
+
+def test_ctrl_m_opens_memory_picker(monkeypatch):
+    async def exercise():
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            await pilot.press("ctrl+m")
+            await pilot.pause()
+            assert len(app.screen_stack) == 2
+            assert isinstance(app.screen, MemoryScreen)
+            assert app.screen.query_one("#memory-select", Select)
+            assert app.screen.query_one("#new-memory-input")
+
+    asyncio.run(exercise())
+
+
+def test_memory_picker_switch_updates_active(monkeypatch):
+    async def exercise():
+        memory_tool("add", "design fact", name="design")
+
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            await pilot.press("ctrl+m")
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, MemoryScreen)
+            assert get_active_memory_name() == "general"
+            select = screen.query_one("#memory-select", Select)
+            select.value = "design"
+            screen.on_select_changed(Select.Changed(select, "design"))
+            await pilot.pause()
+            assert get_active_memory_name() == "design"
+            assert "design fact" in app.conversation[0]["content"]
+
+    asyncio.run(exercise())
+
+
+def test_memory_picker_create_new_memory(monkeypatch):
+    async def exercise():
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            await pilot.press("ctrl+m")
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, MemoryScreen)
+            screen._switch("notes")
+            await pilot.pause()
+            assert get_active_memory_name() == "notes"
+            assert len(app.screen_stack) == 1
+
+    asyncio.run(exercise())
+
+
+def test_memory_picker_blocked_while_agent_running(monkeypatch):
+    async def exercise():
+        async def endless_stream(_conversation, usage_box=None, reasoning_box=None, finish_box=None):
+            while True:
+                yield "chunk"
+                await asyncio.sleep(0)
+
+        monkeypatch.setattr(tui, "stream_llm_call", endless_stream)
+
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            app._agent_running = True
+            await app.action_open_memory()
+            await pilot.pause()
+            assert len(app.screen_stack) == 1
 
     asyncio.run(exercise())
 

@@ -18,11 +18,12 @@ from rich.text import Text
 from remie.tools import (
     TOOL_REGISTRY,
     edit_file_tool,
+    get_active_memory_name,
     get_tool_str_representation,
     glob_files_tool,
     list_files_tool,
-    memory_tool,
     memory_file_path,
+    memory_tool,
     read_file_tool,
     run_command_tool,
     session_file_path,
@@ -285,7 +286,7 @@ If no tool is needed, respond normally.
 When multiple valid approaches have meaningful tradeoffs or require a user preference, do not choose silently. Briefly explain the options and ask the user which they prefer. Continue autonomously for routine implementation details or when one option clearly dominates. Do not ask unnecessary confirmation questions.
 To ask the user a question, call the 'ask_user' tool and wait for its result instead of ending your turn.
 
-Use the 'memory' tool to persist durable facts, decisions, user preferences, and open tasks that should be remembered across sessions. Add a note when you learn something that will matter later; do not log routine progress. Your saved memory is loaded automatically at the start of each session.
+Use the 'memory' tool to persist durable facts, decisions, user preferences, and open tasks that should be remembered across sessions. Add a note when you learn something that will matter later; do not log routine progress. Your active memory is loaded automatically at the start of each session. Use memory(action="list") to see available memories and memory(action="read", name="...") to read others.
 """
 
 
@@ -311,10 +312,10 @@ def load_project_context() -> str:
 
 def load_agent_memory() -> str:
     """
-    Load the agent's persistent memory notes from .remie/memory.md in the launch
-    directory. Returns an empty string when there is no memory file.
+    Load the agent's active memory notes from .remie/memory/<name>.md in the
+    launch directory. Returns an empty string when there is no memory file.
     """
-    memory_file = memory_file_path()
+    memory_file = memory_file_path(get_active_memory_name())
     if not memory_file.is_file():
         return ""
     try:
@@ -328,7 +329,7 @@ def load_agent_memory() -> str:
             content[:MEMORY_MAX_CHARS].rstrip()
             + "\n\n(Memory truncated for context.)\n"
         )
-    return f"\n\n## Agent memory (from .remie/memory.md)\n{content}"
+    return f"\n\n## Agent memory (from .remie/memory/{get_active_memory_name()}.md)\n{content}"
 
 
 def get_full_system_prompt():
@@ -672,6 +673,7 @@ def run_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
             return memory_tool(
                 args.get("action", "read"),
                 args.get("text", ""),
+                args.get("name", ""),
             )
         return TOOL_REGISTRY[name](**args)
     except (OSError, UnicodeError, TypeError, ValueError) as error:
