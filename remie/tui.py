@@ -24,7 +24,8 @@ from rich.text import Text
 from textual import work
 from textual.actions import SkipAction
 from textual.app import App, ComposeResult
-from textual.binding import BindingType
+from textual.binding import Binding, BindingType
+from textual.keys import format_key
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.geometry import Size
 from textual.message import Message
@@ -73,10 +74,13 @@ from remie.agent import (
 )
 
 from remie.tools import (
-    get_active_memory_name,
+    create_memory,
+    delete_memory,
+    find_memory_by_id,
+    get_active_memory_id,
     get_tool_summary,
-    list_memory_names,
-    set_active_memory_name,
+    list_memories,
+    set_active_memory_id,
 )
 
 REASONING_EFFORTS = ("off", "low", "medium", "high", "max")
@@ -1182,15 +1186,19 @@ class MemoryScreen(ModalScreen):
 
     def __init__(self) -> None:
         super().__init__()
-        self._names: list[str] = []
+        self._memories: list[dict] = []
+
+    def _refresh_memories(self) -> None:
+        self._memories = list_memories()
 
     def compose(self) -> ComposeResult:
-        self._names = list_memory_names()
+        self._refresh_memories()
+        active = get_active_memory_id()
         with Vertical(id="memory-dialog"):
             yield Label("Memories", id="dialog-title")
             yield Select(
-                [(name, name) for name in self._names],
-                value=get_active_memory_name(),
+                [(memory["name"], memory["id"]) for memory in self._memories],
+                value=active if active else Select.NULL,
                 prompt="Select active memory...",
                 id="memory-select",
             )
@@ -1200,42 +1208,96 @@ class MemoryScreen(ModalScreen):
             )
             with Horizontal(classes="row"):
                 yield Button("Switch", variant="primary", id="memory-switch")
+                yield Button("Delete", variant="error", id="memory-delete")
                 yield Button("Cancel", id="memory-cancel")
 
     def on_mount(self) -> None:
         self.query_one("#memory-select", Select).focus()
 
-    def _switch(self, name: str | None) -> None:
-        if not name:
+    def _selected_id(self) -> str | None:
+        value = self.query_one("#memory-select", Select).value
+        return value if isinstance(value, str) and value else None
+
+    def _switch(self, memory_id: str | None) -> None:
+        if not memory_id:
             self.notify("Enter or pick a memory name", severity="warning")
             return
-        name = set_active_memory_name(name)
+        memory = find_memory_by_id(memory_id)
+        if memory is None:
+            self.notify("Unknown memory", severity="warning")
+            return
+        set_active_memory_id(memory_id)
         app = self.app
         if isinstance(app, AgentApp):
             app._refresh_system_prompt()
-            app.notify(f"Active memory: {name}", title="Memory")
+            app.notify(f"Active memory: {memory['name']}", title="Memory")
         self.dismiss()
+
+    async def _delete_current(self) -> None:
+        memory_id = self._selected_id()
+        if not memory_id:
+            self.notify("Select a memory to delete", severity="warning")
+            return
+        memory = find_memory_by_id(memory_id)
+        if memory is None:
+            self.notify("Unknown memory", severity="warning")
+            return
+        answer = await self.app.push_screen_wait(
+            AskUserScreen(
+                f"Delete memory '{memory['name']}'? This cannot be undone.",
+                ["Delete", "Cancel"],
+            )
+        )
+        if answer != "Delete":
+            return
+        delete_memory(memory_id)
+        self._refresh_memories()
+        select = self.query_one("#memory-select", Select)
+        select.set_options(
+            [(memory["name"], memory["id"]) for memory in self._memories]
+        )
+        active = get_active_memory_id()
+        select.value = active if active else Select.NULL
+        app = self.app
+        if isinstance(app, AgentApp):
+            app._refresh_system_prompt()
+        self.notify(f"Deleted memory '{memory['name']}'", title="Memory")
 
     def on_select_changed(self, event: Select.Changed) -> None:
         if event.select.id == "memory-select" and event.value is not Select.NULL:
             # Select posts a Changed with the preset value on mount; skip it so
             # the modal doesn't immediately dismiss itself.
-            if event.value != get_active_memory_name():
+            if event.value != get_active_memory_id():
                 self._switch(event.value)
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "memory-cancel":
             self.dismiss()
             return
         if event.button.id == "memory-switch":
             new_name = self.query_one("#new-memory-input", Input).value.strip()
-            self._switch(new_name or self.query_one("#memory-select", Select).value)
+            if new_name:
+                try:
+                    memory = create_memory(new_name)
+                except ValueError as error:
+                    self.notify(str(error), severity="warning")
+                    return
+                self._switch(memory["id"])
+            else:
+                self._switch(self._selected_id())
+        elif event.button.id == "memory-delete":
+            await self._delete_current()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         event.stop()
         new_name = self.query_one("#new-memory-input", Input).value.strip()
         if new_name:
-            self._switch(new_name)
+            try:
+                memory = create_memory(new_name)
+            except ValueError as error:
+                self.notify(str(error), severity="warning")
+                return
+            self._switch(memory["id"])
 
 
 class AgentScreen(Screen):
@@ -1258,11 +1320,18 @@ class AgentApp(App):
     BINDINGS: ClassVar[list[BindingType]] = [
         ("ctrl+c,super+c", "copy_or_quit", "Copy/Quit"),
         ("ctrl+l", "clear_log", "Clear log"),
-        ("ctrl+m", "open_memory", "Memories"),
+        ("ctrl+o", "open_memory", "Memories"),
         ("ctrl+p", "open_connection", "Connect"),
         ("ctrl+t", "toggle_theme", "Toggle theme"),
         ("escape", "stop_agent", "Stop agent"),
     ]
+
+    def get_key_display(self, binding: Binding) -> str:
+        """Render keys like `Ctrl+p` in the footer instead of Textual's `^p`."""
+        modifiers, key = binding.parse_key()
+        key = format_key(key)
+        display_mods = [modifier.title() for modifier in modifiers]
+        return "+".join([*display_mods, key])
 
     def get_default_screen(self) -> Screen:
         return AgentScreen(id="_default")

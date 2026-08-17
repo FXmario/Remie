@@ -40,9 +40,12 @@ from remie.tui import (
     _load_status_gif,
 )
 from remie.tools import (
-    get_active_memory_name,
+    create_memory,
+    delete_memory,
+    find_memory_by_id,
+    get_active_memory_id,
     memory_tool,
-    set_active_memory_name,
+    set_active_memory_id,
 )
 
 
@@ -1026,32 +1029,33 @@ def test_ctrl_m_opens_memory_picker(monkeypatch):
     async def exercise():
         app = AgentApp()
         async with app.run_test() as pilot:
-            await pilot.press("ctrl+m")
+            await pilot.press("ctrl+o")
             await pilot.pause()
             assert len(app.screen_stack) == 2
             assert isinstance(app.screen, MemoryScreen)
             assert app.screen.query_one("#memory-select", Select)
             assert app.screen.query_one("#new-memory-input")
+            assert app.screen.query_one("#memory-delete")
 
     asyncio.run(exercise())
 
 
 def test_memory_picker_switch_updates_active(monkeypatch):
     async def exercise():
-        memory_tool("add", "design fact", name="design")
+        design = memory_tool("add", "design fact", name="design")
 
         app = AgentApp()
         async with app.run_test() as pilot:
-            await pilot.press("ctrl+m")
+            await pilot.press("ctrl+o")
             await pilot.pause()
             screen = app.screen
             assert isinstance(screen, MemoryScreen)
-            assert get_active_memory_name() == "general"
+            assert get_active_memory_id() == design["id"]
             select = screen.query_one("#memory-select", Select)
-            select.value = "design"
-            screen.on_select_changed(Select.Changed(select, "design"))
+            select.value = design["id"]
+            screen.on_select_changed(Select.Changed(select, design["id"]))
             await pilot.pause()
-            assert get_active_memory_name() == "design"
+            assert get_active_memory_id() == design["id"]
             assert "design fact" in app.conversation[0]["content"]
 
     asyncio.run(exercise())
@@ -1061,14 +1065,71 @@ def test_memory_picker_create_new_memory(monkeypatch):
     async def exercise():
         app = AgentApp()
         async with app.run_test() as pilot:
-            await pilot.press("ctrl+m")
+            await pilot.press("ctrl+o")
             await pilot.pause()
             screen = app.screen
             assert isinstance(screen, MemoryScreen)
-            screen._switch("notes")
+            memory = create_memory("notes")
+            screen._switch(memory["id"])
             await pilot.pause()
-            assert get_active_memory_name() == "notes"
+            assert get_active_memory_id() == memory["id"]
+            assert find_memory_by_id(memory["id"])["name"] == "notes"
             assert len(app.screen_stack) == 1
+
+    asyncio.run(exercise())
+
+
+def test_memory_picker_deletes_memory(monkeypatch):
+    async def exercise():
+        design = memory_tool("add", "to be deleted", name="design")
+
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            await pilot.press("ctrl+o")
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, MemoryScreen)
+
+            async def fake_push(screen_):
+                return "Delete"
+
+            monkeypatch.setattr(app, "push_screen_wait", fake_push)
+            select = screen.query_one("#memory-select", Select)
+            select.value = design["id"]
+            await screen._delete_current()
+            await pilot.pause()
+
+            assert find_memory_by_id(design["id"]) is None
+            select_options = [
+                value for _, value in screen.query_one("#memory-select", Select)._options
+            ]
+            assert design["id"] not in select_options
+
+    asyncio.run(exercise())
+
+
+def test_memory_picker_delete_confirm_cancel(monkeypatch):
+    async def exercise():
+        design = memory_tool("add", "keep me", name="design")
+
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            await pilot.press("ctrl+o")
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, MemoryScreen)
+
+            async def fake_cancel(screen_):
+                return None
+
+            monkeypatch.setattr(app, "push_screen_wait", fake_cancel)
+            select = screen.query_one("#memory-select", Select)
+            select.value = design["id"]
+            await screen._delete_current()
+            await pilot.pause()
+
+            assert find_memory_by_id(design["id"]) is not None
+            assert "keep me" in memory_tool("read", name="design")["content"]
 
     asyncio.run(exercise())
 
