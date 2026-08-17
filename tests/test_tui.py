@@ -713,6 +713,45 @@ def test_format_tokens():
     assert _format_tokens(25000) == "25k"
 
 
+def test_derive_memory_name_short_text():
+    assert tui._derive_memory_name("fix the auth bug") == "fix the auth bug"
+
+
+def test_derive_memory_name_cleans_whitespace():
+    assert tui._derive_memory_name("  fix   the\nbug  ") == "fix the bug"
+
+
+def test_derive_memory_name_truncates_at_word_boundary():
+    long_task = "refactor the authentication module " * 10
+    name = tui._derive_memory_name(long_task)
+    assert len(name) <= tui.MEMORY_NAME_MAX_CHARS
+    # The cut falls on a word boundary, never mid-word.
+    assert len(name) < 50 or name.rsplit(" ", 1)[-1] in {
+        "refactor",
+        "the",
+        "authentication",
+        "module",
+    }
+
+
+def test_derive_memory_name_empty_returns_general():
+    assert tui._derive_memory_name("") == "general"
+    assert tui._derive_memory_name("   \n  ") == "general"
+
+
+def test_derive_memory_name_multimodal_uses_text():
+    task = [
+        {"type": "text", "text": "explain this screenshot"},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
+    ]
+    assert tui._derive_memory_name(task) == "explain this screenshot"
+
+
+def test_derive_memory_name_multimodal_no_text_returns_general():
+    task = [{"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}]
+    assert tui._derive_memory_name(task) == "general"
+
+
 def test_has_tool_call_detects_dsml():
     assert _has_tool_call(
         '<|DSML|>invoke name="list-files">\n<|DSML|>parameter path="." />'
@@ -1020,6 +1059,71 @@ def test_memory_tool_add_refreshes_system_prompt(monkeypatch):
             await app.run_agent_turn("save it")
             await pilot.pause()
             assert "remember X" in app.conversation[0]["content"]
+
+    asyncio.run(exercise())
+
+
+def test_memory_add_without_name_is_auto_named_and_activated(monkeypatch):
+    async def exercise():
+        calls = 0
+
+        async def tool_stream(
+            _conversation, usage_box=None, reasoning_box=None, finish_box=None
+        ):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                yield 'tool: memory({"action": "add", "text": "remember Y"})'
+            else:
+                yield "done"
+
+        monkeypatch.setattr(tui, "stream_llm_call", tool_stream)
+
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            await app.run_agent_turn("refactor the parser module")
+            await pilot.pause()
+
+            active = get_active_memory_id()
+            assert active is not None
+            assert find_memory_by_id(active)["name"] == "refactor the parser module"
+            assert "remember Y" in memory_tool("read")["content"]
+            assert "remember Y" in app.conversation[0]["content"]
+            log_lines = [strip.text for strip in app.query_one("#log").lines]
+            assert any("auto-named" in line for line in log_lines)
+
+    asyncio.run(exercise())
+
+
+def test_named_memory_add_is_not_renamed(monkeypatch):
+    async def exercise():
+        calls = 0
+
+        async def tool_stream(
+            _conversation, usage_box=None, reasoning_box=None, finish_box=None
+        ):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                yield (
+                    'tool: memory({"action": "add", "text": "design fact", '
+                    '"name": "design"})'
+                )
+            else:
+                yield "done"
+
+        monkeypatch.setattr(tui, "stream_llm_call", tool_stream)
+
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            await app.run_agent_turn("refactor the parser module")
+            await pilot.pause()
+
+            # The explicit name wins; no task-derived memory is created.
+            assert find_memory_by_id(get_active_memory_id()) is None or (
+                find_memory_by_id(get_active_memory_id())["name"] != "refactor the parser module"
+            )
+            assert "design fact" in memory_tool("read", name="design")["content"]
 
     asyncio.run(exercise())
 

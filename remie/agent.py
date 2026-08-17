@@ -288,6 +288,7 @@ When multiple valid approaches have meaningful tradeoffs or require a user prefe
 To ask the user a question, call the 'ask_user' tool and wait for its result instead of ending your turn.
 
 Use the 'memory' tool to persist durable facts, decisions, user preferences, and open tasks that should be remembered across sessions. Add a note when you learn something that will matter later; do not log routine progress. Your active memory is loaded automatically at the start of each session. Use memory(action="list") to see memories (each with an id and a name), and target a memory by name or id; memory(action="delete", name=...) removes a memory entirely.
+When saving a note (memory(action="add")), name the memory after the task you are working on (e.g. name="fix auth bug") so each task gets its own named memory. If you omit the name, one is derived from the current task for you.
 """
 
 

@@ -625,7 +625,10 @@ def memory_tool(
     :param text: The note to add (ignored unless action is 'add').
     :param id: The memory uuid to target; wins over `name`.
     :param name: The memory name to target (or create on 'add'); defaults to
-        the active memory when both id and name are empty.
+        the active memory when both id and name are empty. For action 'add',
+        always pass a short descriptive name that summarizes the task you are
+        working on (e.g. name="refactor auth module") so notes are grouped by
+        task; if omitted, one is derived from the current task.
     :return: A dictionary with the action taken, the memory id/name, and the
         full memory content where relevant.
     """
