@@ -47,6 +47,7 @@ from remie.agent import (
     OPENCODE_GO_BASE_URL,
     OPENCODE_GO_MODELS,
     UnsupportedModelError,
+    clear_session,
     configure_openai,
     estimate_conversation_tokens,
     estimate_message_tokens,
@@ -59,12 +60,15 @@ from remie.agent import (
     get_connection_error_message,
     get_full_system_prompt,
     get_model_context_limit,
+    load_session,
     render_assistant_panel,
     render_user_message,
     run_tool,
     save_config,
+    save_session,
     stream_llm_call,
     strip_protocol_lines,
+    summarize_messages,
     supports_reasoning_effort,
 )
 
@@ -1202,13 +1206,74 @@ class AgentApp(App):
         self.query_one(ThinkingIndicator).set_status(status)
 
     def on_mount(self) -> None:
-        self.conversation = [{"role": "system", "content": get_full_system_prompt()}]
-        self._cached_conv_tokens = estimate_conversation_tokens(self.conversation)
         self.sub_title = ""
         prompt = self.query_one("#prompt", PromptTextArea)
         self.query_one(ModelBadge).update_config(get_config())
+        self._resume_session()
         prompt.focus()
         self._prefetch_model_context()
+
+    def _refresh_system_prompt(self) -> None:
+        """Rebuild the system message from the current prompt (incl. memory) and
+        keep the conversation token cache in sync."""
+        new_system = {"role": "system", "content": get_full_system_prompt()}
+        if self.conversation and self.conversation[0]["role"] == "system":
+            self._cached_conv_tokens += estimate_message_tokens(
+                new_system
+            ) - estimate_message_tokens(self.conversation[0])
+            self.conversation[0] = new_system
+        else:
+            self.conversation.insert(0, new_system)
+            self._cached_conv_tokens += estimate_message_tokens(new_system)
+
+    def _resume_session(self) -> bool:
+        """Load a saved session into the conversation and replay it into the
+        log. Returns True when a session was resumed."""
+        data = load_session()
+        if data is None:
+            self.conversation = [
+                {"role": "system", "content": get_full_system_prompt()}
+            ]
+            self._cached_conv_tokens = estimate_conversation_tokens(
+                self.conversation
+            )
+            return False
+        self.conversation = list(data["messages"])
+        self._cached_conv_tokens = estimate_conversation_tokens(
+            self.conversation
+        )
+        # Pick up any changes to AGENTS.md / memory since the session was saved.
+        self._refresh_system_prompt()
+        log = self.query_one("#log", StreamingRichLog)
+        log.write(
+            f"[dim]Session resumed from {data.get('saved_at', 'earlier')}[/]"
+        )
+        for message in self.conversation[1:]:
+            role = message.get("role")
+            content = message.get("content")
+            if role == "user" and isinstance(content, str):
+                if content.startswith("tool_result("):
+                    log.write("[dim]· tool result[/]")
+                else:
+                    log.write(render_user_message(content))
+            elif role == "assistant" and isinstance(content, str):
+                shown = strip_protocol_lines(content).strip()
+                if shown:
+                    log.write(
+                        render_assistant_panel(shown, self._code_theme())
+                    )
+        log.write("")
+        return True
+
+    def _save_session(self) -> None:
+        save_session(self.conversation)
+
+    def on_unmount(self) -> None:
+        """Persist the conversation so a later launch can resume it."""
+        try:
+            self._save_session()
+        except Exception:
+            pass
 
     @work(exclusive=False)
     async def _prefetch_model_context(self) -> None:
@@ -1339,20 +1404,24 @@ class AgentApp(App):
         )
         return tokens >= limit * COMPACTION_CONTEXT_RATIO
 
-    def _compact_conversation(self) -> None:
-        """Trim old context when the window is nearly full so long tasks continue."""
+    async def _compact_conversation(self) -> None:
+        """Trim old context when the window is nearly full so long tasks continue.
+
+        The messages being dropped are summarized into a compact "session
+        memory" note that stays in the conversation; the terse omitted-note
+        fallback is used when the summary call fails or yields nothing.
+        """
         if len(self.conversation) <= 2:
             return
+        dropped = self.conversation[1:-COMPACTION_KEEP_MESSAGES]
+        summary = await summarize_messages(dropped) if dropped else ""
+        note = summary or (
+            "(Earlier conversation was omitted because the context window was "
+            "nearly full. Continue based on the most recent messages below.)"
+        )
         tail = self.conversation[1:][-COMPACTION_KEEP_MESSAGES:]
         self.conversation = self.conversation[:1] + [
-            {
-                "role": "system",
-                "content": (
-                    "(Earlier conversation was omitted because the context "
-                    "window was nearly full. Continue based on the most "
-                    "recent messages below.)"
-                ),
-            }
+            {"role": "system", "content": note}
         ] + tail
         self._cached_conv_tokens = estimate_conversation_tokens(self.conversation)
 
@@ -1369,7 +1438,7 @@ class AgentApp(App):
                     log.write("[dim]Stopped by user[/]")
                     break
                 if self._conversation_too_large(self._context_limit()):
-                    self._compact_conversation()
+                    await self._compact_conversation()
                     log.write(
                         "[dim]Context window nearly full — older messages compacted.[/]"
                     )
@@ -1595,6 +1664,10 @@ class AgentApp(App):
                         log.write(
                             f"[bold magenta]tool_result:[/] {escape(result_json)}"
                         )
+                    if name == "memory" and isinstance(result, dict) and (
+                        result.get("action") in {"add", "clear"}
+                    ):
+                        self._refresh_system_prompt()
                     self._push_message("user", f"tool_result({result_json})")
         except (
             httpx.TimeoutException,
@@ -1628,7 +1701,9 @@ class AgentApp(App):
             )
         finally:
             self._agent_running = False
-            if not completed:
+            if completed:
+                self._save_session()
+            else:
                 self._set_status("ready")
 
     def action_clear_log(self) -> None:
@@ -1636,6 +1711,9 @@ class AgentApp(App):
         self._total_input_tokens = 0
         self._total_output_tokens = 0
         self.query_one(ModelBadge).set_tokens(0, 0)
+        clear_session()
+        self.conversation = [{"role": "system", "content": get_full_system_prompt()}]
+        self._cached_conv_tokens = estimate_conversation_tokens(self.conversation)
 
     def action_copy_or_quit(self) -> None:
         """Copy selected text, or quit when nothing is selected."""

@@ -14,8 +14,13 @@ from remie.agent import (
     LLMRequestError,
     ConnectionConfig,
     OPENCODE_GO_BASE_URL,
+    clear_session,
     configure_openai,
     get_config,
+    load_session,
+    save_session,
+    session_file_path,
+    strip_protocol_lines,
 )
 from remie.tui import (
     MAX_AUTO_CONTINUATIONS,
@@ -247,7 +252,7 @@ def test_compaction_recomputes_token_cache(monkeypatch):
                 {"role": "user", "content": "recent"},
             ]
             app._cached_conv_tokens = 999_999
-            app._compact_conversation()
+            await app._compact_conversation()
             assert app._cached_conv_tokens == tui.estimate_conversation_tokens(
                 app.conversation
             )
@@ -846,11 +851,167 @@ def test_conversation_compaction_keeps_system_and_recent(monkeypatch):
                 {"role": "user", "content": "recent"},
             ]
             assert app._conversation_too_large(500) is True
-            app._compact_conversation()
+            await app._compact_conversation()
             assert app.conversation[0]["role"] == "system"
             assert "omitted" in app.conversation[1]["content"]
             assert app.conversation[-1]["content"] == "recent"
             assert len(app.conversation) == 6
+
+    asyncio.run(exercise())
+
+
+def test_compaction_summarizes_dropped_messages(monkeypatch):
+    async def exercise():
+        async def fake_stream(
+            _conversation, usage_box=None, reasoning_box=None, finish_box=None
+        ):
+            yield "SUMMARY: user wanted type hints and a ruff config"
+
+        monkeypatch.setattr("remie.agent.stream_llm_call", fake_stream)
+
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            app.conversation = [
+                {"role": "system", "content": "sys"},
+                *[
+                    {"role": "user", "content": f"old message {i} " * 30}
+                    for i in range(14)
+                ],
+            ]
+            await app._compact_conversation()
+            assert "SUMMARY: user wanted" in app.conversation[1]["content"]
+            assert app.conversation[1]["role"] == "system"
+
+    asyncio.run(exercise())
+
+
+def test_compaction_falls_back_when_summary_fails(monkeypatch):
+    async def exercise():
+        async def failing_stream(
+            _conversation, usage_box=None, reasoning_box=None, finish_box=None
+        ):
+            raise RuntimeError("boom")
+            yield
+
+        monkeypatch.setattr("remie.agent.stream_llm_call", failing_stream)
+
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            app.conversation = [
+                {"role": "system", "content": "sys"},
+                *[
+                    {"role": "user", "content": f"old message {i} " * 30}
+                    for i in range(14)
+                ],
+            ]
+            await app._compact_conversation()
+            assert "omitted" in app.conversation[1]["content"]
+
+    asyncio.run(exercise())
+
+
+def test_on_mount_resumes_session(monkeypatch):
+    async def exercise():
+        save_session(
+            [
+                {"role": "system", "content": "sys"},
+                {"role": "user", "content": "hello there"},
+                {"role": "assistant", "content": "hi"},
+            ]
+        )
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            assert app.conversation[-1]["content"] == "hi"
+            assert app._cached_conv_tokens == tui.estimate_conversation_tokens(
+                app.conversation
+            )
+            log_lines = [strip.text for strip in app.query_one("#log").lines]
+            assert any("Session resumed" in line for line in log_lines)
+
+    asyncio.run(exercise())
+
+
+def test_on_mount_fresh_when_no_session(monkeypatch):
+    async def exercise():
+        clear_session()
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            assert len(app.conversation) == 1
+            assert app.conversation[0]["role"] == "system"
+
+    asyncio.run(exercise())
+
+
+def test_action_clear_log_drops_session(monkeypatch):
+    async def exercise():
+        async def fake_stream(_conversation, usage_box=None, reasoning_box=None, finish_box=None):
+            if False:
+                yield ""
+
+        monkeypatch.setattr(tui, "stream_llm_call", fake_stream)
+
+        save_session(
+            [
+                {"role": "system", "content": "sys"},
+                {"role": "user", "content": "hello"},
+            ]
+        )
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            assert len(app.conversation) == 2
+            await pilot.press("ctrl+l")
+            await pilot.pause()
+            assert len(app.conversation) == 1
+            assert app.conversation[0]["role"] == "system"
+            assert not session_file_path().exists()
+            assert load_session() is None
+
+    asyncio.run(exercise())
+
+
+def test_session_saved_after_turn(monkeypatch):
+    async def exercise():
+        async def fake_stream(_conversation, usage_box=None, reasoning_box=None, finish_box=None):
+            yield "final reply"
+
+        monkeypatch.setattr(tui, "stream_llm_call", fake_stream)
+
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            await app.run_agent_turn("hello")
+            await pilot.pause()
+            assert session_file_path().is_file()
+            data = load_session()
+            assert data is not None
+            joined = " ".join(
+                str(m.get("content")) for m in data["messages"]
+            )
+            assert "final reply" in joined
+
+    asyncio.run(exercise())
+
+
+def test_memory_tool_add_refreshes_system_prompt(monkeypatch):
+    async def exercise():
+        calls = 0
+
+        async def tool_stream(
+            _conversation, usage_box=None, reasoning_box=None, finish_box=None
+        ):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                yield 'tool: memory({"action": "add", "text": "remember X"})'
+            else:
+                yield "done"
+
+        monkeypatch.setattr(tui, "stream_llm_call", tool_stream)
+
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            await app.run_agent_turn("save it")
+            await pilot.pause()
+            assert "remember X" in app.conversation[0]["content"]
 
     asyncio.run(exercise())
 

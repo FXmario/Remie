@@ -15,7 +15,9 @@ A terminal-based coding agent with a [Textual](https://textual.textualize.io/) T
 - The model name is shown on the top-right of the input box border
 - Uses your terminal's native color scheme (ANSI), so the UI matches your system theme — like opencode
 - Async agent loop — the UI stays responsive while the LLM responds and tools run
-- Tools: `read_file`, `list_files`, `glob_files`, `tree_files`, `edit_file`, `run_command`, `ask_user`
+- Tools: `read_file`, `list_files`, `glob_files`, `tree_files`, `edit_file`, `run_command`, `ask_user`, `memory`
+- **Agent memory** — the agent can persist durable facts, decisions, and open tasks to `.remie/memory.md` with the `memory` tool (add/read/clear); the notes are auto-loaded into the system prompt each launch. When a long session nears the context window, dropped messages are summarized into a compact memory note instead of being silently truncated
+- **Session resume** — the conversation is saved to `.remie/session.json` after each turn and on quit, then auto-resumed on the next launch in the same project. `Ctrl+L` clears the log and drops the saved session to start fresh
 - **Command safety** — `run_command` blocks destructive commands before they execute (`rm -rf /`, `rm -rf ~`, disk formatting/partitioning, shutdown/reboot, `chmod -R`/`chown -R` on `/` or `~`, fork bombs, `curl | sh`, `dd` to raw block devices, ...) and shows a `Blocked command` line in the log with the reason
 - `REMIE_BLOCKED_COMMANDS` — comma-separated extra substrings (e.g. `git push --force`) that are always blocked, case-insensitive
 - `ask_user` — when the agent needs a decision, it pops a modal with predefined choices and a free-text answer field instead of guessing

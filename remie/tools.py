@@ -1,5 +1,6 @@
 """Tool implementations for the Remie coding assistant."""
 
+import datetime as _dt
 import difflib
 import fnmatch
 import inspect
@@ -8,6 +9,19 @@ import re
 import subprocess
 from pathlib import Path
 from typing import Any
+
+
+def _remie_dir() -> Path:
+    """Directory holding per-project memory and session data."""
+    return Path.cwd() / ".remie"
+
+
+def memory_file_path() -> Path:
+    return _remie_dir() / "memory.md"
+
+
+def session_file_path() -> Path:
+    return _remie_dir() / "session.json"
 
 
 def resolve_abs_path(path_str: str) -> Path:
@@ -402,6 +416,36 @@ def ask_user_tool(
     return {"question": question, "options": options or []}
 
 
+def memory_tool(action: str, text: str = "") -> dict[str, Any]:
+    """
+    Persists a note to the project memory file (.remie/memory.md), reads it, or
+    clears it. Use to remember durable facts, decisions, user preferences, and
+    open tasks across sessions; do not log routine progress.
+    :param action: 'add' to append a timestamped note, 'read' to return all
+        notes, or 'clear' to wipe the memory file.
+    :param text: The note to add (ignored unless action is 'add').
+    :return: A dictionary with the action taken and the full memory content.
+    """
+    action = (action or "read").strip().lower()
+    if action == "add":
+        path = memory_file_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        timestamp = _dt.datetime.now().isoformat(timespec="seconds")
+        line = f"- [{timestamp}] {text.strip()}"
+        existing = path.read_text(encoding="utf-8") if path.exists() else ""
+        content = f"{existing.rstrip()}\n{line}\n" if existing.strip() else f"{line}\n"
+        path.write_text(content, encoding="utf-8")
+        return {"action": "add", "file": str(path), "content": content}
+    if action == "clear":
+        path = memory_file_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("", encoding="utf-8")
+        return {"action": "clear", "file": str(path), "content": ""}
+    path = memory_file_path()
+    content = path.read_text(encoding="utf-8") if path.exists() else ""
+    return {"action": "read", "file": str(path), "content": content}
+
+
 TOOL_REGISTRY = {
     "read_file": read_file_tool,
     "list_files": list_files_tool,
@@ -410,6 +454,7 @@ TOOL_REGISTRY = {
     "glob_files": glob_files_tool,
     "tree_files": tree_files_tool,
     "ask_user": ask_user_tool,
+    "memory": memory_tool,
 }
 
 TOOL_SUMMARIES = {
@@ -420,6 +465,7 @@ TOOL_SUMMARIES = {
     "glob_files": "finding files matching a glob pattern",
     "tree_files": "showing the directory tree",
     "ask_user": "asking the user a question",
+    "memory": "saving or recalling a memory note",
 }
 
 

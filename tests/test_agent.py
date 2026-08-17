@@ -12,6 +12,7 @@ from remie.agent import (
     LLMRequestError,
     OPENCODE_GO_BASE_URL,
     OPENCODE_GO_MODELS,
+    clear_session,
     configure_openai,
     estimate_conversation_tokens,
     estimate_message_tokens,
@@ -25,14 +26,18 @@ from remie.agent import (
     get_full_system_prompt,
     get_max_output_tokens,
     get_model_context_limit,
+    load_agent_memory,
     load_config,
+    load_session,
     render_assistant_message,
     render_assistant_panel,
     render_user_message,
     run_tool,
     save_config,
+    save_session,
     stream_llm_call,
     strip_protocol_lines,
+    summarize_messages,
     supports_reasoning_effort,
 )
 
@@ -47,9 +52,12 @@ from remie.tools import (
     get_tool_summary,
     glob_files_tool,
     list_files_tool,
+    memory_file_path,
+    memory_tool,
     read_file_tool,
     resolve_abs_path,
     run_command_tool,
+    session_file_path,
     tree_files_tool,
 )
 
@@ -741,6 +749,121 @@ class TestSupportsReasoningEffort:
 
     def test_unknown_model_defaults_to_supported(self):
         assert supports_reasoning_effort("brand-new-model", "opencode-go") is True
+
+
+class TestMemoryTool:
+    def test_add_read_clear_roundtrip(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        assert memory_tool("read")["content"] == ""
+
+        result = memory_tool("add", "remember this fact")
+        assert result["action"] == "add"
+        assert "- [2" in result["content"] and "remember this fact" in result["content"]
+        assert memory_file_path().is_file()
+
+        content = memory_tool("read")["content"]
+        assert "remember this fact" in content
+        assert "[" in content and "]" in content
+
+        memory_tool("clear")
+        assert memory_tool("read")["content"] == ""
+
+    def test_add_appends_notes(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        memory_tool("add", "first")
+        memory_tool("add", "second")
+        content = memory_tool("read")["content"]
+        assert content.index("first") < content.index("second")
+
+    def test_unknown_action_reads(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        memory_tool("add", "note")
+        assert "note" in memory_tool("whatever")["content"]
+
+    def test_run_tool_dispatches_memory(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        result = run_tool("memory", {"action": "add", "text": "hi there"})
+        assert result["action"] == "add"
+        assert "hi there" in run_tool("memory", {"action": "read"})["content"]
+
+
+class TestLoadAgentMemory:
+    def test_absent_returns_empty(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        assert load_agent_memory() == ""
+
+    def test_present_returns_section(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        memory_tool("add", "the project uses ruff")
+        section = load_agent_memory()
+        assert "## Agent memory" in section
+        assert "the project uses ruff" in section
+
+    def test_truncates_at_limit(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        memory_tool("add", "x" * 9000)
+        section = load_agent_memory()
+        assert "Memory truncated" in section
+        assert len(section) < 9000
+
+
+class TestSessionSaveLoadClear:
+    def test_save_load_roundtrip(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        messages = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "hello"},
+        ]
+        save_session(messages)
+        data = load_session()
+        assert data is not None
+        assert data["version"] == 1
+        assert data["messages"] == messages
+        assert session_file_path().is_file()
+
+    def test_clear_removes_file(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        save_session([{"role": "system", "content": "s"}, {"role": "user", "content": "u"}])
+        clear_session()
+        assert not session_file_path().exists()
+        assert load_session() is None
+
+    def test_system_only_not_saved(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        save_session([{"role": "system", "content": "only"}])
+        assert not session_file_path().exists()
+
+    def test_corrupt_file_returns_none(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        session_file_path().parent.mkdir(parents=True, exist_ok=True)
+        session_file_path().write_text("{not json", encoding="utf-8")
+        assert load_session() is None
+
+
+class TestSummarizeMessages:
+    def test_returns_joined_summary(self, monkeypatch):
+        async def fake_stream(conversation, usage_box=None, reasoning_box=None, finish_box=None):
+            yield "key fact one"
+            yield "key fact two"
+
+        monkeypatch.setattr("remie.agent.stream_llm_call", fake_stream)
+        result = asyncio.run(
+            summarize_messages([{"role": "user", "content": "old"}])
+        )
+        assert result == "key fact onekey fact two"
+
+    def test_empty_messages_returns_empty(self, monkeypatch):
+        assert asyncio.run(summarize_messages([])) == ""
+
+    def test_failure_returns_empty(self, monkeypatch):
+        async def failing_stream(conversation, usage_box=None, reasoning_box=None, finish_box=None):
+            raise RuntimeError("boom")
+            yield
+
+        monkeypatch.setattr("remie.agent.stream_llm_call", failing_stream)
+        assert asyncio.run(
+            summarize_messages([{"role": "user", "content": "x"}])
+        ) == ""
 
 
 class TestStripProtocolLines:
