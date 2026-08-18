@@ -7,7 +7,7 @@ from rich.console import Group
 from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.text import Text
-from textual.widgets import Select
+from textual.widgets import Button, Select
 
 import remie.tui as tui
 from remie.agent import (
@@ -1222,13 +1222,20 @@ def test_memory_picker_deletes_memory(monkeypatch):
             screen = app.screen
             assert isinstance(screen, MemoryScreen)
 
-            async def fake_push(screen_):
-                return "Delete"
-
-            monkeypatch.setattr(app, "push_screen_wait", fake_push)
             select = screen.query_one("#memory-select", Select)
             select.value = design["id"]
-            await screen._delete_current()
+
+            # Trigger Delete via the real button; _delete_current is a @work
+            # worker that pushes the real AskUserScreen modal we drive below.
+            # Driving the real modal (not a stubbed push_screen_wait) is what
+            # catches the NoActiveWorker regression.
+            screen.query_one("#memory-delete", Button).press()
+            await pilot.pause()
+            assert isinstance(app.screen, AskUserScreen)
+
+            # Selecting an option auto-dismisses AskUserScreen with that value.
+            app.screen.query_one("#ask-options", Select).value = "Delete"
+            await pilot.pause()
             await pilot.pause()
 
             assert find_memory_by_id(design["id"]) is None
