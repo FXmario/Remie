@@ -32,6 +32,7 @@ A terminal-based coding agent with a [Textual](https://textual.textualize.io/) T
 
 - Python >= 3.14
 - An OpenAI-compatible local LLM server (e.g. llama.cpp server)
+- Optional: [Codex CLI](https://github.com/openai/codex) for ChatGPT subscription access
 
 ## Setup
 
@@ -72,6 +73,21 @@ Configure the LLM connection via environment variables (a `.env` file is loaded 
 | `REMIE_MAX_AUTO_CONTINUATIONS` | Max silent auto-continuations per response | `10` |
 | `REMIE_BLOCKED_COMMANDS` | Comma-separated extra command substrings that are always blocked (e.g. `git push --force,aws s3 rm`) | (unset) |
 
+### Codex CLI
+
+Remie can use the Codex CLI app-server with an existing ChatGPT subscription.
+Install and authenticate Codex separately:
+
+```bash
+npm install -g @openai/codex
+codex login
+```
+
+Choose **Codex CLI** in the connection picker. Remie starts `codex app-server`
+on demand and keeps its JSON-RPC session alive between turns. Remie does not
+store or read Codex authentication tokens. Codex runs read-only with approvals
+disabled while Remie continues to own and execute its existing tools.
+
 ### OpenCode Go
 
 You can also connect to [OpenCode Go](https://opencode.ai/docs/go/) — a low-cost
@@ -85,6 +101,7 @@ the input. From there you can:
 - Choose **Local (llama.cpp)** to use your environment-configured server
 - Choose **OpenAI API**, enter an OpenAI API key, and pick from the models returned by OpenAI
 - Choose **OpenCode Go**, paste your API key (from [opencode.ai/auth](https://opencode.ai/auth)), and pick a model — the model list is fetched live, falling back to a bundled list
+- Choose **Codex CLI** to use the locally installed and authenticated Codex CLI without an API key
 - Choose a reasoning effort (`off`, `low`, `medium`, `high`, or `max`) supported by your provider
 
 The connection form shows provider-specific fields after you choose a provider.

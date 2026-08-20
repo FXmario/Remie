@@ -284,6 +284,17 @@ def test_model_badge_includes_vendor():
     )
     assert remote_badge.render().plain == "kimi-k3  OpenCode Go"
 
+    codex_badge = ModelBadge()
+    codex_badge.update_config(
+        ConnectionConfig("", "", "", provider="codex", reasoning_effort="off")
+    )
+    assert codex_badge.render().plain == "Codex CLI"
+
+    codex_badge.update_config(
+        ConnectionConfig("", "", "gpt-5", provider="codex", reasoning_effort="off")
+    )
+    assert codex_badge.render().plain == "gpt-5  Codex CLI"
+
 
 def test_connection_error_shows_toast_and_keeps_app_running(monkeypatch):
     async def exercise():

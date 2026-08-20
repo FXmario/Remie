@@ -16,6 +16,7 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.text import Text
 
+from remie.codex_connector import CodexAppServer, CodexConnectorError
 from remie.tools import (
     TOOL_REGISTRY,
     edit_file_tool,
@@ -43,7 +44,8 @@ OPENCODE_GO_BASE_URL = "https://opencode.ai/zen/go/v1"
 OPENAI_BASE_URL = "https://api.openai.com/v1"
 LOCAL_BASE_URL = "http://localhost:7070/v1"
 CONFIG_VERSION = 2
-SUPPORTED_PROVIDERS = ("local", "openai", "opencode-go")
+SUPPORTED_PROVIDERS = ("local", "openai", "opencode-go", "codex")
+CODEX_DEFAULT_MODEL = ""
 
 OPENAI_MODELS = [
     "gpt-4o-mini",
@@ -98,6 +100,8 @@ def supports_reasoning_effort(model: str, provider: str = "local") -> bool:
     `/chat/completions` endpoint accept the parameter; unknown models default to
     supported.
     """
+    if provider == "codex":
+        return True
     if provider == "openai":
         return model.lower().startswith(("o1", "o3", "o4", "gpt-5"))
     if provider != "opencode-go":
@@ -149,9 +153,13 @@ class ConnectionConfig:
     provider: str = "local"
     reasoning_effort: str = "medium"
     verify_ssl: bool = False
+    codex_binary: str = "codex"
+    codex_home: str = ""
 
 
 def _provider_defaults(provider: str) -> ConnectionConfig:
+    if provider == "codex":
+        return ConnectionConfig("", "", CODEX_DEFAULT_MODEL, "codex", "medium", True)
     if provider == "openai":
         return ConnectionConfig(
             OPENAI_BASE_URL,
@@ -225,6 +233,8 @@ def load_config() -> ConnectionConfig:
                     active_provider,
                     profile.get("reasoning_effort", defaults.reasoning_effort),
                     bool(profile.get("verify_ssl", defaults.verify_ssl)),
+                    profile.get("codex_binary", defaults.codex_binary),
+                    profile.get("codex_home", defaults.codex_home),
                 )
         base_url = data.get("base_url", "")
         provider = data.get(
@@ -242,6 +252,8 @@ def load_config() -> ConnectionConfig:
             provider=provider,
             reasoning_effort=data.get("reasoning_effort", "medium"),
             verify_ssl=bool(data.get("verify_ssl", False)),
+            codex_binary=data.get("codex_binary", "codex"),
+            codex_home=data.get("codex_home", ""),
         )
     except (OSError, json.JSONDecodeError):
         return _default_config()
@@ -256,21 +268,22 @@ def save_config(config: ConnectionConfig) -> None:
 
 def load_provider_configs() -> dict[str, ConnectionConfig]:
     """Load provider profiles, migrating the old single-profile format."""
-    profiles = {provider: _provider_defaults(provider) for provider in SUPPORTED_PROVIDERS}
     try:
         data = json.loads(CONFIG_FILE.read_text())
     except (OSError, json.JSONDecodeError):
         active = _default_config()
-        profiles[active.provider] = active
-        return profiles
+        return {
+            provider: _provider_defaults(provider) for provider in SUPPORTED_PROVIDERS
+        } | {active.provider: active}
 
     stored = data.get("providers")
     if isinstance(stored, dict):
+        profiles: dict[str, ConnectionConfig] = {}
         for provider in SUPPORTED_PROVIDERS:
             profile = stored.get(provider)
             if not isinstance(profile, dict):
                 continue
-            defaults = profiles[provider]
+            defaults = _provider_defaults(provider)
             profiles[provider] = ConnectionConfig(
                 profile.get("base_url", defaults.base_url),
                 profile.get("api_key", defaults.api_key),
@@ -278,13 +291,16 @@ def load_provider_configs() -> dict[str, ConnectionConfig]:
                 provider,
                 profile.get("reasoning_effort", defaults.reasoning_effort),
                 bool(profile.get("verify_ssl", defaults.verify_ssl)),
+                profile.get("codex_binary", defaults.codex_binary),
+                profile.get("codex_home", defaults.codex_home),
             )
         return profiles
 
     # Legacy config.json contained only the active connection.
     legacy = load_config()
-    profiles[legacy.provider] = legacy
-    return profiles
+    return {
+        provider: _provider_defaults(provider) for provider in SUPPORTED_PROVIDERS
+    } | {legacy.provider: legacy}
 
 
 def save_provider_configs(
@@ -302,6 +318,8 @@ def save_provider_configs(
                 "model": config.model,
                 "reasoning_effort": config.reasoning_effort,
                 "verify_ssl": config.verify_ssl,
+                "codex_binary": config.codex_binary,
+                "codex_home": config.codex_home,
             }
             for provider, config in profiles.items()
             if provider in SUPPORTED_PROVIDERS
@@ -330,6 +348,8 @@ _verified_local_client: httpx.AsyncClient | None = None
 _remote_client: httpx.AsyncClient | None = None
 _local_openai_client: AsyncOpenAI | None = None
 _local_openai_client_key: tuple[str, str, bool] | None = None
+_codex_connector: CodexAppServer | None = None
+_codex_connector_key: tuple[str, str] | None = None
 
 
 def _get_http_client() -> httpx.AsyncClient:
@@ -369,9 +389,11 @@ def configure_openai(
     provider: str = "local",
     reasoning_effort: str = "medium",
     verify_ssl: bool = False,
+    codex_binary: str = "codex",
+    codex_home: str = "",
 ) -> ConnectionConfig:
     """Update the active connection configuration."""
-    global _config, _local_openai_client, _local_openai_client_key
+    global _config, _local_openai_client, _local_openai_client_key, _codex_connector_key
     _config = ConnectionConfig(
         base_url=base_url,
         api_key=api_key,
@@ -379,9 +401,12 @@ def configure_openai(
         provider=provider,
         reasoning_effort=reasoning_effort,
         verify_ssl=verify_ssl,
+        codex_binary=codex_binary,
+        codex_home=codex_home,
     )
     _local_openai_client = None
     _local_openai_client_key = None
+    _codex_connector_key = None
     return _config
 
 
@@ -444,6 +469,27 @@ async def fetch_openai_models(api_key: str) -> list[str]:
             return models or list(OPENAI_MODELS)
         except (httpx.HTTPError, ValueError, KeyError, TypeError, AttributeError):
             return list(OPENAI_MODELS)
+
+
+async def fetch_codex_models(binary: str = "codex", home: str = "") -> list[str]:
+    """Discover models through a temporary authenticated Codex app-server."""
+    connector = CodexAppServer(binary, home)
+    try:
+        await connector.start(os.getcwd())
+        result = await connector._request("model/list", {})
+        models = result.get("data") or result.get("models") or []
+        ids = [
+            item.get("id")
+            for item in models
+            if isinstance(item, dict) and isinstance(item.get("id"), str)
+        ]
+        return ids or [CODEX_DEFAULT_MODEL]
+    except CodexConnectorError:
+        # Model discovery is optional; the connection attempt will show the
+        # actionable install/login error if the CLI is unavailable.
+        return [CODEX_DEFAULT_MODEL]
+    finally:
+        await connector.close()
 
 
 def get_model_context_limit(model: str, provider: str = "local") -> int | None:
@@ -706,6 +752,28 @@ async def stream_llm_call(
     reasoning_box: list[str] | None = None,
     finish_box: dict[str, Any] | None = None,
 ) -> AsyncIterator[str]:
+    global _codex_connector, _codex_connector_key
+    if _config.provider == "codex":
+        key = (_config.codex_binary, _config.codex_home)
+        if _codex_connector is None or _codex_connector_key != key:
+            if _codex_connector is not None:
+                await _codex_connector.close()
+            _codex_connector = CodexAppServer(*key)
+            _codex_connector_key = key
+        try:
+            async for content in _codex_connector.stream(
+                conversation,
+                model=_config.model,
+                reasoning_effort=_config.reasoning_effort,
+                usage_box=usage_box,
+                reasoning_box=reasoning_box,
+                finish_box=finish_box,
+            ):
+                yield content
+        except CodexConnectorError:
+            await _codex_connector.close()
+            raise
+        return
     max_output_tokens = get_max_output_tokens(_config.provider)
     reasoning_supported = supports_reasoning_effort(_config.model, _config.provider)
     payload: dict[str, Any] = {
