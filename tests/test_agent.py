@@ -10,6 +10,8 @@ from rich.text import Text
 
 from remie.agent import (
     LLMRequestError,
+    OPENAI_BASE_URL,
+    OPENAI_MODELS,
     OPENCODE_GO_BASE_URL,
     OPENCODE_GO_MODELS,
     clear_session,
@@ -21,6 +23,7 @@ from remie.agent import (
     extract_thinking,
     extract_tool_invocations,
     fetch_opencode_go_models,
+    fetch_openai_models,
     get_config,
     get_connection_error_message,
     get_full_system_prompt,
@@ -28,12 +31,14 @@ from remie.agent import (
     get_model_context_limit,
     load_agent_memory,
     load_config,
+    load_provider_configs,
     load_session,
     render_assistant_message,
     render_assistant_panel,
     render_user_message,
     run_tool,
     save_config,
+    save_provider_configs,
     save_session,
     stream_llm_call,
     strip_protocol_lines,
@@ -1103,6 +1108,93 @@ def _patch_llm_stream(monkeypatch, lines, status_code=200, body=""):
 
 
 class TestStreamLlmUsageAndReasoning:
+    def test_local_provider_uses_openai_sdk_stream(self, monkeypatch):
+        import asyncio
+        import remie.agent as agent
+
+        class Delta:
+            content = "reply"
+            reasoning_content = "think"
+
+        class Choice:
+            delta = Delta()
+            finish_reason = "stop"
+
+        class Usage:
+            prompt_tokens = 12
+            completion_tokens = 7
+
+        class Chunk:
+            choices = [Choice()]
+            usage = None
+
+        class UsageChunk:
+            choices = []
+            usage = Usage()
+
+        class Stream:
+            def __aiter__(self):
+                async def generate():
+                    yield Chunk()
+                    yield UsageChunk()
+
+                return generate()
+
+        class Completions:
+            def __init__(self):
+                self.payload = None
+
+            async def create(self, **payload):
+                self.payload = payload
+                return Stream()
+
+        class Client:
+            def __init__(self):
+                self.chat = type("Chat", (), {"completions": Completions()})()
+
+        client = Client()
+        previous = agent.get_config()
+        try:
+            agent.configure_openai(
+                "http://localhost:7070/v1",
+                "local-key",
+                "local-model",
+                provider="local",
+                reasoning_effort="off",
+            )
+            monkeypatch.setattr(agent, "_local_openai_client", client)
+            monkeypatch.setattr(
+                agent,
+                "_local_openai_client_key",
+                ("http://localhost:7070/v1", "local-key", False),
+            )
+            usage = {}
+            reasoning = []
+            finish = {}
+
+            async def collect():
+                return [
+                    chunk
+                    async for chunk in agent.stream_llm_call(
+                        [], usage, reasoning, finish
+                    )
+                ]
+
+            assert asyncio.run(collect()) == ["reply"]
+            assert reasoning == ["think"]
+            assert usage == {"prompt_tokens": 12, "completion_tokens": 7}
+            assert finish["finish_reason"] == "stop"
+            assert client.chat.completions.payload["model"] == "local-model"
+        finally:
+            agent.configure_openai(
+                previous.base_url,
+                previous.api_key,
+                previous.model,
+                previous.provider,
+                previous.reasoning_effort,
+                previous.verify_ssl,
+            )
+
     def test_captures_usage_and_reasoning(self, monkeypatch):
         import asyncio
 
@@ -1466,6 +1558,44 @@ class TestConnectionConfig:
         save_config(original)
         assert load_config() == original
 
+    def test_provider_profiles_round_trip_and_retain_inactive_values(
+        self, tmp_path, monkeypatch
+    ):
+        import remie.agent as agent
+
+        config_file = tmp_path / "config.json"
+        monkeypatch.setattr(agent, "CONFIG_FILE", config_file)
+        monkeypatch.setattr(agent, "CONFIG_DIR", tmp_path)
+        profiles = {
+            "local": agent.ConnectionConfig(
+                "https://local.test/v1",
+                "local-key",
+                "local-model",
+                "local",
+                "high",
+                True,
+            ),
+            "openai": agent.ConnectionConfig(
+                agent.OPENAI_BASE_URL,
+                "openai-key",
+                "gpt-test",
+                "openai",
+                "off",
+                True,
+            ),
+            "opencode-go": agent.ConnectionConfig(
+                agent.OPENCODE_GO_BASE_URL,
+                "go-key",
+                "kimi-k3",
+                "opencode-go",
+                "medium",
+                True,
+            ),
+        }
+        save_provider_configs(profiles, "openai")
+        assert load_config() == profiles["openai"]
+        assert load_provider_configs() == profiles
+
     def test_load_config_derives_provider_for_legacy_file(self, tmp_path, monkeypatch):
         import remie.agent as agent
 
@@ -1494,6 +1624,33 @@ class TestConnectionConfig:
         assert models == OPENCODE_GO_MODELS
         # A failed fetch must not touch the cached context windows.
         assert agent._opencode_go_model_context == {"stale": 999}
+
+    def test_fetch_openai_models_parses_payload(self, monkeypatch):
+        import asyncio
+
+        class FakeResponse:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {"data": [{"id": "gpt-test"}, {"id": "o-test"}]}
+
+        async def fake_get(self, url, headers=None):
+            assert url == f"{OPENAI_BASE_URL}/models"
+            assert headers == {"Authorization": "Bearer valid"}
+            return FakeResponse()
+
+        monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+        assert asyncio.run(fetch_openai_models("valid")) == ["gpt-test", "o-test"]
+
+    def test_fetch_openai_models_falls_back_on_error(self, monkeypatch):
+        import asyncio
+
+        async def fake_get(self, url, headers=None):
+            raise httpx.ConnectError("boom")
+
+        monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+        assert asyncio.run(fetch_openai_models("invalid")) == OPENAI_MODELS
 
     def test_fetch_opencode_go_models_parses_payload(self, monkeypatch):
         import asyncio
@@ -1661,6 +1818,29 @@ class TestHttpClientTlsVerification:
             assert agent._get_http_client() is client
         finally:
             agent._remote_client = None
+            self._restore(previous)
+
+    def test_local_provider_can_use_verified_client(self):
+        import ssl
+        import remie.agent as agent
+
+        previous = agent.get_config()
+        try:
+            agent.configure_openai(
+                "https://localhost:7070/v1",
+                "key",
+                "local-model",
+                provider="local",
+                reasoning_effort="off",
+                verify_ssl=True,
+            )
+            agent._verified_local_client = None
+            client = agent._get_http_client()
+            assert client is not agent.http_client
+            verify_mode = client._transport._pool._ssl_context.verify_mode
+            assert verify_mode == ssl.CERT_REQUIRED
+        finally:
+            agent._verified_local_client = None
             self._restore(previous)
 
     def test_remote_stream_uses_verified_client(self, monkeypatch):

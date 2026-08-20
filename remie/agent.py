@@ -3,12 +3,13 @@ import json
 import os
 import re
 from collections.abc import AsyncIterator
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import httpx
 from dotenv import load_dotenv
+from openai import APIStatusError, AsyncOpenAI
 from rich.console import RenderableType
 from rich.markup import escape
 from rich.markdown import Markdown
@@ -39,6 +40,18 @@ CONFIG_DIR = Path(
 CONFIG_FILE = CONFIG_DIR / "config.json"
 
 OPENCODE_GO_BASE_URL = "https://opencode.ai/zen/go/v1"
+OPENAI_BASE_URL = "https://api.openai.com/v1"
+LOCAL_BASE_URL = "http://localhost:7070/v1"
+CONFIG_VERSION = 2
+SUPPORTED_PROVIDERS = ("local", "openai", "opencode-go")
+
+OPENAI_MODELS = [
+    "gpt-4o-mini",
+    "gpt-4.1-mini",
+    "gpt-4.1",
+    "gpt-5",
+    "o4-mini",
+]
 
 # Bundled fallback model list, used only when the OpenCode Go models API is
 # unreachable. The live list (and each model's context window) is fetched from
@@ -85,6 +98,8 @@ def supports_reasoning_effort(model: str, provider: str = "local") -> bool:
     `/chat/completions` endpoint accept the parameter; unknown models default to
     supported.
     """
+    if provider == "openai":
+        return model.lower().startswith(("o1", "o3", "o4", "gpt-5"))
     if provider != "opencode-go":
         return True
     return model not in NON_REASONING_EFFORT_MODELS
@@ -100,6 +115,7 @@ def get_max_output_tokens(provider: str = "local") -> int:
         except ValueError:
             pass
     return 32_768 if provider == "opencode-go" else 8_192
+
 
 OPENCODE_GO_DEFAULT_CONTEXT_LIMIT = 128_000
 PROJECT_CONTEXT_MAX_CHARS = 8000
@@ -132,19 +148,63 @@ class ConnectionConfig:
     model: str
     provider: str = "local"
     reasoning_effort: str = "medium"
+    verify_ssl: bool = False
+
+
+def _provider_defaults(provider: str) -> ConnectionConfig:
+    if provider == "openai":
+        return ConnectionConfig(
+            OPENAI_BASE_URL,
+            os.environ.get("OPENAI_API_KEY", ""),
+            os.environ.get("OPENAI_MODEL", OPENAI_MODELS[0]),
+            "openai",
+            "off",
+            True,
+        )
+    if provider == "opencode-go":
+        return ConnectionConfig(
+            OPENCODE_GO_BASE_URL,
+            "",
+            OPENCODE_GO_MODELS[0],
+            "opencode-go",
+            "medium",
+            True,
+        )
+    return ConnectionConfig(
+        os.environ.get("LLAMA_BASE_URL", LOCAL_BASE_URL),
+        os.environ.get("LLAMA_API_KEY", "llama-cpp"),
+        os.environ.get("LLAMA_MODEL", "local-model"),
+        "local",
+        os.environ.get("REMIE_REASONING_EFFORT", "medium"),
+        False,
+    )
 
 
 def _default_config() -> ConnectionConfig:
-    base_url = os.environ.get("LLAMA_BASE_URL", "http://localhost:7070/v1")
-    provider = (
-        "opencode-go" if base_url.rstrip("/") == OPENCODE_GO_BASE_URL else "local"
-    )
+    llama_base_url = os.environ.get("LLAMA_BASE_URL")
+    openai_key = os.environ.get("OPENAI_API_KEY", "")
+    if llama_base_url:
+        base_url = llama_base_url
+        provider = "local"
+        api_key = os.environ.get("LLAMA_API_KEY", "llama-cpp")
+        model = os.environ.get("LLAMA_MODEL", "local-model")
+    elif openai_key:
+        base_url = OPENAI_BASE_URL
+        provider = "openai"
+        api_key = openai_key
+        model = os.environ.get("OPENAI_MODEL", OPENAI_MODELS[0])
+    else:
+        base_url = LOCAL_BASE_URL
+        provider = "local"
+        api_key = os.environ.get("LLAMA_API_KEY", "llama-cpp")
+        model = os.environ.get("LLAMA_MODEL", "local-model")
     return ConnectionConfig(
         base_url=base_url,
-        api_key=os.environ.get("LLAMA_API_KEY", "llama-cpp"),
-        model=os.environ.get("LLAMA_MODEL", "local-model"),
+        api_key=api_key,
+        model=model,
         provider=provider,
         reasoning_effort=os.environ.get("REMIE_REASONING_EFFORT", "medium"),
+        verify_ssl=False,
     )
 
 
@@ -152,11 +212,27 @@ def load_config() -> ConnectionConfig:
     """Load saved connection config, falling back to environment defaults."""
     try:
         data = json.loads(CONFIG_FILE.read_text())
+        providers = data.get("providers")
+        if isinstance(providers, dict):
+            active_provider = data.get("active_provider") or data.get("provider")
+            if active_provider in SUPPORTED_PROVIDERS:
+                profile = providers.get(active_provider, {})
+                defaults = _provider_defaults(active_provider)
+                return ConnectionConfig(
+                    profile.get("base_url", defaults.base_url),
+                    profile.get("api_key", defaults.api_key),
+                    profile.get("model", defaults.model),
+                    active_provider,
+                    profile.get("reasoning_effort", defaults.reasoning_effort),
+                    bool(profile.get("verify_ssl", defaults.verify_ssl)),
+                )
         base_url = data.get("base_url", "")
         provider = data.get(
             "provider",
             "opencode-go"
             if base_url.rstrip("/") == OPENCODE_GO_BASE_URL
+            else "openai"
+            if base_url.rstrip("/") == OPENAI_BASE_URL
             else "local",
         )
         return ConnectionConfig(
@@ -165,15 +241,73 @@ def load_config() -> ConnectionConfig:
             model=data.get("model", ""),
             provider=provider,
             reasoning_effort=data.get("reasoning_effort", "medium"),
+            verify_ssl=bool(data.get("verify_ssl", False)),
         )
     except (OSError, json.JSONDecodeError):
         return _default_config()
 
 
 def save_config(config: ConnectionConfig) -> None:
-    """Persist connection config to disk."""
+    """Persist the active connection while retaining all provider profiles."""
+    profiles = load_provider_configs()
+    profiles[config.provider] = config
+    save_provider_configs(profiles, config.provider)
+
+
+def load_provider_configs() -> dict[str, ConnectionConfig]:
+    """Load provider profiles, migrating the old single-profile format."""
+    profiles = {provider: _provider_defaults(provider) for provider in SUPPORTED_PROVIDERS}
+    try:
+        data = json.loads(CONFIG_FILE.read_text())
+    except (OSError, json.JSONDecodeError):
+        active = _default_config()
+        profiles[active.provider] = active
+        return profiles
+
+    stored = data.get("providers")
+    if isinstance(stored, dict):
+        for provider in SUPPORTED_PROVIDERS:
+            profile = stored.get(provider)
+            if not isinstance(profile, dict):
+                continue
+            defaults = profiles[provider]
+            profiles[provider] = ConnectionConfig(
+                profile.get("base_url", defaults.base_url),
+                profile.get("api_key", defaults.api_key),
+                profile.get("model", defaults.model),
+                provider,
+                profile.get("reasoning_effort", defaults.reasoning_effort),
+                bool(profile.get("verify_ssl", defaults.verify_ssl)),
+            )
+        return profiles
+
+    # Legacy config.json contained only the active connection.
+    legacy = load_config()
+    profiles[legacy.provider] = legacy
+    return profiles
+
+
+def save_provider_configs(
+    profiles: dict[str, ConnectionConfig], active_provider: str
+) -> None:
+    """Persist all provider profiles and the provider currently in use."""
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    CONFIG_FILE.write_text(json.dumps(asdict(config), indent=2))
+    payload = {
+        "version": CONFIG_VERSION,
+        "active_provider": active_provider,
+        "providers": {
+            provider: {
+                "base_url": config.base_url,
+                "api_key": config.api_key,
+                "model": config.model,
+                "reasoning_effort": config.reasoning_effort,
+                "verify_ssl": config.verify_ssl,
+            }
+            for provider, config in profiles.items()
+            if provider in SUPPORTED_PROVIDERS
+        },
+    }
+    CONFIG_FILE.write_text(json.dumps(payload, indent=2))
 
 
 _config = load_config()
@@ -192,7 +326,10 @@ http_client = httpx.AsyncClient(
     timeout=HTTP_TIMEOUT,
 )
 
+_verified_local_client: httpx.AsyncClient | None = None
 _remote_client: httpx.AsyncClient | None = None
+_local_openai_client: AsyncOpenAI | None = None
+_local_openai_client_key: tuple[str, str, bool] | None = None
 
 
 def _get_http_client() -> httpx.AsyncClient:
@@ -202,8 +339,15 @@ def _get_http_client() -> httpx.AsyncClient:
     common on llama.cpp servers); any other provider uses a lazily-created
     client with certificate verification enabled.
     """
-    global _remote_client
+    global _remote_client, _verified_local_client
     if _config.provider == "local":
+        if _config.verify_ssl:
+            if _verified_local_client is None:
+                _verified_local_client = httpx.AsyncClient(
+                    verify=True,
+                    timeout=HTTP_TIMEOUT,
+                )
+            return _verified_local_client
         return http_client
     if _remote_client is None:
         _remote_client = httpx.AsyncClient(
@@ -224,17 +368,36 @@ def configure_openai(
     model: str,
     provider: str = "local",
     reasoning_effort: str = "medium",
+    verify_ssl: bool = False,
 ) -> ConnectionConfig:
     """Update the active connection configuration."""
-    global _config
+    global _config, _local_openai_client, _local_openai_client_key
     _config = ConnectionConfig(
         base_url=base_url,
         api_key=api_key,
         model=model,
         provider=provider,
         reasoning_effort=reasoning_effort,
+        verify_ssl=verify_ssl,
     )
+    _local_openai_client = None
+    _local_openai_client_key = None
     return _config
+
+
+def _get_local_openai_client() -> AsyncOpenAI:
+    """Return an OpenAI SDK client pointed at the local compatible server."""
+    global _local_openai_client, _local_openai_client_key
+    key = (_config.base_url, _config.api_key, _config.verify_ssl)
+    if _local_openai_client is None or _local_openai_client_key != key:
+        _local_openai_client = AsyncOpenAI(
+            api_key=_config.api_key,
+            base_url=_config.base_url,
+            http_client=_get_http_client(),
+            max_retries=0,
+        )
+        _local_openai_client_key = key
+    return _local_openai_client
 
 
 async def fetch_opencode_go_models(api_key: str) -> list[str]:
@@ -261,6 +424,26 @@ async def fetch_opencode_go_models(api_key: str) -> list[str]:
             return models or list(OPENCODE_GO_MODELS)
         except (httpx.HTTPError, ValueError, KeyError, TypeError, AttributeError):
             return list(OPENCODE_GO_MODELS)
+
+
+async def fetch_openai_models(api_key: str) -> list[str]:
+    """Fetch OpenAI model IDs, falling back when the API is unreachable."""
+    async with httpx.AsyncClient(verify=True, timeout=10) as client:
+        try:
+            response = await client.get(
+                f"{OPENAI_BASE_URL}/models",
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+            response.raise_for_status()
+            payload = response.json()
+            models = [
+                item["id"]
+                for item in payload.get("data", [])
+                if isinstance(item, dict) and item.get("id")
+            ]
+            return models or list(OPENAI_MODELS)
+        except (httpx.HTTPError, ValueError, KeyError, TypeError, AttributeError):
+            return list(OPENAI_MODELS)
 
 
 def get_model_context_limit(model: str, provider: str = "local") -> int | None:
@@ -478,22 +661,79 @@ def extract_dsml_invocations(text: str) -> list[tuple[str, dict[str, Any]]]:
     return invocations
 
 
+async def _stream_local_sdk_call(
+    payload: dict[str, Any],
+    usage_box: dict[str, int] | None,
+    reasoning_box: list[str] | None,
+    finish_box: dict[str, Any] | None,
+) -> AsyncIterator[str]:
+    try:
+        stream = await _get_local_openai_client().chat.completions.create(**payload)
+        async for chunk in stream:
+            choices = getattr(chunk, "choices", None) or []
+            if not choices:
+                usage = getattr(chunk, "usage", None)
+                if usage_box is not None and usage is not None:
+                    usage_box["prompt_tokens"] = getattr(usage, "prompt_tokens", 0) or 0
+                    usage_box["completion_tokens"] = (
+                        getattr(usage, "completion_tokens", 0) or 0
+                    )
+                continue
+            choice = choices[0]
+            finish_reason = getattr(choice, "finish_reason", None)
+            if finish_box is not None and finish_reason is not None:
+                finish_box["finish_reason"] = finish_reason
+                finish_box["truncated"] = finish_reason in TRUNCATED_REASONS
+            delta = getattr(choice, "delta", None)
+            if reasoning_box is not None and delta is not None:
+                reason = getattr(delta, "reasoning_content", None) or getattr(
+                    delta, "reasoning", None
+                )
+                if reason:
+                    reasoning_box.append(reason)
+            content = getattr(delta, "content", None) if delta is not None else None
+            if content:
+                yield content
+        if finish_box is not None:
+            finish_box["stream_complete"] = True
+    except APIStatusError as error:
+        raise LLMRequestError(error.status_code, str(error)) from error
+
+
 async def stream_llm_call(
     conversation: list[dict[str, Any]],
     usage_box: dict[str, int] | None = None,
     reasoning_box: list[str] | None = None,
     finish_box: dict[str, Any] | None = None,
 ) -> AsyncIterator[str]:
+    max_output_tokens = get_max_output_tokens(_config.provider)
+    reasoning_supported = supports_reasoning_effort(_config.model, _config.provider)
     payload: dict[str, Any] = {
         "model": _config.model,
         "messages": conversation,
-        "max_tokens": get_max_output_tokens(_config.provider),
+        "max_tokens": max_output_tokens,
         "stream": True,
     }
-    if _config.reasoning_effort != "off":
+    if _config.provider == "openai" and reasoning_supported:
+        payload.pop("max_tokens")
+        payload["max_completion_tokens"] = max_output_tokens
+    if (
+        _config.reasoning_effort != "off"
+        and reasoning_supported
+    ):
         payload["reasoning_effort"] = _config.reasoning_effort
     if usage_box is not None and _config.base_url.rstrip("/") == OPENCODE_GO_BASE_URL:
         payload["stream_options"] = {"include_usage": True}
+
+    # Keep the SDK local-only. The fake client used by unit tests also exercises
+    # the protocol parser below; real local connections always take this path.
+    if _config.provider == "local" and isinstance(_get_http_client(), httpx.AsyncClient):
+        async for content in _stream_local_sdk_call(
+            payload, usage_box, reasoning_box, finish_box
+        ):
+            yield content
+        return
+
     url = f"{_config.base_url.rstrip('/')}/chat/completions"
     headers = {"Authorization": f"Bearer {_config.api_key}"}
     async with _get_http_client().stream(

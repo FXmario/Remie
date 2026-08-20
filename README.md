@@ -64,6 +64,8 @@ Configure the LLM connection via environment variables (a `.env` file is loaded 
 | `LLAMA_BASE_URL`  | Base URL of the local LLM server   | `http://localhost:7070/v1` |
 | `LLAMA_API_KEY`   | API key for the server             | `llama-cpp`   |
 | `LLAMA_MODEL`     | Model name                         | `local-model` |
+| `OPENAI_API_KEY`  | OpenAI API key; API billing is separate from ChatGPT subscriptions | (unset) |
+| `OPENAI_MODEL`    | Initial OpenAI model selection     | `gpt-4o-mini` |
 | `REMIE_DEBUG`            | Show raw tool calls (name + params) | (unset)       |
 | `REMIE_REASONING_EFFORT` | Reasoning mode: off/low/medium/high/max | `medium`   |
 | `REMIE_MAX_OUTPUT_TOKENS` | Max output tokens per response | OpenCode Go `32768`, local `8192` |
@@ -81,8 +83,28 @@ Open the connection picker with `Ctrl+P` or by clicking the model name next to
 the input. From there you can:
 
 - Choose **Local (llama.cpp)** to use your environment-configured server
+- Choose **OpenAI API**, enter an OpenAI API key, and pick from the models returned by OpenAI
 - Choose **OpenCode Go**, paste your API key (from [opencode.ai/auth](https://opencode.ai/auth)), and pick a model — the model list is fetched live, falling back to a bundled list
 - Choose a reasoning effort (`off`, `low`, `medium`, `high`, or `max`) supported by your provider
+
+The connection form shows provider-specific fields after you choose a provider.
+Remote providers offer live model dropdowns; local llama.cpp connections use a
+manually entered model name.
+
+Remie remembers each provider's last-used values. Reopening the connection picker
+preselects the active provider, and switching providers restores that provider's
+URL, API key, model, reasoning setting, and local SSL preference.
+
+The local llama.cpp connection uses the official OpenAI Python SDK pointed at the
+configured OpenAI-compatible local endpoint. OpenAI API and OpenCode Go continue
+to use the existing HTTP streaming client.
+
+OpenAI API access uses an API key and is billed separately from ChatGPT Plus or Pro
+subscriptions. Remie does not use ChatGPT subscription credentials as API keys.
+
+For local llama.cpp connections, the connection picker includes **Verify local SSL
+certificates**. Turn it off only when the local server uses a self-signed certificate.
+OpenAI and OpenCode Go always verify remote TLS certificates.
 
 The Local provider exposes an editable Base URL field, defaulting to
 `http://localhost:7070/v1`. Managed providers use their built-in endpoint.

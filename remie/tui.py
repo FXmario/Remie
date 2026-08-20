@@ -39,12 +39,16 @@ from textual.widgets import (
     Label,
     RichLog,
     Select,
+    Switch,
     TextArea,
 )
 from textual_image.widget import SixelImage as TerminalImage
 
 from remie.agent import (
+    ConnectionConfig,
     LLMRequestError,
+    OPENAI_BASE_URL,
+    OPENAI_MODELS,
     OPENCODE_GO_BASE_URL,
     OPENCODE_GO_MODELS,
     UnsupportedModelError,
@@ -56,15 +60,17 @@ from remie.agent import (
     estimate_tokens_from_counts,
     extract_thinking,
     extract_tool_invocations,
+    fetch_openai_models,
     fetch_opencode_go_models,
     get_config,
     get_connection_error_message,
     get_full_system_prompt,
     get_model_context_limit,
+    load_provider_configs,
     render_assistant_panel,
     render_user_message,
     run_tool,
-    save_config,
+    save_provider_configs,
     save_session,
     stream_llm_call,
     strip_protocol_lines,
@@ -108,6 +114,7 @@ STREAM_UPDATE_MIN_INTERVAL = 0.1
 STREAM_UPDATE_CHARS_PER_SECOND = 50_000
 STREAM_PREVIEW_MAX_CHARS = 3000
 PROVIDER_BASE_URLS = {
+    "openai": OPENAI_BASE_URL,
     "opencode-go": OPENCODE_GO_BASE_URL,
 }
 
@@ -722,6 +729,8 @@ class ModelBadge(Label):
         vendor = (
             "OpenCode Go"
             if config.base_url.rstrip("/") == OPENCODE_GO_BASE_URL
+            else "OpenAI"
+            if config.base_url.rstrip("/") == OPENAI_BASE_URL
             else "Local"
         )
         self._model_text = config.model
@@ -864,6 +873,10 @@ class ConnectionScreen(ModalScreen):
     def __init__(self) -> None:
         super().__init__()
         self._stashed_effort: str | None = None
+        self._profiles = load_provider_configs()
+        current = get_config()
+        self._profiles[current.provider] = current
+        self._active_provider = current.provider
 
     CSS = """
     ConnectionScreen {
@@ -896,18 +909,17 @@ class ConnectionScreen(ModalScreen):
     """
 
     def compose(self) -> ComposeResult:
-        current = get_config()
+        current = self._profiles[self._active_provider]
         with Vertical(id="connection-dialog"):
             with VerticalScroll(id="connection-scroll"):
                 yield Label("Connection", id="dialog-title")
                 yield Select(
                     [
                         ("Local (llama.cpp)", "local"),
+                        ("OpenAI API", "openai"),
                         ("OpenCode Go", "opencode-go"),
                     ],
-                    value=current.provider
-                    if current.provider in {"local", "opencode-go"}
-                    else "local",
+                    value=self._active_provider,
                     id="provider-select",
                     prompt="Choose provider...",
                 )
@@ -925,14 +937,25 @@ class ConnectionScreen(ModalScreen):
                     id="api-key-input",
                 )
                 yield Label("Model")
-                model_list = list(OPENCODE_GO_MODELS)
-                if current.model and current.model not in model_list:
+                model_list = list(
+                    OPENAI_MODELS
+                    if current.provider == "openai"
+                    else OPENCODE_GO_MODELS
+                )
+                if current.provider == "local":
+                    model_list = list(OPENCODE_GO_MODELS)
+                if current.provider != "local" and current.model not in model_list:
                     model_list = [current.model] + model_list
                 yield Select(
                     [_model_option(model) for model in model_list],
                     value=current.model if current.model in model_list else model_list[0],
                     id="model-select",
                     prompt="Select model...",
+                )
+                yield Input(
+                    current.model if current.provider == "local" else "",
+                    placeholder="Enter the local model name",
+                    id="local-model-input",
                 )
                 yield Label("Reasoning effort", id="reasoning-effort-label")
                 yield Select(
@@ -943,6 +966,12 @@ class ConnectionScreen(ModalScreen):
                     id="reasoning-effort-select",
                     prompt="Select reasoning effort...",
                 )
+                yield Label("Verify local SSL certificates", id="verify-ssl-label")
+                yield Switch(
+                    value=current.verify_ssl,
+                    id="verify-ssl-switch",
+                    animate=False,
+                )
             with Horizontal(classes="row"):
                 yield Button("Submit", variant="primary", id="submit-button")
                 yield Button("Cancel", id="cancel-button")
@@ -952,25 +981,81 @@ class ConnectionScreen(ModalScreen):
         self._set_provider_fields(provider)
         self._update_reasoning_fields()
         self.query_one("#api-key-input", Input).focus()
+        if provider in {"openai", "opencode-go"}:
+            api_key = self.query_one("#api-key-input", Input).value.strip()
+            if api_key:
+                self.run_worker(
+                    self._refresh_models(api_key, str(provider)), exclusive=False
+                )
 
     def _set_provider_fields(self, provider: object) -> None:
         is_local = provider == "local"
+        has_provider = provider in {"local", "openai", "opencode-go"}
         base_url_input = self.query_one("#base-url-input", Input)
         base_url_label = self.query_one("#base-url-label", Label)
         base_url_input.display = is_local
         base_url_label.display = is_local
         base_url_input.disabled = not is_local
-        self.query_one("#model-select", Select).disabled = is_local
+        model_select = self.query_one("#model-select", Select)
+        local_model_input = self.query_one("#local-model-input", Input)
+        model_select.display = has_provider and not is_local
+        model_select.disabled = not has_provider or is_local
+        local_model_input.display = is_local
+        local_model_input.disabled = not is_local
+        reasoning_select = self.query_one("#reasoning-effort-select", Select)
+        reasoning_label = self.query_one("#reasoning-effort-label", Label)
+        reasoning_select.display = has_provider
+        reasoning_label.display = has_provider
+        verify_label = self.query_one("#verify-ssl-label", Label)
+        verify_switch = self.query_one("#verify-ssl-switch", Switch)
+        verify_label.display = is_local
+        verify_switch.display = is_local
+        verify_switch.disabled = not is_local
 
-    def _update_reasoning_fields(self) -> None:
+    def _capture_profile(self) -> None:
+        """Keep edits made to the current provider before switching away."""
+        provider = self._active_provider
+        model = (
+            self.query_one("#local-model-input", Input).value.strip()
+            if provider == "local"
+            else self._selected_model()
+        )
+        effort = self.query_one("#reasoning-effort-select", Select).value
+        if not isinstance(effort, str):
+            effort = "medium"
+        self._profiles[provider] = ConnectionConfig(
+            self.query_one("#base-url-input", Input).value.strip()
+            if provider == "local"
+            else PROVIDER_BASE_URLS[provider],
+            self.query_one("#api-key-input", Input).value.strip(),
+            model,
+            provider,
+            effort,
+            self.query_one("#verify-ssl-switch", Switch).value
+            if provider == "local"
+            else True,
+        )
+
+    def _apply_profile(self, provider: str) -> None:
+        profile = self._profiles[provider]
+        self.query_one("#base-url-input", Input).value = profile.base_url
+        self.query_one("#api-key-input", Input).value = profile.api_key
+        self.query_one("#local-model-input", Input).value = profile.model
+        reasoning = self.query_one("#reasoning-effort-select", Select)
+        reasoning.value = profile.reasoning_effort
+        self.query_one("#verify-ssl-switch", Switch).value = profile.verify_ssl
+
+    def _update_reasoning_fields(self, selected_model: str | None = None) -> None:
         """Enable or fade the reasoning-effort picker for the selected model.
 
         Models that don't accept `reasoning_effort` get the effort snapped to
         "off" and the control disabled (dimmed); the prior effort is stashed
         and restored when a supported model is selected again.
         """
-        model = self._selected_model()
+        model = selected_model or self._selected_model()
         provider = self.query_one("#provider-select", Select).value
+        if provider not in {"local", "openai", "opencode-go"}:
+            return
         supported = supports_reasoning_effort(model, provider)
         select = self.query_one("#reasoning-effort-select", Select)
         label = self.query_one("#reasoning-effort-label", Label)
@@ -989,16 +1074,33 @@ class ConnectionScreen(ModalScreen):
 
     async def on_select_changed(self, event: Select.Changed) -> None:
         if event.select.id == "provider-select":
+            self._capture_profile()
+            self._active_provider = str(event.value)
+            self._apply_profile(self._active_provider)
             self._set_provider_fields(event.value)
             if event.value in PROVIDER_BASE_URLS:
                 self.query_one("#base-url-input", Input).value = PROVIDER_BASE_URLS[
                     event.value
                 ]
+                model_select = self.query_one("#model-select", Select)
+                fallback_models = list(
+                    OPENAI_MODELS if event.value == "openai" else OPENCODE_GO_MODELS
+                )
+                profile = self._profiles[self._active_provider]
+                if profile.model and profile.model not in fallback_models:
+                    fallback_models.insert(0, profile.model)
+                model_select.set_options(
+                    [(model, model) for model in fallback_models]
+                )
+                model_select.value = profile.model
                 api_key = self.query_one("#api-key-input", Input).value.strip()
                 if api_key:
-                    await self._refresh_models(api_key)
+                    await self._refresh_models(api_key, str(event.value))
         if event.select.id in {"provider-select", "model-select"}:
-            self._update_reasoning_fields()
+            selected_model = (
+                str(event.value) if event.select.id == "model-select" else None
+            )
+            self._update_reasoning_fields(selected_model)
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "cancel-button":
@@ -1012,11 +1114,15 @@ class ConnectionScreen(ModalScreen):
         event.stop()
         self._connect()
 
-    async def _refresh_models(self, api_key: str) -> None:
+    async def _refresh_models(self, api_key: str, provider: str = "opencode-go") -> None:
         select = self.query_one("#model-select", Select)
         previously_selected = select.value
         select.loading = True
-        models = await fetch_opencode_go_models(api_key)
+        models = (
+            await fetch_openai_models(api_key)
+            if provider == "openai"
+            else await fetch_opencode_go_models(api_key)
+        )
         select.loading = False
         select.set_options([_model_option(model) for model in models])
         # Keep the user's selection when it is still offered by the live list;
@@ -1029,13 +1135,16 @@ class ConnectionScreen(ModalScreen):
 
     def _connect(self) -> None:
         provider = self.query_one("#provider-select", Select).value
+        if provider not in {"local", "openai", "opencode-go"}:
+            self.notify("Choose a provider first", severity="warning")
+            return
         if provider != "local":
             base_url = PROVIDER_BASE_URLS.get(str(provider), OPENCODE_GO_BASE_URL)
             api_key = self.query_one("#api-key-input", Input).value.strip()
             model = self._selected_model()
             if not api_key:
                 self.notify(
-                    "Enter your OpenCode Go API key",
+                    f"Enter your {str(provider).replace('-', ' ').title()} API key",
                     title="Missing API key",
                     severity="error",
                 )
@@ -1044,6 +1153,14 @@ class ConnectionScreen(ModalScreen):
             base_url = self.query_one("#base-url-input", Input).value.strip()
             api_key = self.query_one("#api-key-input", Input).value.strip()
             model = self._selected_model()
+            if not model:
+                self.notify("Enter the local model name", severity="error")
+                return
+        verify_ssl = (
+            self.query_one("#verify-ssl-switch", Switch).value
+            if provider == "local"
+            else True
+        )
         effort = self.query_one("#reasoning-effort-select", Select).value
         if not isinstance(effort, str):
             effort = "medium"
@@ -1055,8 +1172,10 @@ class ConnectionScreen(ModalScreen):
             model,
             provider=str(provider),
             reasoning_effort=effort,
+            verify_ssl=verify_ssl,
         )
-        save_config(config)
+        self._profiles[str(provider)] = config
+        save_provider_configs(self._profiles, str(provider))
         app = self.app
         if isinstance(app, AgentApp):
             app.query_one(ModelBadge).update_config(config)
@@ -1064,6 +1183,9 @@ class ConnectionScreen(ModalScreen):
         self.app.notify(f"Connected to {model}", title="Connection updated")
 
     def _selected_model(self) -> str:
+        provider = self.query_one("#provider-select", Select).value
+        if provider == "local":
+            return self.query_one("#local-model-input", Input).value.strip()
         value = self.query_one("#model-select", Select).value
         if isinstance(value, str):
             return value
@@ -1280,7 +1402,7 @@ class MemoryScreen(ModalScreen):
         if event.button.id == "memory-switch":
             self._switch(self._selected_id())
         elif event.button.id == "memory-delete":
-            await self._delete_current()
+            self.app.run_worker(self._delete_current(), exclusive=False)
 
 
 class AgentScreen(Screen):
@@ -1392,10 +1514,13 @@ class AgentApp(App):
         """Populate the live context-window cache when connected to OpenCode Go,
         so compaction uses the actual model window without opening the picker."""
         config = get_config()
-        if config.provider != "opencode-go" or not config.api_key:
+        if config.provider not in {"openai", "opencode-go"} or not config.api_key:
             return
         try:
-            await fetch_opencode_go_models(config.api_key)
+            if config.provider == "openai":
+                await fetch_openai_models(config.api_key)
+            else:
+                await fetch_opencode_go_models(config.api_key)
         except Exception:
             pass
 

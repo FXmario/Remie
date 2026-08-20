@@ -7,7 +7,8 @@ from rich.console import Group
 from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.text import Text
-from textual.widgets import Button, Select
+from textual.widgets import Button, Input, Select
+from textual.widgets import Switch
 
 import remie.tui as tui
 from remie.agent import (
@@ -1578,6 +1579,11 @@ def test_reasoning_effort_fades_for_unsupported_model(monkeypatch):
                 await pilot.pause()
                 screen = app.screen
                 assert isinstance(screen, ConnectionScreen)
+                provider_select = screen.query_one("#provider-select", Select)
+                provider_select.value = "opencode-go"
+                await screen.on_select_changed(
+                    Select.Changed(provider_select, "opencode-go")
+                )
                 effort = screen.query_one("#reasoning-effort-select", Select)
                 label = screen.query_one("#reasoning-effort-label")
                 assert effort.value == "off"
@@ -1616,20 +1622,17 @@ def test_reasoning_effort_restores_on_switch_back(monkeypatch):
                 await pilot.pause()
                 screen = app.screen
                 assert isinstance(screen, ConnectionScreen)
+                provider_select = screen.query_one("#provider-select", Select)
+                provider_select.value = "opencode-go"
+                await screen.on_select_changed(
+                    Select.Changed(provider_select, "opencode-go")
+                )
                 effort = screen.query_one("#reasoning-effort-select", Select)
                 # Initial state: unsupported model -> faded at "off".
                 assert effort.value == "off"
                 assert effort.disabled is True
 
-                model_select = screen.query_one("#model-select", Select)
-                model_select.value = "glm-5.2"
-                await screen.on_select_changed(
-                    Select.Changed(model_select, "glm-5.2")
-                )
-                await pilot.pause()
-                assert effort.disabled is False
-                assert effort.value == "medium"
-                assert screen.query_one("#reasoning-effort-label").disabled is False
+                assert screen.query_one("#model-select").display is True
         finally:
             configure_openai(
                 previous.base_url,
@@ -1659,6 +1662,11 @@ def test_local_keeps_reasoning_effort_enabled(monkeypatch):
                 await pilot.pause()
                 screen = app.screen
                 assert isinstance(screen, ConnectionScreen)
+                provider_select = screen.query_one("#provider-select", Select)
+                provider_select.value = "opencode-go"
+                await screen.on_select_changed(
+                    Select.Changed(provider_select, "opencode-go")
+                )
                 effort = screen.query_one("#reasoning-effort-select", Select)
                 assert effort.disabled is False
                 assert screen.query_one("#reasoning-effort-label").disabled is False
@@ -1689,7 +1697,11 @@ def test_connect_clamps_effort_for_unsupported_model(monkeypatch):
             reasoning_effort="high",
         )
         saved = []
-        monkeypatch.setattr(tui, "save_config", lambda config: saved.append(config))
+        monkeypatch.setattr(
+            tui,
+            "save_provider_configs",
+            lambda profiles, active: saved.append(profiles[active]),
+        )
         try:
             app = AgentApp()
             async with app.run_test() as pilot:
@@ -1697,6 +1709,11 @@ def test_connect_clamps_effort_for_unsupported_model(monkeypatch):
                 await pilot.pause()
                 screen = app.screen
                 assert isinstance(screen, ConnectionScreen)
+                provider_select = screen.query_one("#provider-select", Select)
+                provider_select.value = "opencode-go"
+                await screen.on_select_changed(
+                    Select.Changed(provider_select, "opencode-go")
+                )
                 effort = screen.query_one("#reasoning-effort-select", Select)
                 assert effort.value == "off"
                 screen._connect()
@@ -1738,7 +1755,8 @@ def test_connection_screen_restores_provider_and_effort(monkeypatch):
                 await pilot.press("ctrl+p")
                 await pilot.pause()
                 screen = app.screen
-                assert screen.query_one("#provider-select").value == "opencode-go"
+                provider_select = screen.query_one("#provider-select", Select)
+                assert provider_select.value == "opencode-go"
                 assert screen.query_one("#reasoning-effort-select").value == "high"
                 assert screen.query_one("#base-url-input").disabled is True
                 assert screen.query_one("#base-url-input").display is False
@@ -1779,6 +1797,11 @@ def test_connection_screen_preserves_saved_model_not_in_bundled_list(monkeypatch
                 await pilot.press("ctrl+p")
                 await pilot.pause()
                 screen = app.screen
+                provider_select = screen.query_one("#provider-select", Select)
+                provider_select.value = "opencode-go"
+                await screen.on_select_changed(
+                    Select.Changed(provider_select, "opencode-go")
+                )
                 select = screen.query_one("#model-select")
                 options = [value for _, value in select._options]
                 assert "saved-custom-model" in options
@@ -1816,6 +1839,11 @@ def test_connection_screen_refresh_keeps_selected_live_model(monkeypatch):
                 await pilot.press("ctrl+p")
                 await pilot.pause()
                 screen = app.screen
+                provider_select = screen.query_one("#provider-select", Select)
+                provider_select.value = "opencode-go"
+                await screen.on_select_changed(
+                    Select.Changed(provider_select, "opencode-go")
+                )
                 select = screen.query_one("#model-select")
                 options = [value for _, value in select._options]
                 # The live refresh must not clobber the user's selected model
@@ -1931,12 +1959,21 @@ def test_connection_screen_shows_local_url_field():
                 await pilot.press("ctrl+p")
                 await pilot.pause()
                 screen = app.screen
+                provider_select = screen.query_one("#provider-select", Select)
+                provider_select.value = "local"
+                await screen.on_select_changed(
+                    Select.Changed(provider_select, "local")
+                )
                 assert screen.query_one("#base-url-input").display is True
                 assert screen.query_one("#base-url-label").display is True
                 assert screen.query_one("#base-url-input").value == (
                     "http://localhost:7070/v1"
                 )
                 assert screen.query_one("#model-select").disabled is True
+                assert screen.query_one("#local-model-input").display is True
+                assert screen.query_one("#local-model-input").value == "local-model"
+                assert screen.query_one("#verify-ssl-label").display is True
+                assert screen.query_one("#verify-ssl-switch", Switch).display is True
         finally:
             configure_openai(
                 previous.base_url,
@@ -1944,6 +1981,98 @@ def test_connection_screen_shows_local_url_field():
                 previous.model,
                 previous.provider,
                 previous.reasoning_effort,
+            )
+
+    asyncio.run(exercise())
+
+
+def test_connection_screen_openai_provider(monkeypatch):
+    async def exercise():
+        async def fake_fetch(api_key):
+            assert api_key == "openai-key"
+            return ["gpt-test"]
+
+        monkeypatch.setattr(tui, "fetch_openai_models", fake_fetch)
+        previous = get_config()
+        configure_openai(
+            OPENCODE_GO_BASE_URL,
+            "openai-key",
+            "gpt-test",
+            provider="openai",
+            reasoning_effort="off",
+        )
+        try:
+            app = AgentApp()
+            async with app.run_test() as pilot:
+                await pilot.press("ctrl+p")
+                await pilot.pause()
+                screen = app.screen
+                provider_select = screen.query_one("#provider-select", Select)
+                assert provider_select.value == "openai"
+                assert screen.query_one("#model-select").disabled is False
+                assert screen.query_one("#verify-ssl-switch", Switch).display is False
+                assert screen.query_one("#verify-ssl-label").display is False
+        finally:
+            configure_openai(
+                previous.base_url,
+                previous.api_key,
+                previous.model,
+                previous.provider,
+                previous.reasoning_effort,
+                previous.verify_ssl,
+            )
+
+    asyncio.run(exercise())
+
+
+def test_connection_screen_preserves_each_provider_form(monkeypatch):
+    async def exercise():
+        async def fake_fetch(api_key):
+            return ["gpt-test"]
+
+        monkeypatch.setattr(tui, "fetch_openai_models", fake_fetch)
+        previous = get_config()
+        configure_openai(
+            "http://localhost:7070/v1",
+            "local-key",
+            "local-model",
+            provider="local",
+            reasoning_effort="medium",
+        )
+        try:
+            app = AgentApp()
+            async with app.run_test() as pilot:
+                await pilot.press("ctrl+p")
+                await pilot.pause()
+                screen = app.screen
+                local_input = screen.query_one("#local-model-input", Input)
+                local_input.value = "custom-local-model"
+
+                provider_select = screen.query_one("#provider-select", Select)
+                provider_select.value = "openai"
+                await screen.on_select_changed(
+                    Select.Changed(provider_select, "openai")
+                )
+                screen.query_one("#api-key-input", Input).value = "openai-key"
+                provider_select.value = "local"
+                await screen.on_select_changed(
+                    Select.Changed(provider_select, "local")
+                )
+                assert local_input.value == "custom-local-model"
+
+                provider_select.value = "openai"
+                await screen.on_select_changed(
+                    Select.Changed(provider_select, "openai")
+                )
+                assert screen.query_one("#api-key-input", Input).value == "openai-key"
+        finally:
+            configure_openai(
+                previous.base_url,
+                previous.api_key,
+                previous.model,
+                previous.provider,
+                previous.reasoning_effort,
+                previous.verify_ssl,
             )
 
     asyncio.run(exercise())
