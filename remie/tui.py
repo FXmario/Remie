@@ -47,8 +47,6 @@ from textual_image.widget import SixelImage as TerminalImage
 from remie.agent import (
     ConnectionConfig,
     LLMRequestError,
-    OPENAI_BASE_URL,
-    OPENAI_MODELS,
     OPENCODE_GO_BASE_URL,
     OPENCODE_GO_MODELS,
     UnsupportedModelError,
@@ -60,8 +58,6 @@ from remie.agent import (
     estimate_tokens_from_counts,
     extract_thinking,
     extract_tool_invocations,
-    fetch_openai_models,
-    fetch_codex_models,
     fetch_opencode_go_models,
     generate_memory_title,
     get_config,
@@ -120,9 +116,7 @@ STREAM_UPDATE_MIN_INTERVAL = 0.1
 STREAM_UPDATE_CHARS_PER_SECOND = 50_000
 STREAM_PREVIEW_MAX_CHARS = 3000
 PROVIDER_BASE_URLS = {
-    "openai": OPENAI_BASE_URL,
     "opencode-go": OPENCODE_GO_BASE_URL,
-    "codex": "",
 }
 
 CSS = """
@@ -764,19 +758,9 @@ class ModelBadge(Label):
 
     def update_config(self, config) -> None:
         provider = config.provider
-        # Preserve compatibility with callers that construct a config from a
-        # remote base URL without setting the provider field.
-        if provider == "local":
-            provider = (
-                "opencode-go"
-                if config.base_url.rstrip("/") == OPENCODE_GO_BASE_URL
-                else "openai"
-                if config.base_url.rstrip("/") == OPENAI_BASE_URL
-                else "local"
-            )
+        if provider == "local" and config.base_url.rstrip("/") == OPENCODE_GO_BASE_URL:
+            provider = "opencode-go"
         vendor = {
-            "codex": "Codex CLI",
-            "openai": "OpenAI",
             "opencode-go": "OpenCode Go",
         }.get(provider, "Local")
         self._model_text = config.model
@@ -924,7 +908,6 @@ class ConnectionScreen(ModalScreen):
         super().__init__()
         self._stashed_effort: str | None = None
         self._profiles = load_provider_configs()
-        self._profiles.setdefault("codex", ConnectionConfig("", "", "", "codex"))
         current = get_config()
         self._profiles[current.provider] = current
         self._active_provider = current.provider
@@ -967,9 +950,7 @@ class ConnectionScreen(ModalScreen):
                 yield Select(
                     [
                         ("Local (llama.cpp)", "local"),
-                        ("OpenAI API", "openai"),
                         ("OpenCode Go", "opencode-go"),
-                        ("Codex CLI", "codex"),
                     ],
                     value=self._active_provider,
                     id="provider-select",
@@ -989,11 +970,7 @@ class ConnectionScreen(ModalScreen):
                     id="api-key-input",
                 )
                 yield Label("Model")
-                model_list = (
-                    ["codex-default"]
-                    if current.provider == "codex"
-                    else list(OPENAI_MODELS if current.provider == "openai" else OPENCODE_GO_MODELS)
-                )
+                model_list = list(OPENCODE_GO_MODELS)
                 if current.provider == "local":
                     model_list = list(OPENCODE_GO_MODELS)
                 if (
@@ -1007,8 +984,6 @@ class ConnectionScreen(ModalScreen):
                     value=(
                         current.model
                         if current.model in model_list
-                        else "codex-default"
-                        if current.provider == "codex"
                         else model_list[0]
                     ),
                     id="model-select",
@@ -1042,30 +1017,22 @@ class ConnectionScreen(ModalScreen):
         provider = self.query_one("#provider-select", Select).value
         self._set_provider_fields(provider)
         self._update_reasoning_fields()
-        if provider == "codex":
-            self.query_one("#model-select", Select).focus()
-        else:
-            self.query_one("#api-key-input", Input).focus()
-        if provider in {"openai", "opencode-go", "codex"}:
+        self.query_one("#api-key-input", Input).focus()
+        if provider == "opencode-go":
             api_key = self.query_one("#api-key-input", Input).value.strip()
-            if provider == "codex" or api_key:
+            if api_key:
                 self.run_worker(
                     self._refresh_models(api_key, str(provider)), exclusive=False
                 )
 
     def _set_provider_fields(self, provider: object) -> None:
         is_local = provider == "local"
-        has_provider = provider in {"local", "openai", "opencode-go", "codex"}
+        has_provider = provider in {"local", "opencode-go"}
         base_url_input = self.query_one("#base-url-input", Input)
         base_url_label = self.query_one("#base-url-label", Label)
         base_url_input.display = is_local
         base_url_label.display = is_local
         base_url_input.disabled = not is_local
-        api_key_input = self.query_one("#api-key-input", Input)
-        api_key_label = self.query_one("#api-key-label", Label)
-        api_key_input.display = provider != "codex"
-        api_key_label.display = provider != "codex"
-        api_key_input.disabled = provider == "codex"
         model_select = self.query_one("#model-select", Select)
         local_model_input = self.query_one("#local-model-input", Input)
         model_select.display = has_provider and not is_local
@@ -1124,7 +1091,7 @@ class ConnectionScreen(ModalScreen):
         """
         model = selected_model or self._selected_model()
         provider = self.query_one("#provider-select", Select).value
-        if provider not in {"local", "openai", "opencode-go", "codex"}:
+        if provider not in {"local", "opencode-go"}:
             return
         supported = supports_reasoning_effort(model, provider)
         select = self.query_one("#reasoning-effort-select", Select)
@@ -1153,22 +1120,16 @@ class ConnectionScreen(ModalScreen):
                     event.value
                 ]
                 model_select = self.query_one("#model-select", Select)
-                fallback_models = list(
-                    ["codex-default"]
-                    if event.value == "codex"
-                    else OPENAI_MODELS
-                    if event.value == "openai"
-                    else OPENCODE_GO_MODELS
-                )
+                fallback_models = list(OPENCODE_GO_MODELS)
                 profile = self._profiles[self._active_provider]
                 if profile.model and profile.model not in fallback_models:
                     fallback_models.insert(0, profile.model)
                 model_select.set_options(
                     [(model, model) for model in fallback_models]
                 )
-                model_select.value = profile.model or "codex-default"
+                model_select.value = profile.model or fallback_models[0]
                 api_key = self.query_one("#api-key-input", Input).value.strip()
-                if event.value == "codex" or api_key:
+                if api_key:
                     await self._refresh_models(api_key, str(event.value))
         if event.select.id in {"provider-select", "model-select"}:
             selected_model = (
@@ -1192,16 +1153,7 @@ class ConnectionScreen(ModalScreen):
         select = self.query_one("#model-select", Select)
         previously_selected = select.value
         select.loading = True
-        models = (
-            await fetch_openai_models(api_key)
-            if provider == "openai"
-            else await fetch_codex_models(
-                self._profiles["codex"].codex_binary,
-                self._profiles["codex"].codex_home,
-            )
-            if provider == "codex"
-            else await fetch_opencode_go_models(api_key)
-        )
+        models = await fetch_opencode_go_models(api_key)
         select.loading = False
         select.set_options([_model_option(model) for model in models])
         # Keep the user's selection when it is still offered by the live list;
@@ -1214,14 +1166,10 @@ class ConnectionScreen(ModalScreen):
 
     def _connect(self) -> None:
         provider = self.query_one("#provider-select", Select).value
-        if provider not in {"local", "openai", "opencode-go", "codex"}:
+        if provider not in {"local", "opencode-go"}:
             self.notify("Choose a provider first", severity="warning")
             return
-        if provider == "codex":
-            base_url = ""
-            api_key = ""
-            model = self._selected_model()
-        elif provider != "local":
+        if provider != "local":
             base_url = PROVIDER_BASE_URLS.get(str(provider), OPENCODE_GO_BASE_URL)
             api_key = self.query_one("#api-key-input", Input).value.strip()
             model = self._selected_model()
@@ -1256,8 +1204,6 @@ class ConnectionScreen(ModalScreen):
             provider=str(provider),
             reasoning_effort=effort,
             verify_ssl=verify_ssl,
-            codex_binary=self._profiles[str(provider)].codex_binary,
-            codex_home=self._profiles[str(provider)].codex_home,
         )
         self._profiles[str(provider)] = config
         save_provider_configs(self._profiles, str(provider))
@@ -1273,7 +1219,7 @@ class ConnectionScreen(ModalScreen):
             return self.query_one("#local-model-input", Input).value.strip()
         value = self.query_one("#model-select", Select).value
         if isinstance(value, str):
-            return "" if value == "codex-default" else value
+            return value
         return OPENCODE_GO_MODELS[0]
 
 
@@ -1631,13 +1577,10 @@ class AgentApp(App):
         """Populate the live context-window cache when connected to OpenCode Go,
         so compaction uses the actual model window without opening the picker."""
         config = get_config()
-        if config.provider not in {"openai", "opencode-go"} or not config.api_key:
+        if config.provider != "opencode-go" or not config.api_key:
             return
         try:
-            if config.provider == "openai":
-                await fetch_openai_models(config.api_key)
-            else:
-                await fetch_opencode_go_models(config.api_key)
+            await fetch_opencode_go_models(config.api_key)
         except Exception:
             pass
 

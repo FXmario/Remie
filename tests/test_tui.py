@@ -335,18 +335,6 @@ def test_model_badge_includes_vendor():
     )
     assert remote_badge.render().plain == "kimi-k3  OpenCode Go"
 
-    codex_badge = ModelBadge()
-    codex_badge.update_config(
-        ConnectionConfig("", "", "", provider="codex", reasoning_effort="off")
-    )
-    assert codex_badge.render().plain == "Codex CLI"
-
-    codex_badge.update_config(
-        ConnectionConfig("", "", "gpt-5", provider="codex", reasoning_effort="off")
-    )
-    assert codex_badge.render().plain == "gpt-5  Codex CLI"
-
-
 def test_connection_error_shows_toast_and_keeps_app_running(monkeypatch):
     async def exercise():
         async def failed_stream(_conversation, usage_box=None, reasoning_box=None, finish_box=None):
@@ -2035,51 +2023,12 @@ def test_connection_screen_shows_local_url_field():
     asyncio.run(exercise())
 
 
-def test_connection_screen_openai_provider(monkeypatch):
-    async def exercise():
-        async def fake_fetch(api_key):
-            assert api_key == "openai-key"
-            return ["gpt-test"]
-
-        monkeypatch.setattr(tui, "fetch_openai_models", fake_fetch)
-        previous = get_config()
-        configure_openai(
-            OPENCODE_GO_BASE_URL,
-            "openai-key",
-            "gpt-test",
-            provider="openai",
-            reasoning_effort="off",
-        )
-        try:
-            app = AgentApp()
-            async with app.run_test() as pilot:
-                await pilot.press("ctrl+p")
-                await pilot.pause()
-                screen = app.screen
-                provider_select = screen.query_one("#provider-select", Select)
-                assert provider_select.value == "openai"
-                assert screen.query_one("#model-select").disabled is False
-                assert screen.query_one("#verify-ssl-switch", Switch).display is False
-                assert screen.query_one("#verify-ssl-label").display is False
-        finally:
-            configure_openai(
-                previous.base_url,
-                previous.api_key,
-                previous.model,
-                previous.provider,
-                previous.reasoning_effort,
-                previous.verify_ssl,
-            )
-
-    asyncio.run(exercise())
-
-
 def test_connection_screen_preserves_each_provider_form(monkeypatch):
     async def exercise():
         async def fake_fetch(api_key):
             return ["gpt-test"]
 
-        monkeypatch.setattr(tui, "fetch_openai_models", fake_fetch)
+        monkeypatch.setattr(tui, "fetch_opencode_go_models", fake_fetch)
         previous = get_config()
         configure_openai(
             "http://localhost:7070/v1",
@@ -2098,22 +2047,22 @@ def test_connection_screen_preserves_each_provider_form(monkeypatch):
                 local_input.value = "custom-local-model"
 
                 provider_select = screen.query_one("#provider-select", Select)
-                provider_select.value = "openai"
+                provider_select.value = "opencode-go"
                 await screen.on_select_changed(
-                    Select.Changed(provider_select, "openai")
+                    Select.Changed(provider_select, "opencode-go")
                 )
-                screen.query_one("#api-key-input", Input).value = "openai-key"
+                screen.query_one("#api-key-input", Input).value = "go-key"
                 provider_select.value = "local"
                 await screen.on_select_changed(
                     Select.Changed(provider_select, "local")
                 )
                 assert local_input.value == "custom-local-model"
 
-                provider_select.value = "openai"
+                provider_select.value = "opencode-go"
                 await screen.on_select_changed(
-                    Select.Changed(provider_select, "openai")
+                    Select.Changed(provider_select, "opencode-go")
                 )
-                assert screen.query_one("#api-key-input", Input).value == "openai-key"
+                assert screen.query_one("#api-key-input", Input).value == "go-key"
         finally:
             configure_openai(
                 previous.base_url,

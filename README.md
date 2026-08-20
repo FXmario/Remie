@@ -32,7 +32,6 @@ A terminal-based coding agent with a [Textual](https://textual.textualize.io/) T
 
 - Python >= 3.14
 - An OpenAI-compatible local LLM server (e.g. llama.cpp server)
-- Optional: [Codex CLI](https://github.com/openai/codex) for ChatGPT subscription access
 
 ## Setup
 
@@ -65,28 +64,11 @@ Configure the LLM connection via environment variables (a `.env` file is loaded 
 | `LLAMA_BASE_URL`  | Base URL of the local LLM server   | `http://localhost:7070/v1` |
 | `LLAMA_API_KEY`   | API key for the server             | `llama-cpp`   |
 | `LLAMA_MODEL`     | Model name                         | `local-model` |
-| `OPENAI_API_KEY`  | OpenAI API key; API billing is separate from ChatGPT subscriptions | (unset) |
-| `OPENAI_MODEL`    | Initial OpenAI model selection     | `gpt-4o-mini` |
 | `REMIE_DEBUG`            | Show raw tool calls (name + params) | (unset)       |
 | `REMIE_REASONING_EFFORT` | Reasoning mode: off/low/medium/high/max | `medium`   |
 | `REMIE_MAX_OUTPUT_TOKENS` | Max output tokens per response | OpenCode Go `32768`, local `8192` |
 | `REMIE_MAX_AUTO_CONTINUATIONS` | Max silent auto-continuations per response | `10` |
 | `REMIE_BLOCKED_COMMANDS` | Comma-separated extra command substrings that are always blocked (e.g. `git push --force,aws s3 rm`) | (unset) |
-
-### Codex CLI
-
-Remie can use the Codex CLI app-server with an existing ChatGPT subscription.
-Install and authenticate Codex separately:
-
-```bash
-npm install -g @openai/codex
-codex login
-```
-
-Choose **Codex CLI** in the connection picker. Remie starts `codex app-server`
-on demand and keeps its JSON-RPC session alive between turns. Remie does not
-store or read Codex authentication tokens. Codex runs read-only with approvals
-disabled while Remie continues to own and execute its existing tools.
 
 ### OpenCode Go
 
@@ -99,9 +81,7 @@ Open the connection picker with `Ctrl+P` or by clicking the model name next to
 the input. From there you can:
 
 - Choose **Local (llama.cpp)** to use your environment-configured server
-- Choose **OpenAI API**, enter an OpenAI API key, and pick from the models returned by OpenAI
 - Choose **OpenCode Go**, paste your API key (from [opencode.ai/auth](https://opencode.ai/auth)), and pick a model — the model list is fetched live, falling back to a bundled list
-- Choose **Codex CLI** to use the locally installed and authenticated Codex CLI without an API key
 - Choose a reasoning effort (`off`, `low`, `medium`, `high`, or `max`) supported by your provider
 
 The connection form shows provider-specific fields after you choose a provider.
@@ -112,16 +92,12 @@ Remie remembers each provider's last-used values. Reopening the connection picke
 preselects the active provider, and switching providers restores that provider's
 URL, API key, model, reasoning setting, and local SSL preference.
 
-The local llama.cpp connection uses the official OpenAI Python SDK pointed at the
-configured OpenAI-compatible local endpoint. OpenAI API and OpenCode Go continue
-to use the existing HTTP streaming client.
-
-OpenAI API access uses an API key and is billed separately from ChatGPT Plus or Pro
-subscriptions. Remie does not use ChatGPT subscription credentials as API keys.
+The local llama.cpp connection uses the official OpenAI-compatible Python SDK.
+OpenCode Go uses the existing HTTP streaming client.
 
 For local llama.cpp connections, the connection picker includes **Verify local SSL
 certificates**. Turn it off only when the local server uses a self-signed certificate.
-OpenAI and OpenCode Go always verify remote TLS certificates.
+OpenCode Go always verifies remote TLS certificates.
 
 The Local provider exposes an editable Base URL field, defaulting to
 `http://localhost:7070/v1`. Managed providers use their built-in endpoint.

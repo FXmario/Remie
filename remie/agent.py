@@ -16,7 +16,6 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.text import Text
 
-from remie.codex_connector import CodexAppServer, CodexConnectorError
 from remie.tools import (
     TOOL_REGISTRY,
     edit_file_tool,
@@ -41,20 +40,10 @@ CONFIG_DIR = Path(
 CONFIG_FILE = CONFIG_DIR / "config.json"
 
 OPENCODE_GO_BASE_URL = "https://opencode.ai/zen/go/v1"
-OPENAI_BASE_URL = "https://api.openai.com/v1"
 LOCAL_BASE_URL = "http://localhost:7070/v1"
 CONFIG_VERSION = 2
-SUPPORTED_PROVIDERS = ("local", "openai", "opencode-go", "codex")
-CODEX_DEFAULT_MODEL = ""
+SUPPORTED_PROVIDERS = ("local", "opencode-go")
 STATUS_ANIMATION_CONFIG_KEY = "status_animation"
-
-OPENAI_MODELS = [
-    "gpt-4o-mini",
-    "gpt-4.1-mini",
-    "gpt-4.1",
-    "gpt-5",
-    "o4-mini",
-]
 
 # Bundled fallback model list, used only when the OpenCode Go models API is
 # unreachable. The live list (and each model's context window) is fetched from
@@ -101,10 +90,6 @@ def supports_reasoning_effort(model: str, provider: str = "local") -> bool:
     `/chat/completions` endpoint accept the parameter; unknown models default to
     supported.
     """
-    if provider == "codex":
-        return True
-    if provider == "openai":
-        return model.lower().startswith(("o1", "o3", "o4", "gpt-5"))
     if provider != "opencode-go":
         return True
     return model not in NON_REASONING_EFFORT_MODELS
@@ -154,22 +139,9 @@ class ConnectionConfig:
     provider: str = "local"
     reasoning_effort: str = "medium"
     verify_ssl: bool = False
-    codex_binary: str = "codex"
-    codex_home: str = ""
 
 
 def _provider_defaults(provider: str) -> ConnectionConfig:
-    if provider == "codex":
-        return ConnectionConfig("", "", CODEX_DEFAULT_MODEL, "codex", "medium", True)
-    if provider == "openai":
-        return ConnectionConfig(
-            OPENAI_BASE_URL,
-            os.environ.get("OPENAI_API_KEY", ""),
-            os.environ.get("OPENAI_MODEL", OPENAI_MODELS[0]),
-            "openai",
-            "off",
-            True,
-        )
     if provider == "opencode-go":
         return ConnectionConfig(
             OPENCODE_GO_BASE_URL,
@@ -191,17 +163,11 @@ def _provider_defaults(provider: str) -> ConnectionConfig:
 
 def _default_config() -> ConnectionConfig:
     llama_base_url = os.environ.get("LLAMA_BASE_URL")
-    openai_key = os.environ.get("OPENAI_API_KEY", "")
     if llama_base_url:
         base_url = llama_base_url
         provider = "local"
         api_key = os.environ.get("LLAMA_API_KEY", "llama-cpp")
         model = os.environ.get("LLAMA_MODEL", "local-model")
-    elif openai_key:
-        base_url = OPENAI_BASE_URL
-        provider = "openai"
-        api_key = openai_key
-        model = os.environ.get("OPENAI_MODEL", OPENAI_MODELS[0])
     else:
         base_url = LOCAL_BASE_URL
         provider = "local"
@@ -234,18 +200,16 @@ def load_config() -> ConnectionConfig:
                     active_provider,
                     profile.get("reasoning_effort", defaults.reasoning_effort),
                     bool(profile.get("verify_ssl", defaults.verify_ssl)),
-                    profile.get("codex_binary", defaults.codex_binary),
-                    profile.get("codex_home", defaults.codex_home),
                 )
         base_url = data.get("base_url", "")
         provider = data.get(
             "provider",
             "opencode-go"
             if base_url.rstrip("/") == OPENCODE_GO_BASE_URL
-            else "openai"
-            if base_url.rstrip("/") == OPENAI_BASE_URL
             else "local",
         )
+        if provider not in SUPPORTED_PROVIDERS:
+            return _provider_defaults("local")
         return ConnectionConfig(
             base_url=base_url,
             api_key=data.get("api_key", ""),
@@ -253,8 +217,6 @@ def load_config() -> ConnectionConfig:
             provider=provider,
             reasoning_effort=data.get("reasoning_effort", "medium"),
             verify_ssl=bool(data.get("verify_ssl", False)),
-            codex_binary=data.get("codex_binary", "codex"),
-            codex_home=data.get("codex_home", ""),
         )
     except (OSError, json.JSONDecodeError):
         return _default_config()
@@ -292,8 +254,6 @@ def load_provider_configs() -> dict[str, ConnectionConfig]:
                 provider,
                 profile.get("reasoning_effort", defaults.reasoning_effort),
                 bool(profile.get("verify_ssl", defaults.verify_ssl)),
-                profile.get("codex_binary", defaults.codex_binary),
-                profile.get("codex_home", defaults.codex_home),
             )
         return profiles
 
@@ -320,8 +280,6 @@ def save_provider_configs(
                 "model": config.model,
                 "reasoning_effort": config.reasoning_effort,
                 "verify_ssl": config.verify_ssl,
-                "codex_binary": config.codex_binary,
-                "codex_home": config.codex_home,
             }
             for provider, config in profiles.items()
             if provider in SUPPORTED_PROVIDERS
@@ -370,8 +328,6 @@ _verified_local_client: httpx.AsyncClient | None = None
 _remote_client: httpx.AsyncClient | None = None
 _local_openai_client: AsyncOpenAI | None = None
 _local_openai_client_key: tuple[str, str, bool] | None = None
-_codex_connector: CodexAppServer | None = None
-_codex_connector_key: tuple[str, str] | None = None
 
 
 def _get_http_client() -> httpx.AsyncClient:
@@ -411,11 +367,9 @@ def configure_openai(
     provider: str = "local",
     reasoning_effort: str = "medium",
     verify_ssl: bool = False,
-    codex_binary: str = "codex",
-    codex_home: str = "",
 ) -> ConnectionConfig:
     """Update the active connection configuration."""
-    global _config, _local_openai_client, _local_openai_client_key, _codex_connector_key
+    global _config, _local_openai_client, _local_openai_client_key
     _config = ConnectionConfig(
         base_url=base_url,
         api_key=api_key,
@@ -423,12 +377,9 @@ def configure_openai(
         provider=provider,
         reasoning_effort=reasoning_effort,
         verify_ssl=verify_ssl,
-        codex_binary=codex_binary,
-        codex_home=codex_home,
     )
     _local_openai_client = None
     _local_openai_client_key = None
-    _codex_connector_key = None
     return _config
 
 
@@ -471,47 +422,6 @@ async def fetch_opencode_go_models(api_key: str) -> list[str]:
             return models or list(OPENCODE_GO_MODELS)
         except (httpx.HTTPError, ValueError, KeyError, TypeError, AttributeError):
             return list(OPENCODE_GO_MODELS)
-
-
-async def fetch_openai_models(api_key: str) -> list[str]:
-    """Fetch OpenAI model IDs, falling back when the API is unreachable."""
-    async with httpx.AsyncClient(verify=True, timeout=10) as client:
-        try:
-            response = await client.get(
-                f"{OPENAI_BASE_URL}/models",
-                headers={"Authorization": f"Bearer {api_key}"},
-            )
-            response.raise_for_status()
-            payload = response.json()
-            models = [
-                item["id"]
-                for item in payload.get("data", [])
-                if isinstance(item, dict) and item.get("id")
-            ]
-            return models or list(OPENAI_MODELS)
-        except (httpx.HTTPError, ValueError, KeyError, TypeError, AttributeError):
-            return list(OPENAI_MODELS)
-
-
-async def fetch_codex_models(binary: str = "codex", home: str = "") -> list[str]:
-    """Discover models through a temporary authenticated Codex app-server."""
-    connector = CodexAppServer(binary, home)
-    try:
-        await connector.start(os.getcwd())
-        result = await connector._request("model/list", {})
-        models = result.get("data") or result.get("models") or []
-        ids = [
-            item.get("id")
-            for item in models
-            if isinstance(item, dict) and isinstance(item.get("id"), str)
-        ]
-        return ids or [CODEX_DEFAULT_MODEL]
-    except CodexConnectorError:
-        # Model discovery is optional; the connection attempt will show the
-        # actionable install/login error if the CLI is unavailable.
-        return [CODEX_DEFAULT_MODEL]
-    finally:
-        await connector.close()
 
 
 def get_model_context_limit(model: str, provider: str = "local") -> int | None:
@@ -774,28 +684,6 @@ async def stream_llm_call(
     reasoning_box: list[str] | None = None,
     finish_box: dict[str, Any] | None = None,
 ) -> AsyncIterator[str]:
-    global _codex_connector, _codex_connector_key
-    if _config.provider == "codex":
-        key = (_config.codex_binary, _config.codex_home)
-        if _codex_connector is None or _codex_connector_key != key:
-            if _codex_connector is not None:
-                await _codex_connector.close()
-            _codex_connector = CodexAppServer(*key)
-            _codex_connector_key = key
-        try:
-            async for content in _codex_connector.stream(
-                conversation,
-                model=_config.model,
-                reasoning_effort=_config.reasoning_effort,
-                usage_box=usage_box,
-                reasoning_box=reasoning_box,
-                finish_box=finish_box,
-            ):
-                yield content
-        except CodexConnectorError:
-            await _codex_connector.close()
-            raise
-        return
     max_output_tokens = get_max_output_tokens(_config.provider)
     reasoning_supported = supports_reasoning_effort(_config.model, _config.provider)
     payload: dict[str, Any] = {
@@ -804,9 +692,6 @@ async def stream_llm_call(
         "max_tokens": max_output_tokens,
         "stream": True,
     }
-    if _config.provider == "openai" and reasoning_supported:
-        payload.pop("max_tokens")
-        payload["max_completion_tokens"] = max_output_tokens
     if (
         _config.reasoning_effort != "off"
         and reasoning_supported

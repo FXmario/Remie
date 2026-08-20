@@ -10,8 +10,6 @@ from rich.text import Text
 
 from remie.agent import (
     LLMRequestError,
-    OPENAI_BASE_URL,
-    OPENAI_MODELS,
     OPENCODE_GO_BASE_URL,
     OPENCODE_GO_MODELS,
     clear_session,
@@ -23,7 +21,6 @@ from remie.agent import (
     extract_thinking,
     extract_tool_invocations,
     fetch_opencode_go_models,
-    fetch_openai_models,
     get_config,
     get_connection_error_message,
     get_full_system_prompt,
@@ -1575,14 +1572,6 @@ class TestConnectionConfig:
                 "high",
                 True,
             ),
-            "openai": agent.ConnectionConfig(
-                agent.OPENAI_BASE_URL,
-                "openai-key",
-                "gpt-test",
-                "openai",
-                "off",
-                True,
-            ),
             "opencode-go": agent.ConnectionConfig(
                 agent.OPENCODE_GO_BASE_URL,
                 "go-key",
@@ -1592,8 +1581,8 @@ class TestConnectionConfig:
                 True,
             ),
         }
-        save_provider_configs(profiles, "openai")
-        assert load_config() == profiles["openai"]
+        save_provider_configs(profiles, "opencode-go")
+        assert load_config() == profiles["opencode-go"]
         assert load_provider_configs() == profiles
 
     def test_load_config_derives_provider_for_legacy_file(self, tmp_path, monkeypatch):
@@ -1624,33 +1613,6 @@ class TestConnectionConfig:
         assert models == OPENCODE_GO_MODELS
         # A failed fetch must not touch the cached context windows.
         assert agent._opencode_go_model_context == {"stale": 999}
-
-    def test_fetch_openai_models_parses_payload(self, monkeypatch):
-        import asyncio
-
-        class FakeResponse:
-            def raise_for_status(self):
-                pass
-
-            def json(self):
-                return {"data": [{"id": "gpt-test"}, {"id": "o-test"}]}
-
-        async def fake_get(self, url, headers=None):
-            assert url == f"{OPENAI_BASE_URL}/models"
-            assert headers == {"Authorization": "Bearer valid"}
-            return FakeResponse()
-
-        monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
-        assert asyncio.run(fetch_openai_models("valid")) == ["gpt-test", "o-test"]
-
-    def test_fetch_openai_models_falls_back_on_error(self, monkeypatch):
-        import asyncio
-
-        async def fake_get(self, url, headers=None):
-            raise httpx.ConnectError("boom")
-
-        monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
-        assert asyncio.run(fetch_openai_models("invalid")) == OPENAI_MODELS
 
     def test_fetch_opencode_go_models_parses_payload(self, monkeypatch):
         import asyncio
