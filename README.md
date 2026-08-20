@@ -143,6 +143,10 @@ remie
 uv run main.py
 ```
 
+Press `Ctrl+G` to show or hide the status image beside the prompt. Outside
+tmux it is animated; inside tmux it uses a static frame. The preference is
+saved in Remie's configuration and restored on the next launch.
+
 Type a message at the bottom input and press Enter. The agent will reason (`Thinking:`), call tools when needed, show the results, and reply — with the response streaming in as it is generated.
 
 ### Keybindings

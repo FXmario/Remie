@@ -46,6 +46,7 @@ LOCAL_BASE_URL = "http://localhost:7070/v1"
 CONFIG_VERSION = 2
 SUPPORTED_PROVIDERS = ("local", "openai", "opencode-go", "codex")
 CODEX_DEFAULT_MODEL = ""
+STATUS_ANIMATION_CONFIG_KEY = "status_animation"
 
 OPENAI_MODELS = [
     "gpt-4o-mini",
@@ -311,6 +312,7 @@ def save_provider_configs(
     payload = {
         "version": CONFIG_VERSION,
         "active_provider": active_provider,
+        STATUS_ANIMATION_CONFIG_KEY: load_status_animation_enabled(),
         "providers": {
             provider: {
                 "base_url": config.base_url,
@@ -326,6 +328,26 @@ def save_provider_configs(
         },
     }
     CONFIG_FILE.write_text(json.dumps(payload, indent=2))
+
+
+def load_status_animation_enabled() -> bool:
+    """Return the persisted status GIF preference, enabled by default."""
+    try:
+        data = json.loads(CONFIG_FILE.read_text())
+    except (OSError, json.JSONDecodeError):
+        return True
+    return bool(data.get(STATUS_ANIMATION_CONFIG_KEY, True))
+
+
+def save_status_animation_enabled(enabled: bool) -> None:
+    """Persist the status GIF preference without changing provider settings."""
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        data = json.loads(CONFIG_FILE.read_text())
+    except (OSError, json.JSONDecodeError):
+        data = {}
+    data[STATUS_ANIMATION_CONFIG_KEY] = bool(enabled)
+    CONFIG_FILE.write_text(json.dumps(data, indent=2))
 
 
 _config = load_config()
@@ -884,6 +906,27 @@ async def summarize_messages(messages: list[dict[str, Any]]) -> str:
     except Exception:
         return ""
     return "".join(chunks).strip()
+
+
+async def generate_memory_title(messages: list[dict[str, Any]]) -> str:
+    """Ask the active model for a short title for a completed task."""
+    if not messages:
+        return ""
+    title_messages = [
+        {
+            "role": "system",
+            "content": (
+                "Create a concise title for this coding task. Return only 3 to 8 "
+                "words, with no quotes, punctuation, markdown, or explanation."
+            ),
+        },
+        {"role": "user", "content": json.dumps(messages, default=str)},
+    ]
+    try:
+        title = "".join(chunk async for chunk in stream_llm_call(title_messages))
+    except Exception:
+        return ""
+    return " ".join(title.split()).strip(" `\"'.,:;!?\n")
 
 
 def save_session(conversation: list[dict[str, Any]]) -> None:

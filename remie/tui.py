@@ -63,15 +63,18 @@ from remie.agent import (
     fetch_openai_models,
     fetch_codex_models,
     fetch_opencode_go_models,
+    generate_memory_title,
     get_config,
     get_connection_error_message,
     get_full_system_prompt,
     get_model_context_limit,
+    load_status_animation_enabled,
     load_provider_configs,
     render_assistant_panel,
     render_user_message,
     run_tool,
     save_provider_configs,
+    save_status_animation_enabled,
     save_session,
     stream_llm_call,
     strip_protocol_lines,
@@ -80,6 +83,7 @@ from remie.agent import (
 )
 
 from remie.tools import (
+    MEMORY_NAME_MAX_CHARS,
     create_launch_memory,
     delete_memory,
     ensure_general_memory,
@@ -87,6 +91,7 @@ from remie.tools import (
     get_active_memory_id,
     get_tool_summary,
     list_memories,
+    rename_memory,
     set_active_memory_id,
 )
 
@@ -335,6 +340,23 @@ def _format_tokens(count: int) -> str:
 
 def _model_option(model: str) -> tuple[str, str]:
     return model, model
+
+
+def _fallback_memory_name(task: str | list) -> str:
+    """Create a readable fallback title when model title generation fails."""
+    if isinstance(task, str):
+        text = task
+    else:
+        text = " ".join(
+            part.get("text", "")
+            for part in task
+            if isinstance(part, dict) and isinstance(part.get("text"), str)
+        )
+    text = " ".join(text.split())
+    if not text:
+        return "general"
+    cut = text[:MEMORY_NAME_MAX_CHARS]
+    return (cut.rsplit(" ", 1)[0] if " " in cut else cut).rstrip()
 
 
 class _PlainWrite:
@@ -644,6 +666,7 @@ class StatusIndicator(Vertical):
         self._state = "ready"
         self._frame_index = 0
         self._timer = None
+        self._animation_enabled = True
 
     def _ensure_loaded(self, status: str) -> tuple[list[PILImage.Image], list[float]]:
         """Return the frames/durations for a status, loading them on first use.
@@ -661,7 +684,7 @@ class StatusIndicator(Vertical):
         )
 
     def on_mount(self) -> None:
-        if not _is_tmux():
+        if self._animation_enabled and not _is_tmux():
             self._schedule_next_frame()
 
     def _schedule_next_frame(self) -> None:
@@ -669,10 +692,22 @@ class StatusIndicator(Vertical):
         self._timer = self.set_timer(durations[self._frame_index], self._advance)
 
     def _advance(self) -> None:
+        if not self._animation_enabled:
+            return
         frames = self._ensure_loaded(self._state)[0]
         self._frame_index = (self._frame_index + 1) % len(frames)
         self.query_one("#status-gif", TerminalImage).image = frames[self._frame_index]
-        if not _is_tmux():
+        if self._animation_enabled and not _is_tmux():
+            self._schedule_next_frame()
+
+    def set_animation_enabled(self, enabled: bool) -> None:
+        """Show or hide the GIF and pause its timer without changing status."""
+        self._animation_enabled = enabled
+        if self._timer is not None:
+            self._timer.stop()
+            self._timer = None
+        self.display = enabled
+        if enabled and self.is_attached and not _is_tmux():
             self._schedule_next_frame()
 
     def set_status(self, status: str) -> None:
@@ -685,7 +720,7 @@ class StatusIndicator(Vertical):
         self.query_one("#status-gif", TerminalImage).image = (
             self._ensure_loaded(status)[0][0]
         )
-        if not _is_tmux():
+        if self._animation_enabled and not _is_tmux():
             self._schedule_next_frame()
 
 
@@ -1417,14 +1452,6 @@ class MemoryScreen(ModalScreen):
         if memory is None:
             self.notify("Unknown memory", severity="warning")
             return
-        answer = await self.app.push_screen_wait(
-            AskUserScreen(
-                f"Delete memory '{memory['name']}'? This cannot be undone.",
-                ["Delete", "Cancel"],
-            )
-        )
-        if answer != "Delete":
-            return
         delete_memory(memory_id)
         self._refresh_memories()
         select = self.query_one("#memory-select", Select)
@@ -1477,6 +1504,7 @@ class AgentApp(App):
         ("ctrl+l", "clear_log", "Clear log"),
         ("ctrl+o", "open_memory", "Memories"),
         ("ctrl+p", "open_connection", "Connect"),
+        ("ctrl+g", "toggle_status_image", "Toggle status image"),
         ("ctrl+t", "toggle_theme", "Toggle theme"),
         ("escape", "stop_agent", "Stop agent"),
     ]
@@ -1505,6 +1533,8 @@ class AgentApp(App):
         self._history_draft = ""
         self._total_input_tokens = 0
         self._total_output_tokens = 0
+        self._status_animation_enabled = load_status_animation_enabled()
+        self._launch_memory_id: str | None = None
         self.debug_mode = os.environ.get("REMIE_DEBUG", "").lower() in {
             "1",
             "true",
@@ -1529,12 +1559,25 @@ class AgentApp(App):
         self.sub_title = ""
         prompt = self.query_one("#prompt", PromptTextArea)
         self.query_one(ModelBadge).update_config(get_config())
-        create_launch_memory()
+        self.query_one(StatusIndicator).set_animation_enabled(
+            self._status_animation_enabled
+        )
+        self._launch_memory_id = create_launch_memory()["id"]
         clear_session()
         self.conversation = [{"role": "system", "content": get_full_system_prompt()}]
         self._cached_conv_tokens = estimate_conversation_tokens(self.conversation)
         prompt.focus()
         self._prefetch_model_context()
+
+    def action_toggle_status_image(self) -> None:
+        """Toggle and persist the status image visibility."""
+        self._status_animation_enabled = not self._status_animation_enabled
+        self.query_one(StatusIndicator).set_animation_enabled(
+            self._status_animation_enabled
+        )
+        save_status_animation_enabled(self._status_animation_enabled)
+        state = "shown" if self._status_animation_enabled else "hidden"
+        self.notify(f"Status image {state}", title="Status image")
 
     def _refresh_system_prompt(self) -> None:
         """Rebuild the system message from the current prompt (incl. memory) and
@@ -1548,6 +1591,30 @@ class AgentApp(App):
         else:
             self.conversation.insert(0, new_system)
             self._cached_conv_tokens += estimate_message_tokens(new_system)
+
+    async def _name_launch_memory(
+        self, user_content: str | list, assistant_content: str
+    ) -> None:
+        """Name the fresh launch memory after the first completed task."""
+        if not self._launch_memory_id:
+            return
+        memory = find_memory_by_id(self._launch_memory_id)
+        if memory is None or not memory["name"].startswith("session "):
+            return
+        title = await generate_memory_title(
+            [
+                {"role": "user", "content": user_content},
+                {"role": "assistant", "content": assistant_content},
+            ]
+        )
+        name = title[:MEMORY_NAME_MAX_CHARS].rstrip() or _fallback_memory_name(
+            user_content
+        )
+        try:
+            rename_memory(self._launch_memory_id, name)
+        except ValueError:
+            return
+        self._refresh_system_prompt()
 
     def _save_session(self) -> None:
         save_session(self.conversation)
@@ -1885,6 +1952,7 @@ class AgentApp(App):
                     log.replace_stream(*renderables)
                     self._push_message("assistant", full_text)
                     completed = True
+                    await self._name_launch_memory(user_content, full_text)
                     self._set_status("done")
                     return
                 replacements: list[RenderableType] = []

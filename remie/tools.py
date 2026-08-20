@@ -116,6 +116,30 @@ def create_memory(name: str) -> dict[str, Any]:
     return {"id": memory_id, "name": name, "created_at": memories[memory_id]["created_at"]}
 
 
+def rename_memory(memory_id: str, name: str) -> dict[str, Any]:
+    """Rename a memory while preserving its UUID and contents."""
+    memory = find_memory_by_id(memory_id)
+    if memory is None:
+        raise ValueError(f"Unknown memory id: {memory_id}")
+    name = " ".join(name.split())[:MEMORY_NAME_MAX_CHARS].rstrip()
+    if not _memory_name_valid(name):
+        raise ValueError("Memory name must be 1-60 non-empty characters")
+    existing = find_memory_by_name(name)
+    if existing is not None and existing["id"] != memory_id:
+        base = name
+        suffix = 2
+        candidate = f"{base} {suffix}"
+        while find_memory_by_name(candidate) is not None:
+            suffix += 1
+            suffix_text = f" {suffix}"
+            candidate = f"{base[:MEMORY_NAME_MAX_CHARS - len(suffix_text)].rstrip()}{suffix_text}"
+        name = candidate
+    memories = load_memory_index()
+    memories[memory_id]["name"] = name
+    save_memory_index(memories)
+    return find_memory_by_id(memory_id)  # type: ignore[return-value]
+
+
 def get_active_memory_id() -> str | None:
     """Return the active memory uuid, or None when unset/invalid."""
     path = active_memory_file_path()

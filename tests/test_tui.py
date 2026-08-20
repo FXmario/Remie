@@ -170,6 +170,57 @@ def test_status_gifs_load_lazily():
     assert "done" not in indicator._frames
 
 
+def test_ctrl_g_toggles_and_persists_status_animation(monkeypatch, tmp_path):
+    import remie.agent as agent
+
+    monkeypatch.setattr(agent, "CONFIG_FILE", tmp_path / "config.json")
+    monkeypatch.setattr(agent, "CONFIG_DIR", tmp_path)
+
+    async def exercise():
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            indicator = app.query_one(StatusIndicator)
+            assert indicator.display is True
+
+            await pilot.press("ctrl+g")
+            await pilot.pause()
+            assert indicator.display is False
+            assert agent.load_status_animation_enabled() is False
+
+            await pilot.press("ctrl+g")
+            await pilot.pause()
+            assert indicator.display is True
+            assert agent.load_status_animation_enabled() is True
+
+    asyncio.run(exercise())
+
+
+def test_ctrl_g_toggles_static_status_image_in_tmux(monkeypatch, tmp_path):
+    import remie.agent as agent
+
+    monkeypatch.setenv("TMUX", "/tmp/tmux-1000/default,1,0")
+    monkeypatch.setattr(agent, "CONFIG_FILE", tmp_path / "config.json")
+    monkeypatch.setattr(agent, "CONFIG_DIR", tmp_path)
+
+    async def exercise():
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            indicator = app.query_one(StatusIndicator)
+            assert indicator.display is True
+            assert indicator._timer is None
+
+            await pilot.press("ctrl+g")
+            await pilot.pause()
+            assert indicator.display is False
+
+            await pilot.press("ctrl+g")
+            await pilot.pause()
+            assert indicator.display is True
+            assert indicator._timer is None
+
+    asyncio.run(exercise())
+
+
 def test_stream_update_interval_is_bounded_by_preview_window():
     # The interval never grows past the preview cap: for text longer than the
     # preview window the cost is constant, so the throttle stays at the floor
@@ -1066,7 +1117,7 @@ def test_memory_add_without_name_uses_launch_memory(monkeypatch):
 
             active = get_active_memory_id()
             assert active == launch_memory_id
-            assert find_memory_by_id(active)["name"] == "session 1"
+            assert find_memory_by_id(active)["name"] == "refactor the parser"
             assert "remember Y" in memory_tool("read")["content"]
             assert "remember Y" in app.conversation[0]["content"]
             log_lines = [strip.text for strip in app.query_one("#log").lines]
@@ -1100,7 +1151,7 @@ def test_named_memory_add_is_not_renamed(monkeypatch):
             await pilot.pause()
 
             # Explicitly named notes remain isolated from the active launch memory.
-            assert find_memory_by_id(get_active_memory_id())["name"] == "session 1"
+            assert find_memory_by_id(get_active_memory_id())["name"] == "refactor the parser"
             assert "design fact" in memory_tool("read", name="design")["content"]
 
     asyncio.run(exercise())
@@ -1198,16 +1249,8 @@ def test_memory_picker_deletes_memory(monkeypatch):
             screen = app.screen
             assert isinstance(screen, MemoryScreen)
 
-            # Trigger Delete via the real button; _delete_current is a @work
-            # worker that pushes the real AskUserScreen modal we drive below.
-            # Driving the real modal (not a stubbed push_screen_wait) is what
-            # catches the NoActiveWorker regression.
+            # Delete is immediate and does not open a confirmation modal.
             screen.query_one("#memory-delete", Button).press()
-            await pilot.pause()
-            assert isinstance(app.screen, AskUserScreen)
-
-            # Selecting an option auto-dismisses AskUserScreen with that value.
-            app.screen.query_one("#ask-options", Select).value = "Delete"
             await pilot.pause()
             await pilot.pause()
 
@@ -1220,7 +1263,7 @@ def test_memory_picker_deletes_memory(monkeypatch):
     asyncio.run(exercise())
 
 
-def test_memory_picker_delete_confirm_cancel(monkeypatch):
+def test_memory_picker_delete_is_immediate(monkeypatch):
     async def exercise():
         design = memory_tool("add", "keep me", name="design")
 
@@ -1231,17 +1274,12 @@ def test_memory_picker_delete_confirm_cancel(monkeypatch):
             screen = app.screen
             assert isinstance(screen, MemoryScreen)
 
-            async def fake_cancel(screen_):
-                return None
-
-            monkeypatch.setattr(app, "push_screen_wait", fake_cancel)
             select = screen.query_one("#memory-select", Select)
             select.value = design["id"]
             await screen._delete_current()
             await pilot.pause()
 
-            assert find_memory_by_id(design["id"]) is not None
-            assert "keep me" in memory_tool("read", name="design")["content"]
+            assert find_memory_by_id(design["id"]) is None
 
     asyncio.run(exercise())
 
