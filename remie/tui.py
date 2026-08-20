@@ -61,7 +61,6 @@ from remie.agent import (
     get_connection_error_message,
     get_full_system_prompt,
     get_model_context_limit,
-    load_session,
     render_assistant_panel,
     render_user_message,
     run_tool,
@@ -74,7 +73,7 @@ from remie.agent import (
 )
 
 from remie.tools import (
-    MEMORY_NAME_MAX_CHARS,
+    create_launch_memory,
     delete_memory,
     ensure_general_memory,
     find_memory_by_id,
@@ -327,33 +326,6 @@ def _format_tokens(count: int) -> str:
 
 def _model_option(model: str) -> tuple[str, str]:
     return model, model
-
-
-def _derive_memory_name(task: str | list) -> str:
-    """Derive a short memory name from the current task text.
-
-    The task is the user's latest prompt: whitespace is collapsed and the
-    name is truncated to MEMORY_NAME_MAX_CHARS at a word boundary. Falls back
-    to "general" when no text is available (e.g. an image-only prompt).
-    """
-    if isinstance(task, str):
-        text = task
-    else:
-        texts = [
-            part["text"]
-            for part in task
-            if isinstance(part, dict) and isinstance(part.get("text"), str)
-        ]
-        text = " ".join(texts)
-    clean = " ".join(text.split())
-    if not clean:
-        return "general"
-    if len(clean) <= MEMORY_NAME_MAX_CHARS:
-        return clean
-    cut = clean[:MEMORY_NAME_MAX_CHARS]
-    if " " in cut:
-        cut = cut.rsplit(" ", 1)[0]
-    return cut.rstrip() or "general"
 
 
 class _PlainWrite:
@@ -1385,7 +1357,10 @@ class AgentApp(App):
         self.sub_title = ""
         prompt = self.query_one("#prompt", PromptTextArea)
         self.query_one(ModelBadge).update_config(get_config())
-        self._resume_session()
+        create_launch_memory()
+        clear_session()
+        self.conversation = [{"role": "system", "content": get_full_system_prompt()}]
+        self._cached_conv_tokens = estimate_conversation_tokens(self.conversation)
         prompt.focus()
         self._prefetch_model_context()
 
@@ -1401,45 +1376,6 @@ class AgentApp(App):
         else:
             self.conversation.insert(0, new_system)
             self._cached_conv_tokens += estimate_message_tokens(new_system)
-
-    def _resume_session(self) -> bool:
-        """Load a saved session into the conversation and replay it into the
-        log. Returns True when a session was resumed."""
-        data = load_session()
-        if data is None:
-            self.conversation = [
-                {"role": "system", "content": get_full_system_prompt()}
-            ]
-            self._cached_conv_tokens = estimate_conversation_tokens(
-                self.conversation
-            )
-            return False
-        self.conversation = list(data["messages"])
-        self._cached_conv_tokens = estimate_conversation_tokens(
-            self.conversation
-        )
-        # Pick up any changes to AGENTS.md / memory since the session was saved.
-        self._refresh_system_prompt()
-        log = self.query_one("#log", StreamingRichLog)
-        log.write(
-            f"[dim]Session resumed from {data.get('saved_at', 'earlier')}[/]"
-        )
-        for message in self.conversation[1:]:
-            role = message.get("role")
-            content = message.get("content")
-            if role == "user" and isinstance(content, str):
-                if content.startswith("tool_result("):
-                    log.write("[dim]· tool result[/]")
-                else:
-                    log.write(render_user_message(content))
-            elif role == "assistant" and isinstance(content, str):
-                shown = strip_protocol_lines(content).strip()
-                if shown:
-                    log.write(
-                        render_assistant_panel(shown, self._code_theme())
-                    )
-        log.write("")
-        return True
 
     def _save_session(self) -> None:
         save_session(self.conversation)
@@ -1806,22 +1742,6 @@ class AgentApp(App):
                     if self._stop_requested:
                         log.write("[dim]Stopped by user[/]")
                         break
-                    auto_named_memory = False
-                    if name == "memory":
-                        action = str(args.get("action", "add")).lower()
-                        if (
-                            action == "add"
-                            and not args.get("id")
-                            and not str(args.get("name", "")).strip()
-                        ):
-                            args = dict(args)
-                            args["name"] = _derive_memory_name(user_content)
-                            auto_named_memory = True
-                            log.write(
-                                "[dim]· no memory name given \u2014 "
-                                f"auto-named '{escape(args['name'])}' "
-                                "from current task[/]"
-                            )
                     if name == "ask_user":
                         question = str(args.get("question", ""))
                         options = args.get("options") or []
@@ -1859,8 +1779,6 @@ class AgentApp(App):
                     if name == "memory" and isinstance(result, dict) and (
                         result.get("action") in {"add", "clear"}
                     ):
-                        if auto_named_memory and isinstance(result.get("id"), str):
-                            set_active_memory_id(result["id"])
                         self._refresh_system_prompt()
                     self._push_message("user", f"tool_result({result_json})")
         except (

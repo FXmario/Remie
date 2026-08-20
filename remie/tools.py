@@ -215,6 +215,17 @@ def _migrate_to_uuid_index() -> None:
                     break
 
 
+def create_launch_memory() -> dict[str, Any]:
+    """Create and activate the next blank, launch-scoped memory."""
+    _migrate_to_uuid_index()
+    number = 1
+    while find_memory_by_name(f"session {number}") is not None:
+        number += 1
+    memory = create_memory(f"session {number}")
+    set_active_memory_id(memory["id"])
+    return memory
+
+
 def session_file_path() -> Path:
     return _remie_dir() / "session.json"
 
@@ -625,10 +636,7 @@ def memory_tool(
     :param text: The note to add (ignored unless action is 'add').
     :param id: The memory uuid to target; wins over `name`.
     :param name: The memory name to target (or create on 'add'); defaults to
-        the active memory when both id and name are empty. For action 'add',
-        always pass a short descriptive name that summarizes the task you are
-        working on (e.g. name="refactor auth module") so notes are grouped by
-        task; if omitted, one is derived from the current task.
+        the active launch memory when both id and name are empty.
     :return: A dictionary with the action taken, the memory id/name, and the
         full memory content where relevant.
     """

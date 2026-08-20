@@ -46,6 +46,7 @@ from remie.tools import (
     RUN_COMMAND_TIMEOUT,
     TOOL_REGISTRY,
     ask_user_tool,
+    create_launch_memory,
     create_memory,
     delete_memory,
     edit_file_tool,
@@ -840,6 +841,25 @@ class TestMemoryTool:
 
         with pytest.raises(ValueError):
             create_memory("design notes")  # case-insensitive duplicate
+
+    def test_create_launch_memory_is_blank_unique_and_active(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        existing = memory_tool("add", "keep this", name="design")
+
+        first = create_launch_memory()
+        assert first["name"] == "session 1"
+        assert get_active_memory_id() == first["id"]
+        assert not memory_file_path(first["id"]).exists()
+        assert find_memory_by_id(existing["id"]) is not None
+
+        second = create_launch_memory()
+        assert second["name"] == "session 2"
+        assert get_active_memory_id() == second["id"]
+        assert [memory["name"] for memory in list_memories()] == [
+            "design",
+            "session 1",
+            "session 2",
+        ]
 
     def test_active_memory_get_set(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)

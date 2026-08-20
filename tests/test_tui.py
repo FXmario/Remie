@@ -713,45 +713,6 @@ def test_format_tokens():
     assert _format_tokens(25000) == "25k"
 
 
-def test_derive_memory_name_short_text():
-    assert tui._derive_memory_name("fix the auth bug") == "fix the auth bug"
-
-
-def test_derive_memory_name_cleans_whitespace():
-    assert tui._derive_memory_name("  fix   the\nbug  ") == "fix the bug"
-
-
-def test_derive_memory_name_truncates_at_word_boundary():
-    long_task = "refactor the authentication module " * 10
-    name = tui._derive_memory_name(long_task)
-    assert len(name) <= tui.MEMORY_NAME_MAX_CHARS
-    # The cut falls on a word boundary, never mid-word.
-    assert len(name) < 50 or name.rsplit(" ", 1)[-1] in {
-        "refactor",
-        "the",
-        "authentication",
-        "module",
-    }
-
-
-def test_derive_memory_name_empty_returns_general():
-    assert tui._derive_memory_name("") == "general"
-    assert tui._derive_memory_name("   \n  ") == "general"
-
-
-def test_derive_memory_name_multimodal_uses_text():
-    task = [
-        {"type": "text", "text": "explain this screenshot"},
-        {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
-    ]
-    assert tui._derive_memory_name(task) == "explain this screenshot"
-
-
-def test_derive_memory_name_multimodal_no_text_returns_general():
-    task = [{"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}]
-    assert tui._derive_memory_name(task) == "general"
-
-
 def test_has_tool_call_detects_dsml():
     assert _has_tool_call(
         '<|DSML|>invoke name="list-files">\n<|DSML|>parameter path="." />'
@@ -957,8 +918,9 @@ def test_compaction_falls_back_when_summary_fails(monkeypatch):
     asyncio.run(exercise())
 
 
-def test_on_mount_resumes_session(monkeypatch):
+def test_on_mount_starts_fresh_and_preserves_old_memory(monkeypatch):
     async def exercise():
+        old_memory = memory_tool("add", "keep this", name="old work")
         save_session(
             [
                 {"role": "system", "content": "sys"},
@@ -968,12 +930,18 @@ def test_on_mount_resumes_session(monkeypatch):
         )
         app = AgentApp()
         async with app.run_test() as pilot:
-            assert app.conversation[-1]["content"] == "hi"
+            assert len(app.conversation) == 1
+            assert app.conversation[0]["role"] == "system"
             assert app._cached_conv_tokens == tui.estimate_conversation_tokens(
                 app.conversation
             )
             log_lines = [strip.text for strip in app.query_one("#log").lines]
-            assert any("Session resumed" in line for line in log_lines)
+            assert not any("Session resumed" in line for line in log_lines)
+            active = find_memory_by_id(get_active_memory_id())
+            assert active is not None
+            assert active["name"] == "session 1"
+            assert find_memory_by_id(old_memory["id"]) is not None
+            assert load_session() is None
 
     asyncio.run(exercise())
 
@@ -985,6 +953,9 @@ def test_on_mount_fresh_when_no_session(monkeypatch):
         async with app.run_test() as pilot:
             assert len(app.conversation) == 1
             assert app.conversation[0]["role"] == "system"
+            active = find_memory_by_id(get_active_memory_id())
+            assert active is not None
+            assert active["name"] == "session 1"
 
     asyncio.run(exercise())
 
@@ -997,14 +968,10 @@ def test_action_clear_log_drops_session(monkeypatch):
 
         monkeypatch.setattr(tui, "stream_llm_call", fake_stream)
 
-        save_session(
-            [
-                {"role": "system", "content": "sys"},
-                {"role": "user", "content": "hello"},
-            ]
-        )
         app = AgentApp()
         async with app.run_test() as pilot:
+            app.conversation.append({"role": "user", "content": "hello"})
+            save_session(app.conversation)
             assert len(app.conversation) == 2
             await pilot.press("ctrl+l")
             await pilot.pause()
@@ -1063,7 +1030,7 @@ def test_memory_tool_add_refreshes_system_prompt(monkeypatch):
     asyncio.run(exercise())
 
 
-def test_memory_add_without_name_is_auto_named_and_activated(monkeypatch):
+def test_memory_add_without_name_uses_launch_memory(monkeypatch):
     async def exercise():
         calls = 0
 
@@ -1081,16 +1048,17 @@ def test_memory_add_without_name_is_auto_named_and_activated(monkeypatch):
 
         app = AgentApp()
         async with app.run_test() as pilot:
+            launch_memory_id = get_active_memory_id()
             await app.run_agent_turn("refactor the parser module")
             await pilot.pause()
 
             active = get_active_memory_id()
-            assert active is not None
-            assert find_memory_by_id(active)["name"] == "refactor the parser module"
+            assert active == launch_memory_id
+            assert find_memory_by_id(active)["name"] == "session 1"
             assert "remember Y" in memory_tool("read")["content"]
             assert "remember Y" in app.conversation[0]["content"]
             log_lines = [strip.text for strip in app.query_one("#log").lines]
-            assert any("auto-named" in line for line in log_lines)
+            assert not any("auto-named" in line for line in log_lines)
 
     asyncio.run(exercise())
 
@@ -1119,10 +1087,8 @@ def test_named_memory_add_is_not_renamed(monkeypatch):
             await app.run_agent_turn("refactor the parser module")
             await pilot.pause()
 
-            # The explicit name wins; no task-derived memory is created.
-            assert find_memory_by_id(get_active_memory_id()) is None or (
-                find_memory_by_id(get_active_memory_id())["name"] != "refactor the parser module"
-            )
+            # Explicitly named notes remain isolated from the active launch memory.
+            assert find_memory_by_id(get_active_memory_id())["name"] == "session 1"
             assert "design fact" in memory_tool("read", name="design")["content"]
 
     asyncio.run(exercise())
@@ -1137,9 +1103,8 @@ def test_ctrl_m_opens_memory_picker(monkeypatch):
             assert len(app.screen_stack) == 2
             assert isinstance(app.screen, MemoryScreen)
             assert app.screen.query_one("#memory-select", Select)
-            # No free-text "new memory name" input: memories are created
-            # automatically by the agent, so the picker only offers
-            # Switch / Delete / Cancel.
+            # Launch memories are created automatically, so the picker only
+            # offers Switch / Delete / Cancel.
             assert not app.screen.query("#new-memory-input")
             assert app.screen.query_one("#memory-switch")
             assert app.screen.query_one("#memory-delete")
@@ -1158,7 +1123,7 @@ def test_memory_picker_switch_updates_active(monkeypatch):
             await pilot.pause()
             screen = app.screen
             assert isinstance(screen, MemoryScreen)
-            assert get_active_memory_id() == design["id"]
+            assert get_active_memory_id() != design["id"]
             select = screen.query_one("#memory-select", Select)
             select.value = design["id"]
             screen.on_select_changed(Select.Changed(select, design["id"]))
@@ -1169,25 +1134,22 @@ def test_memory_picker_switch_updates_active(monkeypatch):
     asyncio.run(exercise())
 
 
-def test_memory_picker_auto_creates_default_memory(monkeypatch):
+def test_memory_picker_selects_launch_memory(monkeypatch):
     async def exercise():
         app = AgentApp()
         async with app.run_test() as pilot:
-            # Fresh project: no memories yet. Opening the picker auto-creates
-            # the default "general" memory and activates it, so there is
-            # always something to select instead of a manual name field.
             await pilot.press("ctrl+o")
             await pilot.pause()
             screen = app.screen
             assert isinstance(screen, MemoryScreen)
-            general = find_memory_by_id(get_active_memory_id())
-            assert general is not None
-            assert general["name"] == "general"
+            launch_memory = find_memory_by_id(get_active_memory_id())
+            assert launch_memory is not None
+            assert launch_memory["name"] == "session 1"
             select_options = [
                 value for _, value in screen.query_one("#memory-select", Select)._options
             ]
-            assert general["id"] in select_options
-            assert screen.query_one("#memory-select", Select).value == general["id"]
+            assert launch_memory["id"] in select_options
+            assert screen.query_one("#memory-select", Select).value == launch_memory["id"]
 
     asyncio.run(exercise())
 
@@ -1217,13 +1179,12 @@ def test_memory_picker_deletes_memory(monkeypatch):
 
         app = AgentApp()
         async with app.run_test() as pilot:
+            set_active_memory_id(design["id"])
+            app._refresh_system_prompt()
             await pilot.press("ctrl+o")
             await pilot.pause()
             screen = app.screen
             assert isinstance(screen, MemoryScreen)
-
-            select = screen.query_one("#memory-select", Select)
-            select.value = design["id"]
 
             # Trigger Delete via the real button; _delete_current is a @work
             # worker that pushes the real AskUserScreen modal we drive below.
