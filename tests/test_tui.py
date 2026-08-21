@@ -1,5 +1,4 @@
 import asyncio
-
 import httpx
 import pytest
 from PIL import Image
@@ -7,7 +6,7 @@ from rich.console import Group
 from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.text import Text
-from textual.widgets import Button, Input, Select
+from textual.widgets import Button, Input, OptionList, Select
 from textual.widgets import Switch
 
 import remie.tui as tui
@@ -21,12 +20,10 @@ from remie.agent import (
     load_session,
     save_session,
     session_file_path,
-    strip_protocol_lines,
 )
 from remie.tui import (
     MAX_AUTO_CONTINUATIONS,
     AgentApp,
-    AgentScreen,
     AskUserScreen,
     ConnectionScreen,
     MemoryScreen,
@@ -41,7 +38,6 @@ from remie.tui import (
     _load_status_gif,
 )
 from remie.tools import (
-    delete_memory,
     find_memory_by_id,
     get_active_memory_id,
     memory_tool,
@@ -413,6 +409,47 @@ def test_escape_stops_running_agent(monkeypatch):
     asyncio.run(exercise())
 
 
+def test_escape_key_stops_stalled_agent(monkeypatch):
+    async def exercise():
+        stalled = asyncio.Event()
+
+        async def stalled_stream(
+            _conversation, usage_box=None, reasoning_box=None, finish_box=None
+        ):
+            await stalled.wait()
+            yield "never"
+
+        monkeypatch.setattr(tui, "stream_llm_call", stalled_stream)
+
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            task = asyncio.create_task(app.run_agent_turn("hello"))
+            await pilot.pause()
+            await pilot.press("escape")
+            await task
+
+            assert app._agent_running is False
+            assert app._stop_requested is True
+
+    asyncio.run(exercise())
+
+
+def test_escape_in_agent_question_stops_agent():
+    async def exercise():
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            app._agent_running = True
+            await app.push_screen(AskUserScreen("continue?", ["yes", "no"]))
+            await pilot.pause()
+            await pilot.press("escape")
+            await pilot.pause()
+
+            assert len(app.screen_stack) == 1
+            assert app._stop_requested is True
+
+    asyncio.run(exercise())
+
+
 def test_messages_are_queued_and_processed_in_order(monkeypatch):
     async def exercise():
         async def fake_stream(_conversation, usage_box=None, reasoning_box=None, finish_box=None):
@@ -650,9 +687,8 @@ def test_ask_user_modal_renders_question_and_options():
             await pilot.pause()
             screen = app.screen
             assert screen.query_one("#ask-question").render().plain == "pick one"
-            select = screen.query_one("#ask-options", Select)
-            values = [value for _, value in select._options if value is not Select.NULL]
-            assert values == ["a", "b", "c"]
+            options = screen.query_one("#ask-options", OptionList)
+            assert [option.prompt for option in options.options] == ["a", "b", "c"]
             assert screen.query_one("#ask-input")
 
     asyncio.run(exercise())
@@ -665,13 +701,15 @@ def test_ask_user_selecting_option_dismisses():
             await app.push_screen(AskUserScreen("pick one", ["a", "b"]))
             await pilot.pause()
             screen = app.screen
-            select = screen.query_one("#ask-options", Select)
+            option_list = screen.query_one("#ask-options", OptionList)
             dismissed = []
             monkeypatch = pytest.MonkeyPatch()
             monkeypatch.setattr(screen, "dismiss", lambda value: dismissed.append(value))
             try:
-                screen.on_select_changed(Select.Changed(select, "b"))
-                screen.on_select_changed(Select.Changed(select, Select.NULL))
+                option = option_list.options[1]
+                screen.on_option_list_option_selected(
+                    OptionList.OptionSelected(option_list, option, 1)
+                )
             finally:
                 monkeypatch.undo()
             # A real option dismisses with its value; an empty selection does not.
@@ -1153,7 +1191,7 @@ def test_ctrl_m_opens_memory_picker(monkeypatch):
             await pilot.pause()
             assert len(app.screen_stack) == 2
             assert isinstance(app.screen, MemoryScreen)
-            assert app.screen.query_one("#memory-select", Select)
+            assert app.screen.query_one("#memory-list", OptionList)
             # Launch memories are created automatically, so the picker only
             # offers Switch / Delete / Cancel.
             assert not app.screen.query("#new-memory-input")
@@ -1175,9 +1213,14 @@ def test_memory_picker_switch_updates_active(monkeypatch):
             screen = app.screen
             assert isinstance(screen, MemoryScreen)
             assert get_active_memory_id() != design["id"]
-            select = screen.query_one("#memory-select", Select)
-            select.value = design["id"]
-            screen.on_select_changed(Select.Changed(select, design["id"]))
+            memory_list = screen.query_one("#memory-list", OptionList)
+            index = memory_list.get_option_index(design["id"])
+            memory_list.highlighted = index
+            option = memory_list.highlighted_option
+            assert option is not None
+            screen.on_option_list_option_selected(
+                OptionList.OptionSelected(memory_list, option, index)
+            )
             await pilot.pause()
             assert get_active_memory_id() == design["id"]
             assert "design fact" in app.conversation[0]["content"]
@@ -1196,11 +1239,11 @@ def test_memory_picker_selects_launch_memory(monkeypatch):
             launch_memory = find_memory_by_id(get_active_memory_id())
             assert launch_memory is not None
             assert launch_memory["name"] == "session 1"
-            select_options = [
-                value for _, value in screen.query_one("#memory-select", Select)._options
-            ]
+            memory_list = screen.query_one("#memory-list", OptionList)
+            select_options = [option.id for option in memory_list.options]
             assert launch_memory["id"] in select_options
-            assert screen.query_one("#memory-select", Select).value == launch_memory["id"]
+            assert memory_list.highlighted_option is not None
+            assert memory_list.highlighted_option.id == launch_memory["id"]
 
     asyncio.run(exercise())
 
@@ -1244,7 +1287,7 @@ def test_memory_picker_deletes_memory(monkeypatch):
 
             assert find_memory_by_id(design["id"]) is None
             select_options = [
-                value for _, value in screen.query_one("#memory-select", Select)._options
+                option.id for option in screen.query_one("#memory-list", OptionList).options
             ]
             assert design["id"] not in select_options
 
@@ -1262,8 +1305,8 @@ def test_memory_picker_delete_is_immediate(monkeypatch):
             screen = app.screen
             assert isinstance(screen, MemoryScreen)
 
-            select = screen.query_one("#memory-select", Select)
-            select.value = design["id"]
+            memory_list = screen.query_one("#memory-list", OptionList)
+            memory_list.highlighted = memory_list.get_option_index(design["id"])
             await screen._delete_current()
             await pilot.pause()
 
