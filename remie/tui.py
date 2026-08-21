@@ -37,12 +37,14 @@ from textual.widgets import (
     Header,
     Input,
     Label,
+    OptionList,
     RichLog,
     Select,
     Switch,
     TextArea,
 )
 from textual_image.widget import SixelImage as TerminalImage
+from textual.widgets.option_list import Option
 
 from remie.agent import (
     ConnectionConfig,
@@ -66,6 +68,7 @@ from remie.agent import (
     get_model_context_limit,
     load_status_animation_enabled,
     load_provider_configs,
+    load_session,
     render_assistant_panel,
     render_user_message,
     run_tool,
@@ -1226,7 +1229,7 @@ class ConnectionScreen(ModalScreen):
 class AskUserScreen(ModalScreen):
     """Modal asking the user a question with optional predefined choices."""
 
-    BINDINGS = [("escape", "dismiss", "Cancel")]
+    BINDINGS = [("escape", "cancel", "Cancel")]
 
     CSS = """
     AskUserScreen {
@@ -1247,6 +1250,8 @@ class AskUserScreen(ModalScreen):
     }
 
     #ask-dialog #ask-options {
+        height: auto;
+        max-height: 12;
         margin-bottom: 1;
     }
 
@@ -1268,9 +1273,8 @@ class AskUserScreen(ModalScreen):
         with Vertical(id="ask-dialog"):
             yield Label(self.question, id="ask-question")
             if self.options:
-                yield Select(
-                    [(option, option) for option in self.options],
-                    prompt="Select an option...",
+                yield OptionList(
+                    *self.options,
                     id="ask-options",
                 )
             yield Input(placeholder="Type an answer...", id="ask-input")
@@ -1279,11 +1283,20 @@ class AskUserScreen(ModalScreen):
                 yield Button("Cancel", id="ask-cancel")
 
     def on_mount(self) -> None:
-        self.query_one("#ask-input", Input).focus()
+        if self.options:
+            self.query_one("#ask-options", OptionList).focus()
+        else:
+            self.query_one("#ask-input", Input).focus()
 
-    def on_select_changed(self, event: Select.Changed) -> None:
-        if event.select.id == "ask-options" and event.value is not Select.NULL:
-            self.dismiss(event.value)
+    def action_cancel(self) -> None:
+        app = self.app
+        if isinstance(app, AgentApp):
+            app.action_stop_agent()
+        self.dismiss(None)
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        if event.option_list.id == "ask-options":
+            self.dismiss(self.options[event.option_index])
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id
@@ -1324,6 +1337,12 @@ class MemoryScreen(ModalScreen):
         background: $surface;
     }
 
+    #memory-list {
+        height: auto;
+        max-height: 14;
+        margin-bottom: 1;
+    }
+
     #memory-dialog Label {
         margin-top: 1;
     }
@@ -1356,11 +1375,12 @@ class MemoryScreen(ModalScreen):
         active = get_active_memory_id()
         with Vertical(id="memory-dialog"):
             yield Label("Memories", id="dialog-title")
-            yield Select(
-                [(memory["name"], memory["id"]) for memory in self._memories],
-                value=active if active else Select.NULL,
-                prompt="Select active memory...",
-                id="memory-select",
+            yield OptionList(
+                *[
+                    Option(memory["name"], id=memory["id"])
+                    for memory in self._memories
+                ],
+                id="memory-list",
             )
             with Horizontal(classes="row"):
                 yield Button("Switch", variant="primary", id="memory-switch")
@@ -1368,11 +1388,15 @@ class MemoryScreen(ModalScreen):
                 yield Button("Cancel", id="memory-cancel")
 
     def on_mount(self) -> None:
-        self.query_one("#memory-select", Select).focus()
+        memory_list = self.query_one("#memory-list", OptionList)
+        active = get_active_memory_id()
+        if active is not None:
+            memory_list.highlighted = memory_list.get_option_index(active)
+        memory_list.focus()
 
     def _selected_id(self) -> str | None:
-        value = self.query_one("#memory-select", Select).value
-        return value if isinstance(value, str) and value else None
+        option = self.query_one("#memory-list", OptionList).highlighted_option
+        return option.id if option is not None else None
 
     def _switch(self, memory_id: str | None) -> None:
         if not memory_id:
@@ -1400,23 +1424,21 @@ class MemoryScreen(ModalScreen):
             return
         delete_memory(memory_id)
         self._refresh_memories()
-        select = self.query_one("#memory-select", Select)
-        select.set_options(
-            [(memory["name"], memory["id"]) for memory in self._memories]
+        memory_list = self.query_one("#memory-list", OptionList)
+        memory_list.set_options(
+            [Option(memory["name"], id=memory["id"]) for memory in self._memories]
         )
         active = get_active_memory_id()
-        select.value = active if active else Select.NULL
+        if active is not None:
+            memory_list.highlighted = memory_list.get_option_index(active)
         app = self.app
         if isinstance(app, AgentApp):
             app._refresh_system_prompt()
         self.notify(f"Deleted memory '{memory['name']}'", title="Memory")
 
-    def on_select_changed(self, event: Select.Changed) -> None:
-        if event.select.id == "memory-select" and event.value is not Select.NULL:
-            # Select posts a Changed with the preset value on mount; skip it so
-            # the modal doesn't immediately dismiss itself.
-            if event.value != get_active_memory_id():
-                self._switch(event.value)
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        if event.option_list.id == "memory-list" and event.option_id is not None:
+            self._switch(event.option_id)
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "memory-cancel":
@@ -1471,6 +1493,7 @@ class AgentApp(App):
         self._cached_conv_tokens = 0
         self.theme = "ansi-dark"
         self._agent_running = False
+        self._agent_task: asyncio.Task[Any] | None = None
         self._stop_requested = False
         self._input_queue: asyncio.Queue[str | list | None] = asyncio.Queue()
         self._pending_image: PILImage.Image | None = None
@@ -1725,6 +1748,8 @@ class AgentApp(App):
     async def run_agent_turn(self, user_content: str | list) -> None:
         log = self.query_one("#log", StreamingRichLog)
         completed = False
+        current_task = asyncio.current_task()
+        self._agent_task = current_task
         try:
             self._agent_running = True
             self._push_message("user", user_content)
@@ -1967,6 +1992,9 @@ class AgentApp(App):
                     ):
                         self._refresh_system_prompt()
                     self._push_message("user", f"tool_result({result_json})")
+        except asyncio.CancelledError:
+            log.replace_stream()
+            log.write("[dim]Stopped by user[/]")
         except (
             httpx.TimeoutException,
             httpx.TransportError,
@@ -1999,6 +2027,8 @@ class AgentApp(App):
             )
         finally:
             self._agent_running = False
+            if self._agent_task is current_task:
+                self._agent_task = None
             if completed:
                 self._save_session()
             else:
@@ -2026,10 +2056,12 @@ class AgentApp(App):
         self.theme = "ansi-dark" if self.theme == "ansi-light" else "ansi-light"
 
     def action_stop_agent(self) -> None:
-        """Request the running agent loop to stop and clear pending messages."""
+        """Stop the active agent turn and clear pending messages."""
         if self._agent_running:
             self._stop_requested = True
             self._input_queue.put_nowait(None)
+            if self._agent_task is not None:
+                self._agent_task.cancel()
 
     async def action_open_connection(self) -> None:
         """Open the connection/model picker. Ignored while the agent is busy."""
