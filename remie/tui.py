@@ -50,6 +50,8 @@ from remie import codex_auth
 from remie.agent import (
     CODEX_BACKEND_BASE,
     CODEX_MODELS,
+    OPENROUTER_BASE_URL,
+    OPENROUTER_MODELS,
     ConnectionConfig,
     LLMRequestError,
     OPENCODE_GO_BASE_URL,
@@ -63,6 +65,7 @@ from remie.agent import (
     extract_thinking,
     extract_tool_invocations,
     fetch_codex_models,
+    fetch_openrouter_models,
     fetch_opencode_go_models,
     generate_chat_title,
     get_config,
@@ -131,6 +134,7 @@ STREAM_PREVIEW_MAX_CHARS = 3000
 PROVIDER_BASE_URLS = {
     "opencode-go": OPENCODE_GO_BASE_URL,
     "codex": CODEX_BACKEND_BASE,
+    "openrouter": OPENROUTER_BASE_URL,
 }
 
 CSS = """
@@ -777,6 +781,7 @@ class ModelBadge(Label):
         vendor = {
             "opencode-go": "OpenCode Go",
             "codex": "Codex (ChatGPT)",
+            "openrouter": "OpenRouter",
         }.get(provider, "Local")
         self._model_text = config.model
         self._vendor_text = vendor
@@ -967,6 +972,7 @@ class ConnectionScreen(ModalScreen):
                         ("Local (llama.cpp)", "local"),
                         ("OpenCode Go", "opencode-go"),
                         ("Codex (ChatGPT Plus/Pro)", "codex"),
+                        ("OpenRouter", "openrouter"),
                     ],
                     value=self._active_provider,
                     id="provider-select",
@@ -994,11 +1000,12 @@ class ConnectionScreen(ModalScreen):
                     classes="row",
                 )
                 yield Label("Model")
-                model_list = (
-                    list(CODEX_MODELS)
-                    if current.provider == "codex"
-                    else list(OPENCODE_GO_MODELS)
-                )
+                if current.provider == "codex":
+                    model_list = list(CODEX_MODELS)
+                elif current.provider == "openrouter":
+                    model_list = list(OPENROUTER_MODELS)
+                else:
+                    model_list = list(OPENCODE_GO_MODELS)
                 if (
                     current.provider != "local"
                     and current.model
@@ -1054,6 +1061,9 @@ class ConnectionScreen(ModalScreen):
         if provider == "codex":
             self._refresh_codex_models()
             self.run_worker(self._prefetch_codex_models(), exclusive=False)
+        if provider == "openrouter":
+            self._refresh_openrouter_models()
+            self.run_worker(self._prefetch_openrouter_models(), exclusive=False)
 
     def _codex_account_text(self) -> str:
         auth = codex_auth.load_auth()
@@ -1165,10 +1175,47 @@ class ConnectionScreen(ModalScreen):
         self.notify(message, title="Codex (ChatGPT)")
         self._update_codex_account_label()
 
+    def _refresh_openrouter_models(self) -> None:
+        select = self.query_one("#model-select", Select)
+        profile = self._profiles.get("openrouter")
+        fallback = list(OPENROUTER_MODELS)
+        if profile is not None and profile.model and profile.model not in fallback:
+            fallback.insert(0, profile.model)
+        current_value = (
+            profile.model
+            if profile is not None and profile.model in fallback
+            else fallback[0]
+        )
+        select.set_options([_model_option(model) for model in fallback])
+        select.value = current_value
+
+    async def _prefetch_openrouter_models(self) -> None:
+        """Replace the bundled OpenRouter list with the live catalog (public
+        endpoint, works before an API key is entered)."""
+        try:
+            models = await fetch_openrouter_models()
+        except Exception:
+            return
+        if not models or not self.is_running:
+            return
+        select = self.query_one("#model-select", Select)
+        previously_selected = str(select.value)
+        if previously_selected and previously_selected in models:
+            options = models
+        else:
+            options = (
+                [previously_selected] + models if previously_selected else models
+            )
+        select.set_options([_model_option(model) for model in options])
+        select.value = (
+            previously_selected if previously_selected in options else options[0]
+        )
+        self._update_reasoning_fields()
+
     def _set_provider_fields(self, provider: object) -> None:
         is_local = provider == "local"
         is_codex = provider == "codex"
-        has_provider = provider in {"local", "opencode-go", "codex"}
+        has_provider = provider in {"local", "opencode-go", "codex", "openrouter"}
         base_url_input = self.query_one("#base-url-input", Input)
         base_url_label = self.query_one("#base-url-label", Label)
         base_url_input.display = is_local
@@ -1247,7 +1294,7 @@ class ConnectionScreen(ModalScreen):
         """
         model = selected_model or self._selected_model()
         provider = self.query_one("#provider-select", Select).value
-        if provider not in {"local", "opencode-go", "codex"}:
+        if provider not in {"local", "opencode-go", "codex", "openrouter"}:
             return
         supported = supports_reasoning_effort(model, provider)
         select = self.query_one("#reasoning-effort-select", Select)
@@ -1274,6 +1321,9 @@ class ConnectionScreen(ModalScreen):
             if event.value == "codex":
                 self._refresh_codex_models()
                 self.run_worker(self._prefetch_codex_models(), exclusive=False)
+            elif event.value == "openrouter":
+                self._refresh_openrouter_models()
+                self.run_worker(self._prefetch_openrouter_models(), exclusive=False)
             elif event.value in PROVIDER_BASE_URLS:
                 self.query_one("#base-url-input", Input).value = PROVIDER_BASE_URLS[
                     event.value
@@ -1329,7 +1379,7 @@ class ConnectionScreen(ModalScreen):
 
     def _connect(self) -> None:
         provider = self.query_one("#provider-select", Select).value
-        if provider not in {"local", "opencode-go", "codex"}:
+        if provider not in {"local", "opencode-go", "codex", "openrouter"}:
             self.notify("Choose a provider first", severity="warning")
             return
         if provider == "codex":
@@ -1394,11 +1444,11 @@ class ConnectionScreen(ModalScreen):
         value = self.query_one("#model-select", Select).value
         if isinstance(value, str):
             return value
-        return (
-            CODEX_MODELS[0]
-            if provider == "codex"
-            else OPENCODE_GO_MODELS[0]
-        )
+        fallbacks = {
+            "codex": CODEX_MODELS,
+            "openrouter": OPENROUTER_MODELS,
+        }
+        return fallbacks.get(str(provider), OPENCODE_GO_MODELS)[0]
 
 
 class AskUserScreen(ModalScreen):
@@ -1950,9 +2000,9 @@ class AgentApp(App):
         self.notify(f"Status image {state}", title="Status image")
 
     def _native_tool_calling(self) -> bool:
-        """Native function calling is used for the Codex provider; other
-        providers rely on the text protocol."""
-        return get_config().provider == "codex"
+        """Native function calling is used for the Codex and OpenRouter
+        providers; other providers rely on the text protocol."""
+        return get_config().provider in {"codex", "openrouter"}
 
     def _refresh_system_prompt(self) -> None:
         """Rebuild the system message from the current prompt (incl. memory) and

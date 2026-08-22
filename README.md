@@ -45,6 +45,7 @@ profile to the shared Remie configuration file.
 - **Agent memory (durable notes)** — the agent can append durable facts, decisions, user preferences, and open tasks to the active memory with the `memory` tool; press `Ctrl+O` to switch to or delete an older memory. The active memory is remembered across launches and injected into the system prompt. When a long task nears the context window, dropped messages are summarized into a compact note instead of being silently truncated.
 - **Chat history** — every conversation is saved as a named chat under `.remie/chats/`. Launching Remie resumes the most recently used chat automatically; `Ctrl+R` opens a chat picker to switch to an older chat, start a new one, or delete one. A chat is auto-titled after its first completed task; `Ctrl+L` starts a new chat while keeping the previous one. Existing `.remie/session.json` files from older versions are imported as a chat on first launch.
 - **Codex (ChatGPT Plus/Pro)** — sign in with a ChatGPT subscription via the native OAuth flow and use Codex models (gpt-5.6-sol/terra/luna, gpt-5.5, …) without an API key, the Codex CLI, or npm
+- **OpenRouter** — connect with an OpenRouter API key to any model in their catalog; native function calling over plain httpx streaming
 - **Command safety** — `run_command` blocks destructive commands before they execute (`rm -rf /`, `rm -rf ~`, disk formatting/partitioning, shutdown/reboot, `chmod -R`/`chown -R` on `/` or `~`, fork bombs, `curl | sh`, `dd` to raw block devices, ...) and shows a `Blocked command` line in the log with the reason
 - `REMIE_BLOCKED_COMMANDS` — comma-separated extra substrings (e.g. `git push --force`) that are always blocked, case-insensitive
 - `ask_user` — when the agent needs a decision, it pops a modal with predefined choices and a free-text answer field instead of guessing
@@ -59,7 +60,7 @@ profile to the shared Remie configuration file.
 
 - Python >= 3.14
 - An OpenAI-compatible local LLM server (e.g. llama.cpp server), **or**
-- An OpenCode Go API key, **or**
+- An OpenCode Go or OpenRouter API key, **or**
 - A ChatGPT Plus/Pro subscription for the Codex provider
 
 ## Setup
@@ -164,6 +165,21 @@ Note for remote/headless machines: the OAuth callback targets `localhost:1455`,
 so the browser must reach the machine running Remie (use
 `ssh -L 1455:localhost:1455 user@host` when working over SSH).
 
+### OpenRouter
+
+Pick **OpenRouter** in the connection picker (`Ctrl+P`), paste an API key from
+[openrouter.ai/keys](https://openrouter.ai/keys), and choose a model. The model
+dropdown loads OpenRouter's live catalog (public endpoint — it works before a
+key is entered) with each model's real context window driving context
+compaction.
+
+Like Codex, tool calling is native: tools are sent as chat-completions
+function definitions and results replay as `tool` messages between turns — no
+text protocol. Requests stream over plain httpx from
+`openrouter.ai/api/v1/chat/completions`; reasoning effort maps to OpenRouter's
+`reasoning.effort` parameter (`max` becomes `high`). Errors surface with
+friendly copy, including OpenRouter's 402 "out of credits" state.
+
 When the agent calls a tool, the log shows a human-readable line like `Agent calling the read a file`.
 Tool results are hidden by default. Set `REMIE_DEBUG=1` to show the raw function name, JSON parameters,
 and `tool_result` payloads (e.g. `Agent calling read_file({"filename": "main.py"})`); a `· debug` marker appears in the header.
@@ -216,4 +232,5 @@ tool: read_file({"filename": "main.py"})
 - `remie/agent.py` — LLM client, system prompt, tool registry, and parsing helpers
 - `remie/codex_auth.py` — ChatGPT OAuth (PKCE) sign-in, token storage in `~/.codex/auth.json`, and refresh
 - `remie/codex_client.py` — streaming client for the ChatGPT-subscription Codex Responses backend
+- `remie/openrouter_client.py` — httpx streaming client for OpenRouter with native function calling
 - `remie/tui.py` — the Textual `AgentApp`, theme detection, and the `remie` CLI entry point

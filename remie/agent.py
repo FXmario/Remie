@@ -39,10 +39,11 @@ CONFIG_DIR = Path(
 CONFIG_FILE = CONFIG_DIR / "config.json"
 
 OPENCODE_GO_BASE_URL = "https://opencode.ai/zen/go/v1"
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 LOCAL_BASE_URL = "http://localhost:7070/v1"
 CODEX_BACKEND_BASE = "https://chatgpt.com/backend-api/codex"
 CONFIG_VERSION = 2
-SUPPORTED_PROVIDERS = ("local", "opencode-go", "codex")
+SUPPORTED_PROVIDERS = ("local", "opencode-go", "codex", "openrouter")
 STATUS_ANIMATION_CONFIG_KEY = "status_animation"
 
 # Codex (ChatGPT subscription) models. The live list for the signed-in account
@@ -57,6 +58,23 @@ CODEX_MODELS = [
     "gpt-5.4-mini",
 ]
 CODEX_DEFAULT_CONTEXT_LIMIT = 272_000
+
+# OpenRouter models, bundled only as a fallback: the live catalog (with each
+# model's real context window) is fetched from the public /models endpoint
+# when connecting. Ids follow OpenRouter's "vendor/model" convention.
+OPENROUTER_MODELS = [
+    "anthropic/claude-sonnet-4.6",
+    "openai/gpt-5.6",
+    "google/gemini-3-pro",
+    "deepseek/deepseek-v4",
+    "x-ai/grok-5",
+    "qwen/qwen4-max",
+]
+OPENROUTER_DEFAULT_CONTEXT_LIMIT = 128_000
+
+# Live context windows for OpenRouter models, populated from the public
+# models API at connect time (used for context compaction).
+_openrouter_model_context: dict[str, int] = {}
 
 # Bundled fallback model list, used only when the OpenCode Go models API is
 # unreachable. The live list (and each model's context window) is fetched from
@@ -117,7 +135,7 @@ def get_max_output_tokens(provider: str = "local") -> int:
             return int(env_value)
         except ValueError:
             pass
-    return 32_768 if provider == "opencode-go" else 8_192
+    return 32_768 if provider in ("opencode-go", "openrouter") else 8_192
 
 
 OPENCODE_GO_DEFAULT_CONTEXT_LIMIT = 128_000
@@ -160,6 +178,15 @@ def _provider_defaults(provider: str) -> ConnectionConfig:
             "",
             CODEX_MODELS[0],
             "codex",
+            "medium",
+            True,
+        )
+    if provider == "openrouter":
+        return ConnectionConfig(
+            OPENROUTER_BASE_URL,
+            "",
+            OPENROUTER_MODELS[0],
+            "openrouter",
             "medium",
             True,
         )
@@ -461,15 +488,36 @@ async def fetch_codex_models() -> list[str]:
     return models or list(CODEX_MODELS)
 
 
+async def fetch_openrouter_models() -> list[str]:
+    """Fetch the live OpenRouter catalog and each model's real context window
+    (cached for compaction); fall back to the bundled list on failure."""
+    from remie.openrouter_client import fetch_openrouter_models as _fetch_live
+
+    try:
+        rows = await _fetch_live()
+    except Exception:
+        return list(OPENROUTER_MODELS)
+    models: list[str] = []
+    for model_id, context_length in rows:
+        if context_length > 0:
+            _openrouter_model_context[model_id] = context_length
+        models.append(model_id)
+    return models or list(OPENROUTER_MODELS)
+
+
 def get_model_context_limit(model: str, provider: str = "local") -> int | None:
     """Best-known context window for a model/provider pair (used for compaction).
 
-    OpenCode Go context windows come from the live model list fetched at
-    connect time; models without a reported window fall back to the default.
-    Codex subscription models expose a 272k input window (400k total).
+    OpenCode Go and OpenRouter context windows come from the live model lists
+    fetched at connect time; models without a reported window fall back to the
+    provider default. Codex subscription models expose a 272k input window.
     """
     if provider == "codex":
         return CODEX_DEFAULT_CONTEXT_LIMIT
+    if provider == "openrouter":
+        return _openrouter_model_context.get(
+            model, OPENROUTER_DEFAULT_CONTEXT_LIMIT
+        )
     if provider != "opencode-go":
         return None
     return _opencode_go_model_context.get(model, OPENCODE_GO_DEFAULT_CONTEXT_LIMIT)
@@ -791,6 +839,27 @@ async def stream_llm_call(
             model=_config.model,
             reasoning_effort=_config.reasoning_effort,
             tools=get_tool_schemas(),
+            usage_box=usage_box,
+            reasoning_box=reasoning_box,
+            finish_box=finish_box,
+            tool_calls_box=tool_calls_box,
+        ):
+            yield content
+        return
+
+    if _config.provider == "openrouter":
+        # OpenRouter: plain httpx SSE against /chat/completions with native
+        # function calling (no SDK). Tool calls land in tool_calls_box.
+        from remie.openrouter_client import stream_openrouter_call
+        from remie.tools import get_tool_schemas
+
+        async for content in stream_openrouter_call(
+            _config.api_key,
+            conversation,
+            model=_config.model,
+            reasoning_effort=_config.reasoning_effort,
+            tools=get_tool_schemas(),
+            max_tokens=get_max_output_tokens(_config.provider),
             usage_box=usage_box,
             reasoning_box=reasoning_box,
             finish_box=finish_box,

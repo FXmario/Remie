@@ -2879,3 +2879,60 @@ def test_native_tools_system_prompt_swaps_protocol(monkeypatch, tmp_path):
                 pass
 
     asyncio.run(exercise())
+
+
+def test_connection_screen_openrouter_live_model_list(monkeypatch):
+    """Regression: agent.fetch_openrouter_models returns plain model id
+    strings (context windows are cached inside the agent); the connection
+    screen must populate the dropdown without unpacking them as tuples."""
+    import remie.agent as _agent
+
+    async def fake_fetch():
+        return ["vendor/model-a", "vendor/model-b"]
+
+    monkeypatch.setattr(tui, "fetch_openrouter_models", fake_fetch)
+    previous = get_config()
+    _agent.configure_openai("http://localhost:7070/v1", "k", "m", provider="local")
+    try:
+
+        async def exercise():
+            app = AgentApp()
+            async with app.run_test() as pilot:
+                await pilot.press("ctrl+p")
+                await pilot.pause()
+                screen = app.screen
+                assert isinstance(screen, ConnectionScreen)
+
+                provider = screen.query_one("#provider-select", Select)
+                provider.value = "openrouter"
+                await pilot.pause()
+
+                # API key field is required/visible; base URL is fixed.
+                assert screen.query_one("#api-key-input", Input).display
+                assert not screen.query_one("#base-url-input", Input).display
+
+                model_select = screen.query_one("#model-select", Select)
+                for _ in range(100):
+                    values = []
+                    for option in model_select._options:
+                        values.append(
+                            option.value if hasattr(option, "value") else option[1]
+                        )
+                    if "vendor/model-a" in values:
+                        break
+                    await pilot.pause()
+                assert "vendor/model-b" in values
+                # The prior selection is intentionally kept as an option;
+                # anything selected must still be a valid choice.
+                assert model_select.value in values
+
+        asyncio.run(exercise())
+    finally:
+        _agent.configure_openai(
+            previous.base_url,
+            previous.api_key,
+            previous.model,
+            previous.provider,
+            previous.reasoning_effort,
+            previous.verify_ssl,
+        )

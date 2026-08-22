@@ -1710,6 +1710,7 @@ class TestConnectionConfig:
         # with their defaults so the connection picker always has entries.
         expected = dict(profiles)
         expected.setdefault("codex", _provider_defaults("codex"))
+        expected.setdefault("openrouter", _provider_defaults("openrouter"))
         assert load_provider_configs() == expected
 
     def test_load_config_derives_provider_for_legacy_file(self, tmp_path, monkeypatch):
