@@ -17,7 +17,7 @@ profile to the shared Remie configuration file.
 - Reasoning display — the agent's thinking process streams in a `Reasoning` panel every turn (native `reasoning_content` when the provider streams it, `thinking:` lines otherwise)
 - Syntax highlighting for code blocks the agent generates (fenced code in responses)
 - The model name is shown on the top-right of the input box border
-- Uses your terminal's native color scheme (ANSI), so the UI matches your system theme — like opencode
+- Three theme modes: **System** uses terminal-native ANSI colors and preserves transparency, while **Light** and **Dark** use full Textual palettes; `Ctrl+T` cycles between them
 - Async agent loop — the UI stays responsive while the LLM responds and tools run
 - Tools: `read_file`, `list_files`, `glob_files`, `tree_files`, `edit_file`, `run_command`, `ask_user`, `memory`
 - **Agent memory (durable notes)** — the agent can append durable facts, decisions, user preferences, and open tasks to the active memory with the `memory` tool; press `Ctrl+O` to switch to or delete an older memory. The active memory is remembered across launches and injected into the system prompt. When a long task nears the context window, dropped messages are summarized into a compact note instead of being silently truncated.
@@ -26,7 +26,7 @@ profile to the shared Remie configuration file.
 - **OpenRouter** — connect with an OpenRouter API key to any model in their catalog; native function calling over plain httpx streaming
 - **Command safety** — `run_command` blocks destructive commands before they execute (`rm -rf /`, `rm -rf ~`, disk formatting/partitioning, shutdown/reboot, `chmod -R`/`chown -R` on `/` or `~`, fork bombs, `curl | sh`, `dd` to raw block devices, ...) and shows a `Blocked command` line in the log with the reason
 - `REMIE_BLOCKED_COMMANDS` — comma-separated extra substrings (e.g. `git push --force`) that are always blocked, case-insensitive
-- `ask_user` — when the agent needs a decision, it pops a modal with predefined choices and a free-text answer field instead of guessing
+- `ask_user` — when the agent needs a decision, it pops a modal with numbered choices instead of guessing; choosing **Write your answer** replaces the choices with a free-text input and Submit button
 - Tool calls accepted as `tool: name({...})`, `<tool: name(...)>`, or DSML markup (`<|DSML|>invoke name="..." />`)
 - Multiline input — `Shift+Enter` or `Ctrl+J` for a new line, `Enter` to send
 - Prompt history — `Up`/`Down` arrows recall previous prompts, like a shell
@@ -92,9 +92,10 @@ the input. From there you can:
 - Choose **OpenCode Go**, paste your API key (from [opencode.ai/auth](https://opencode.ai/auth)), and pick a model — the model list is fetched live, falling back to a bundled list
 - Choose a reasoning effort (`off`, `low`, `medium`, `high`, or `max`) supported by your provider
 
-The connection form shows provider-specific fields after you choose a provider.
-OpenCode Go offers a live model dropdown; local llama.cpp connections use a
-manually entered model name.
+The connection form groups provider-specific fields into **Provider**,
+**Authentication**, **Model**, and **Generation** sections. OpenCode Go offers a
+live model dropdown; local llama.cpp connections use a manually entered model
+name.
 
 **Model names are prettified everywhere**: raw ids like `z-ai/glm-5.3` render
 as "GLM 5.3" with a dimmed vendor label, catalogs that ship display metadata
@@ -183,6 +184,13 @@ Press `Ctrl+G` to show or hide the status image beside the prompt. Outside
 tmux it is animated; inside tmux it uses a static frame. The preference is
 saved in Remie's configuration and restored on the next launch.
 
+Remie starts in **System** theme mode. This uses ANSI colors so the terminal's
+background and transparency remain visible. Outside tmux, Remie queries the
+terminal background to select the matching light or dark ANSI variant; inside
+tmux it avoids that query and safely defaults to dark ANSI. Press `Ctrl+T` to
+cycle **System → Light → Dark**. The explicit Light and Dark modes use complete,
+opaque Textual palettes.
+
 Type a message at the bottom input and press Enter. The agent will reason (`Thinking:`), call tools when needed, show the results, and reply — with the response streaming in as it is generated.
 
 ### Keybindings
@@ -194,7 +202,7 @@ Type a message at the bottom input and press Enter. The agent will reason (`Thin
 | `Ctrl+P`  | Open connection/model picker |
 | `Ctrl+O`  | Open memory picker (switch/delete active memory) |
 | `Ctrl+R`  | Open chat picker (switch/new/delete saved chats) |
-| `Ctrl+T`  | Toggle dark/light theme |
+| `Ctrl+T`  | Cycle System → Light → Dark themes |
 | `Esc`     | Stop the agent while it is running |
 | `Enter`   | Send the message |
 | `Shift+Enter` / `Ctrl+J` | Insert a new line |
@@ -218,4 +226,5 @@ tool: read_file({"filename": "main.py"})
 - `remie/codex_auth.py` — ChatGPT OAuth (PKCE) sign-in, token storage in `~/.codex/auth.json`, and refresh
 - `remie/codex_client.py` — streaming client for the ChatGPT-subscription Codex Responses backend
 - `remie/openrouter_client.py` — httpx streaming client for OpenRouter with native function calling
-- `remie/tui.py` — the Textual `AgentApp`, theme detection, and the `remie` CLI entry point
+- `remie/tools/` — tool implementations, file/chat/memory storage, command safety, and the tool registry
+- `remie/tui/` — the Textual application, widgets, rendering helpers, theme detection, and modal screens
