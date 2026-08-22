@@ -125,6 +125,17 @@ def test_tmux_detection(monkeypatch):
     assert _is_tmux()
 
 
+def test_background_detection_skips_osc_query_in_tmux(monkeypatch):
+    import remie.tui.helpers as helpers
+
+    monkeypatch.setenv("TMUX", "/tmp/tmux-1000/default,1,0")
+    writes = []
+    monkeypatch.setattr(helpers.sys.stdout, "write", writes.append)
+
+    assert helpers._detect_terminal_background() is None
+    assert writes == []
+
+
 def test_tmux_thinking_indicator_visibility(monkeypatch):
     monkeypatch.setenv("TMUX", "/tmp/tmux-1000/default,1,0")
     indicator = ThinkingIndicator()

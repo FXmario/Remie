@@ -24,7 +24,12 @@ def _detect_terminal_background() -> str | None:
     Query the terminal background color via OSC 11 and return 'light' or 'dark'.
 
     Returns None when the terminal does not respond or is not interactive.
+    The active query is skipped inside tmux: tmux may deliver the reply after
+    our timeout, causing the raw ``rgb:…`` control response to leak into the
+    shell after Remie starts.
     """
+    if os.environ.get("TMUX"):
+        return None
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         return None
     sys.stdout.write("\x1b]11;?\x1b\\")
