@@ -30,12 +30,30 @@ class AskUserScreen(ModalScreen):
         background: $surface;
     }
 
-    #ask-title {
-        dock: top;
+    #ask-header {
+        height: 3;
         background: $primary;
         color: $text;
-        padding: 0 2;
+    }
+
+    #ask-title {
+        width: 1fr;
+        padding: 1 2 0 2;
         text-style: bold;
+    }
+
+    #ask-close {
+        width: 5;
+        min-width: 5;
+        height: 3;
+        border: none;
+        background: $primary;
+        color: $text;
+        margin: 0;
+    }
+
+    #ask-close:hover {
+        background: $error;
     }
 
     #ask-body {
@@ -57,6 +75,10 @@ class AskUserScreen(ModalScreen):
 
     #ask-dialog #ask-input {
         margin-top: 1;
+    }
+
+    #ask-dialog .ask-custom-hidden {
+        display: none;
     }
 
     #ask-actions {
@@ -95,37 +117,53 @@ class AskUserScreen(ModalScreen):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="ask-dialog"):
-            yield Label("❓ Agent needs your input", id="ask-title")
+            with Horizontal(id="ask-header"):
+                yield Label("❓ Agent needs your input", id="ask-title")
+                yield Button("✕", id="ask-close")
             with Vertical(id="ask-body"):
                 yield Static(self._question_renderable(), id="ask-question")
-                if self.options:
-                    yield OptionList(
-                        *self.options,
-                        id="ask-options",
-                    )
+                choices = [
+                    f"{index}. {option}"
+                    for index, option in enumerate(self.options, start=1)
+                ]
+                choices.append(f"{len(self.options) + 1}. Write your answer")
+                yield OptionList(*choices, id="ask-options")
                 yield Input(
-                    placeholder="Or type your own answer…",
+                    placeholder="Write your answer…",
                     id="ask-input",
+                    classes="ask-custom-hidden",
                 )
             with Horizontal(id="ask-actions"):
-                yield Button("Submit", variant="primary", id="ask-submit")
-                yield Button("Cancel", id="ask-cancel")
+                yield Button(
+                    "Submit",
+                    variant="primary",
+                    id="ask-submit",
+                    classes="ask-custom-hidden",
+                )
             yield Label(
                 "↑/↓ choose · 1–9 quick-pick · Enter select · Esc cancel",
                 id="ask-footer",
             )
 
     def on_mount(self) -> None:
-        if self.options:
-            self.query_one("#ask-options", OptionList).focus()
-        else:
-            self.query_one("#ask-input", Input).focus()
+        self.query_one("#ask-options", OptionList).focus()
+
+    def _show_custom_answer(self) -> None:
+        """Replace the choices with the free-form answer controls."""
+        # Removing the option list frees its layout height before the input is
+        # revealed, preventing the dialog's max-height from clipping the input.
+        self.query_one("#ask-options", OptionList).add_class("ask-custom-hidden")
+        answer_input = self.query_one("#ask-input", Input)
+        answer_input.remove_class("ask-custom-hidden")
+        self.query_one("#ask-submit", Button).remove_class("ask-custom-hidden")
+        answer_input.focus()
 
     def action_pick(self, index: int) -> None:
-        """Quick-pick an option by number key (1–9); ignored if out of range."""
-        if not self.options or index >= len(self.options):
-            return
-        self.dismiss(self.options[index])
+        """Quick-pick an option or the numbered custom-answer entry."""
+        if index < len(self.options):
+            self.dismiss(self.options[index])
+        elif index == len(self.options):
+            self._show_custom_answer()
 
     def action_cancel(self) -> None:
         app = self.app
@@ -134,13 +172,17 @@ class AskUserScreen(ModalScreen):
         self.dismiss(None)
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
-        if event.option_list.id == "ask-options":
+        if event.option_list.id != "ask-options":
+            return
+        if event.option_index < len(self.options):
             self.dismiss(self.options[event.option_index])
+        else:
+            self._show_custom_answer()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id
-        if button_id == "ask-cancel":
-            self.dismiss(None)
+        if button_id == "ask-close":
+            self.action_cancel()
             return
         if button_id == "ask-submit":
             answer = self.query_one("#ask-input", Input).value.strip()

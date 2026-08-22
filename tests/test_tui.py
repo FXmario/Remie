@@ -709,8 +709,39 @@ def test_ask_user_modal_renders_question_and_options():
             screen = app.screen
             assert screen.query_one("#ask-question").render().plain == "pick one"
             options = screen.query_one("#ask-options", OptionList)
-            assert [option.prompt for option in options.options] == ["a", "b", "c"]
-            assert screen.query_one("#ask-input")
+            assert [option.prompt for option in options.options] == [
+                "1. a",
+                "2. b",
+                "3. c",
+                "4. Write your answer",
+            ]
+            assert screen.query_one("#ask-input", Input).display is False
+            assert screen.query_one("#ask-submit", Button).display is False
+            assert screen.query_one("#ask-close", Button)
+            assert not screen.query("#ask-cancel")
+
+    asyncio.run(exercise())
+
+
+def test_ask_user_write_answer_reveals_input_and_submit():
+    async def exercise():
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            await app.push_screen(AskUserScreen("pick one", ["a", "b"]))
+            await pilot.pause()
+            screen = app.screen
+            option_list = screen.query_one("#ask-options", OptionList)
+            custom_option = option_list.options[2]
+            screen.on_option_list_option_selected(
+                OptionList.OptionSelected(option_list, custom_option, 2)
+            )
+            await pilot.pause()
+
+            answer_input = screen.query_one("#ask-input", Input)
+            assert option_list.display is False
+            assert answer_input.display is True
+            assert screen.query_one("#ask-submit", Button).display is True
+            assert answer_input.has_focus
 
     asyncio.run(exercise())
 
