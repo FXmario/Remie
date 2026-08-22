@@ -1,12 +1,14 @@
 import asyncio
+import base64
 import httpx
+import json
 import pytest
 from PIL import Image
 from rich.console import Group
 from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.text import Text
-from textual.widgets import Button, Input, OptionList, Select
+from textual.widgets import Button, Input, Label, OptionList, Select
 from textual.widgets import Switch
 
 import remie.tui as tui
@@ -47,6 +49,21 @@ from remie.tools import (
     save_chat_index,
     set_active_memory_id,
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolated_config(tmp_path, monkeypatch):
+    """Point Remie's saved connection config at a temp dir so tests neither
+    read nor overwrite the user's real ~/.config/remie/config.json, and reset
+    the in-memory active connection (loaded at import time from the real file)
+    back to the local default so provider-specific behavior is deterministic."""
+    import remie.agent as agent
+
+    config_dir = tmp_path / "remie-config"
+    monkeypatch.setattr(agent, "CONFIG_DIR", config_dir)
+    monkeypatch.setattr(agent, "CONFIG_FILE", config_dir / "config.json")
+    monkeypatch.setattr(agent, "_config", agent._default_config())
+    yield
 
 
 @pytest.fixture(autouse=True)
@@ -237,7 +254,7 @@ def test_stream_update_interval_is_bounded_by_preview_window():
 def test_push_message_updates_conversation_token_cache(monkeypatch):
     async def exercise():
         async def fake_stream(
-            _conversation, usage_box=None, reasoning_box=None, finish_box=None
+            _conversation, usage_box=None, reasoning_box=None, finish_box=None, **_kwargs
         ):
             if False:
                 yield ""
@@ -269,7 +286,7 @@ def test_push_message_updates_conversation_token_cache(monkeypatch):
 def test_conversation_too_large_uses_cached_tokens(monkeypatch):
     async def exercise():
         async def fake_stream(
-            _conversation, usage_box=None, reasoning_box=None, finish_box=None
+            _conversation, usage_box=None, reasoning_box=None, finish_box=None, **_kwargs
         ):
             if False:
                 yield ""
@@ -296,7 +313,7 @@ def test_conversation_too_large_uses_cached_tokens(monkeypatch):
 def test_compaction_recomputes_token_cache(monkeypatch):
     async def exercise():
         async def fake_stream(
-            _conversation, usage_box=None, reasoning_box=None, finish_box=None
+            _conversation, usage_box=None, reasoning_box=None, finish_box=None, **_kwargs
         ):
             if False:
                 yield ""
@@ -337,7 +354,7 @@ def test_model_badge_includes_vendor():
 
 def test_connection_error_shows_toast_and_keeps_app_running(monkeypatch):
     async def exercise():
-        async def failed_stream(_conversation, usage_box=None, reasoning_box=None, finish_box=None):
+        async def failed_stream(_conversation, usage_box=None, reasoning_box=None, finish_box=None, **_kwargs):
             raise httpx.ConnectError("connection refused")
             yield ""
 
@@ -391,7 +408,7 @@ def test_open_connection_opens_modal_when_idle():
 
 def test_escape_stops_running_agent(monkeypatch):
     async def exercise():
-        async def endless_stream(_conversation, usage_box=None, reasoning_box=None, finish_box=None):
+        async def endless_stream(_conversation, usage_box=None, reasoning_box=None, finish_box=None, **_kwargs):
             while True:
                 yield "chunk"
                 await asyncio.sleep(0)
@@ -418,7 +435,7 @@ def test_escape_key_stops_stalled_agent(monkeypatch):
         stalled = asyncio.Event()
 
         async def stalled_stream(
-            _conversation, usage_box=None, reasoning_box=None, finish_box=None
+            _conversation, usage_box=None, reasoning_box=None, finish_box=None, **_kwargs
         ):
             await stalled.wait()
             yield "never"
@@ -456,7 +473,7 @@ def test_escape_in_agent_question_stops_agent():
 
 def test_messages_are_queued_and_processed_in_order(monkeypatch):
     async def exercise():
-        async def fake_stream(_conversation, usage_box=None, reasoning_box=None, finish_box=None):
+        async def fake_stream(_conversation, usage_box=None, reasoning_box=None, finish_box=None, **_kwargs):
             yield "reply"
 
         monkeypatch.setattr(tui, "stream_llm_call", fake_stream)
@@ -481,7 +498,7 @@ def test_messages_are_queued_and_processed_in_order(monkeypatch):
 
 def test_stop_drains_pending_messages(monkeypatch):
     async def exercise():
-        async def endless_stream(_conversation, usage_box=None, reasoning_box=None, finish_box=None):
+        async def endless_stream(_conversation, usage_box=None, reasoning_box=None, finish_box=None, **_kwargs):
             while True:
                 yield "chunk"
                 await asyncio.sleep(0)
@@ -512,7 +529,7 @@ def test_blocked_command_shows_blocked_log_line(monkeypatch):
         calls = 0
 
         async def tool_stream(
-            _conversation, usage_box=None, reasoning_box=None, finish_box=None
+            _conversation, usage_box=None, reasoning_box=None, finish_box=None, **_kwargs
         ):
             nonlocal calls
             calls += 1
@@ -548,7 +565,7 @@ def test_edit_tool_writes_diff_panel_to_log(monkeypatch, tmp_path):
         calls = 0
 
         async def tool_stream(
-            _conversation, usage_box=None, reasoning_box=None, finish_box=None
+            _conversation, usage_box=None, reasoning_box=None, finish_box=None, **_kwargs
         ):
             nonlocal calls
             calls += 1
@@ -584,7 +601,7 @@ def test_truncated_response_continues_automatically(monkeypatch):
         calls = 0
 
         async def truncating_stream(
-            _conversation, usage_box=None, reasoning_box=None, finish_box=None
+            _conversation, usage_box=None, reasoning_box=None, finish_box=None, **_kwargs
         ):
             nonlocal calls
             calls += 1
@@ -624,7 +641,7 @@ def test_truncated_tool_call_continues_before_executing(monkeypatch, tmp_path):
         calls = 0
 
         async def truncating_stream(
-            _conversation, usage_box=None, reasoning_box=None, finish_box=None
+            _conversation, usage_box=None, reasoning_box=None, finish_box=None, **_kwargs
         ):
             nonlocal calls
             calls += 1
@@ -657,7 +674,7 @@ def test_truncation_continuation_limit(monkeypatch):
         calls = 0
 
         async def always_truncating(
-            _conversation, usage_box=None, reasoning_box=None, finish_box=None
+            _conversation, usage_box=None, reasoning_box=None, finish_box=None, **_kwargs
         ):
             nonlocal calls
             calls += 1
@@ -727,7 +744,7 @@ def test_ask_user_tool_feeds_answer_back(monkeypatch):
         calls = 0
 
         async def tool_stream(
-            _conversation, usage_box=None, reasoning_box=None, finish_box=None
+            _conversation, usage_box=None, reasoning_box=None, finish_box=None, **_kwargs
         ):
             nonlocal calls
             calls += 1
@@ -766,7 +783,7 @@ def test_ask_user_cancel_marks_cancelled(monkeypatch):
         calls = 0
 
         async def tool_stream(
-            _conversation, usage_box=None, reasoning_box=None, finish_box=None
+            _conversation, usage_box=None, reasoning_box=None, finish_box=None, **_kwargs
         ):
             nonlocal calls
             calls += 1
@@ -794,7 +811,7 @@ def test_ask_user_cancel_marks_cancelled(monkeypatch):
     asyncio.run(exercise())
 
 
-async def _empty_stream(_conversation, usage_box=None, reasoning_box=None, finish_box=None):
+async def _empty_stream(_conversation, usage_box=None, reasoning_box=None, finish_box=None, **_kwargs):
     return
     yield  # pragma: no cover
 
@@ -863,7 +880,7 @@ def test_tool_results_rendered_in_turn(monkeypatch, tmp_path):
         calls = 0
 
         async def tool_stream(
-            _conversation, usage_box=None, reasoning_box=None, finish_box=None
+            _conversation, usage_box=None, reasoning_box=None, finish_box=None, **_kwargs
         ):
             nonlocal calls
             calls += 1
@@ -935,7 +952,7 @@ def test_ctrl_c_quits_without_selection():
 
 def test_conversation_compaction_keeps_system_and_recent(monkeypatch):
     async def exercise():
-        async def fake_stream(_conversation, usage_box=None, reasoning_box=None, finish_box=None):
+        async def fake_stream(_conversation, usage_box=None, reasoning_box=None, finish_box=None, **_kwargs):
             if False:
                 yield ""
 
@@ -964,7 +981,7 @@ def test_conversation_compaction_keeps_system_and_recent(monkeypatch):
 def test_compaction_summarizes_dropped_messages(monkeypatch):
     async def exercise():
         async def fake_stream(
-            _conversation, usage_box=None, reasoning_box=None, finish_box=None
+            _conversation, usage_box=None, reasoning_box=None, finish_box=None, **_kwargs
         ):
             yield "SUMMARY: user wanted type hints and a ruff config"
 
@@ -989,7 +1006,7 @@ def test_compaction_summarizes_dropped_messages(monkeypatch):
 def test_compaction_falls_back_when_summary_fails(monkeypatch):
     async def exercise():
         async def failing_stream(
-            _conversation, usage_box=None, reasoning_box=None, finish_box=None
+            _conversation, usage_box=None, reasoning_box=None, finish_box=None, **_kwargs
         ):
             raise RuntimeError("boom")
             yield
@@ -1064,7 +1081,7 @@ def test_on_mount_fresh_when_no_chats(monkeypatch):
 
 def test_action_new_chat_keeps_previous_chat(monkeypatch):
     async def exercise():
-        async def fake_stream(_conversation, usage_box=None, reasoning_box=None, finish_box=None):
+        async def fake_stream(_conversation, usage_box=None, reasoning_box=None, finish_box=None, **_kwargs):
             if False:
                 yield ""
 
@@ -1089,7 +1106,7 @@ def test_action_new_chat_keeps_previous_chat(monkeypatch):
 
 def test_chat_saved_after_turn(monkeypatch):
     async def exercise():
-        async def fake_stream(_conversation, usage_box=None, reasoning_box=None, finish_box=None):
+        async def fake_stream(_conversation, usage_box=None, reasoning_box=None, finish_box=None, **_kwargs):
             yield "final reply"
 
         monkeypatch.setattr(tui, "stream_llm_call", fake_stream)
@@ -1117,7 +1134,7 @@ def test_memory_tool_add_refreshes_system_prompt(monkeypatch):
         calls = 0
 
         async def tool_stream(
-            _conversation, usage_box=None, reasoning_box=None, finish_box=None
+            _conversation, usage_box=None, reasoning_box=None, finish_box=None, **_kwargs
         ):
             nonlocal calls
             calls += 1
@@ -1142,7 +1159,7 @@ def test_memory_add_without_name_uses_active_memory(monkeypatch):
         calls = 0
 
         async def tool_stream(
-            _conversation, usage_box=None, reasoning_box=None, finish_box=None
+            _conversation, usage_box=None, reasoning_box=None, finish_box=None, **_kwargs
         ):
             nonlocal calls
             calls += 1
@@ -1180,7 +1197,7 @@ def test_named_memory_add_is_not_renamed(monkeypatch):
         calls = 0
 
         async def tool_stream(
-            _conversation, usage_box=None, reasoning_box=None, finish_box=None
+            _conversation, usage_box=None, reasoning_box=None, finish_box=None, **_kwargs
         ):
             nonlocal calls
             calls += 1
@@ -1336,7 +1353,7 @@ def test_memory_picker_delete_is_immediate(monkeypatch):
 
 def test_memory_picker_blocked_while_agent_running(monkeypatch):
     async def exercise():
-        async def endless_stream(_conversation, usage_box=None, reasoning_box=None, finish_box=None):
+        async def endless_stream(_conversation, usage_box=None, reasoning_box=None, finish_box=None, **_kwargs):
             while True:
                 yield "chunk"
                 await asyncio.sleep(0)
@@ -1533,7 +1550,7 @@ def test_deleting_active_chat_loads_next_latest(monkeypatch):
 
 def test_context_full_error_notifies_clearly(monkeypatch):
     async def exercise():
-        async def failing_stream(_conversation, usage_box=None, reasoning_box=None, finish_box=None):
+        async def failing_stream(_conversation, usage_box=None, reasoning_box=None, finish_box=None, **_kwargs):
             raise LLMRequestError(
                 400,
                 "maximum context length is 131072 tokens",
@@ -1557,7 +1574,7 @@ def test_context_full_error_notifies_clearly(monkeypatch):
 
 def test_prompt_enter_submits_and_ctrl_j_inserts_newline(monkeypatch):
     async def exercise():
-        async def fake_stream(_conversation, usage_box=None, reasoning_box=None, finish_box=None):
+        async def fake_stream(_conversation, usage_box=None, reasoning_box=None, finish_box=None, **_kwargs):
             if False:
                 yield ""
 
@@ -1586,7 +1603,7 @@ def test_prompt_enter_submits_and_ctrl_j_inserts_newline(monkeypatch):
 
 def test_prompt_shift_enter_inserts_newline(monkeypatch):
     async def exercise():
-        async def fake_stream(_conversation, usage_box=None, reasoning_box=None, finish_box=None):
+        async def fake_stream(_conversation, usage_box=None, reasoning_box=None, finish_box=None, **_kwargs):
             if False:
                 yield ""
 
@@ -1606,7 +1623,7 @@ def test_prompt_shift_enter_inserts_newline(monkeypatch):
 
 def test_prompt_history_up_and_down(monkeypatch):
     async def exercise():
-        async def fake_stream(_conversation, usage_box=None, reasoning_box=None, finish_box=None):
+        async def fake_stream(_conversation, usage_box=None, reasoning_box=None, finish_box=None, **_kwargs):
             if False:
                 yield ""
 
@@ -1645,7 +1662,7 @@ def test_prompt_history_up_and_down(monkeypatch):
 
 def test_prompt_history_down_past_end_restores_draft(monkeypatch):
     async def exercise():
-        async def fake_stream(_conversation, usage_box=None, reasoning_box=None, finish_box=None):
+        async def fake_stream(_conversation, usage_box=None, reasoning_box=None, finish_box=None, **_kwargs):
             if False:
                 yield ""
 
@@ -1676,7 +1693,7 @@ def test_prompt_history_down_past_end_restores_draft(monkeypatch):
 
 def test_prompt_history_skips_consecutive_duplicates(monkeypatch):
     async def exercise():
-        async def fake_stream(_conversation, usage_box=None, reasoning_box=None, finish_box=None):
+        async def fake_stream(_conversation, usage_box=None, reasoning_box=None, finish_box=None, **_kwargs):
             if False:
                 yield ""
 
@@ -1743,7 +1760,7 @@ def test_paste_clipboard_image_attaches(monkeypatch):
 
 def test_image_attachment_builds_multimodal_message(monkeypatch):
     async def exercise():
-        async def fake_stream(_conversation, usage_box=None, reasoning_box=None, finish_box=None):
+        async def fake_stream(_conversation, usage_box=None, reasoning_box=None, finish_box=None, **_kwargs):
             if False:
                 yield ""
 
@@ -2319,7 +2336,7 @@ def test_connection_screen_preserves_each_provider_form(monkeypatch):
 def test_turn_updates_badge_tokens(monkeypatch):
     async def exercise():
         async def fake_stream(
-            _conversation, usage_box=None, reasoning_box=None, finish_box=None
+            _conversation, usage_box=None, reasoning_box=None, finish_box=None, **_kwargs
         ):
             if reasoning_box is not None:
                 reasoning_box.append("reasoning text")
@@ -2347,7 +2364,7 @@ def test_empty_response_is_retried_and_completes(monkeypatch):
         calls = 0
 
         async def empty_then_reply(
-            _conversation, usage_box=None, reasoning_box=None, finish_box=None
+            _conversation, usage_box=None, reasoning_box=None, finish_box=None, **_kwargs
         ):
             nonlocal calls
             calls += 1
@@ -2375,7 +2392,7 @@ def test_empty_response_is_retried_and_completes(monkeypatch):
 def test_empty_response_gives_up_with_notice(monkeypatch):
     async def exercise():
         async def always_empty(
-            _conversation, usage_box=None, reasoning_box=None, finish_box=None
+            _conversation, usage_box=None, reasoning_box=None, finish_box=None, **_kwargs
         ):
             if reasoning_box is not None:
                 reasoning_box.append("reasoning only")
@@ -2406,7 +2423,7 @@ def test_empty_response_gives_up_with_notice(monkeypatch):
 def test_empty_response_stops_when_user_stops(monkeypatch):
     async def exercise():
         async def slow_empty(
-            _conversation, usage_box=None, reasoning_box=None, finish_box=None
+            _conversation, usage_box=None, reasoning_box=None, finish_box=None, **_kwargs
         ):
             await asyncio.sleep(0.1)
             return
@@ -2534,7 +2551,7 @@ def test_render_tool_result_dispatch_highlighted():
 def test_final_answer_strips_protocol_lines(monkeypatch):
     async def exercise():
         async def fake_stream(
-            _conversation, usage_box=None, reasoning_box=None, finish_box=None
+            _conversation, usage_box=None, reasoning_box=None, finish_box=None, **_kwargs
         ):
             yield "thinking: let me think"
             yield "\n"
@@ -2559,5 +2576,306 @@ def test_final_answer_strips_protocol_lines(monkeypatch):
                 "thinking: let me think\nHere is the answer."
             )
             assert captured["text"] == "Here is the answer."
+
+    asyncio.run(exercise())
+
+
+def test_connection_screen_shows_codex_sign_in_when_selected(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        tui.codex_auth, "auth_json_path", lambda: tmp_path / "auth.json"
+    )
+    previous = get_config()
+    import remie.agent as _agent
+
+    _agent.configure_openai("http://localhost:7070/v1", "k", "m", provider="local")
+
+    async def exercise():
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            await pilot.press("ctrl+p")
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, ConnectionScreen)
+
+            provider = screen.query_one("#provider-select", Select)
+            values = []
+            for option in provider._options:
+                values.append(
+                    option.value if hasattr(option, "value") else option[1]
+                )
+            assert "codex" in values
+
+            signin = screen.query_one("#codex-signin-button", Button)
+            api_key_input = screen.query_one("#api-key-input", Input)
+            account_label = screen.query_one("#codex-account-label", Label)
+
+            # Hidden while a different provider is active.
+            assert not signin.display
+            assert api_key_input.display
+
+            provider.value = "codex"
+            await pilot.pause()
+
+            assert signin.display
+            assert screen.query_one("#codex-signout-button", Button).display
+            assert not api_key_input.display
+            assert "Not signed in" in str(account_label.render())
+
+    asyncio.run(exercise())
+    _agent.configure_openai(
+        previous.base_url,
+        previous.api_key,
+        previous.model,
+        previous.provider,
+        previous.reasoning_effort,
+        previous.verify_ssl,
+    )
+
+
+def test_connection_screen_codex_connect_requires_sign_in(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        tui.codex_auth, "auth_json_path", lambda: tmp_path / "auth.json"
+    )
+    previous = get_config()
+    import remie.agent as _agent
+
+    _agent.configure_openai("http://localhost:7070/v1", "k", "m", provider="local")
+
+    async def exercise():
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            await pilot.press("ctrl+p")
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, ConnectionScreen)
+            screen.query_one("#provider-select", Select).value = "codex"
+            await pilot.pause()
+
+            notifications: list[str] = []
+            monkeypatch.setattr(
+                app,
+                "notify",
+                lambda *args, **kwargs: notifications.append(args[0]),
+            )
+            screen._connect()
+            await pilot.pause()
+
+            assert any("Sign in with ChatGPT" in note for note in notifications)
+            # Still on the connection screen; nothing was connected.
+            assert isinstance(app.screen, ConnectionScreen)
+            assert get_config().provider != "codex"
+
+    asyncio.run(exercise())
+    _agent.configure_openai(
+        previous.base_url,
+        previous.api_key,
+        previous.model,
+        previous.provider,
+        previous.reasoning_effort,
+        previous.verify_ssl,
+    )
+
+
+def test_connection_screen_codex_connects_when_signed_in(monkeypatch, tmp_path):
+    import time as _time
+
+    from remie import codex_auth as _codex_auth
+
+    auth_file = tmp_path / "auth.json"
+    monkeypatch.setattr(tui.codex_auth, "auth_json_path", lambda: auth_file)
+
+    def make_jwt(claims):
+        segment = base64.urlsafe_b64encode(json.dumps(claims).encode()).rstrip(b"=")
+        return f"e.{segment.decode()}.s"
+
+    token = make_jwt(
+        {
+            "exp": _time.time() + 3600,
+            _codex_auth.OPENAI_AUTH_CLAIM: {
+                "chatgpt_account_id": "acc_1",
+                "chatgpt_plan_type": "pro",
+            },
+        }
+    )
+    auth_file.write_text(
+        json.dumps(
+            {"tokens": {"access_token": token, "refresh_token": "r", "id_token": ""}}
+        )
+    )
+    previous = get_config()
+    try:
+
+        async def exercise():
+            app = AgentApp()
+            async with app.run_test() as pilot:
+                await pilot.press("ctrl+p")
+                await pilot.pause()
+                screen = app.screen
+                assert isinstance(screen, ConnectionScreen)
+                screen.query_one("#provider-select", Select).value = "codex"
+                await pilot.pause()
+                account_label = screen.query_one("#codex-account-label", Label)
+                assert "Signed in" in str(account_label.render())
+
+                screen._connect()
+                await pilot.pause()
+
+                config = get_config()
+                assert config.provider == "codex"
+                assert config.model == tui.CODEX_MODELS[0]
+                badge = app.query_one(ModelBadge)
+                assert "Codex (ChatGPT)" in str(badge.render())
+
+        asyncio.run(exercise())
+    finally:
+        from remie.agent import configure_openai as _configure
+
+        _configure(
+            previous.base_url,
+            previous.api_key,
+            previous.model,
+            previous.provider,
+            previous.reasoning_effort,
+            previous.verify_ssl,
+        )
+
+
+def test_codex_native_tool_calls_execute_and_replay(monkeypatch):
+    """Codex provider: function_call items are executed and results replay as
+    role='tool' messages, then the loop continues to the final answer."""
+    import remie.agent as agent
+
+    previous = get_config()
+    try:
+        agent.configure_openai(
+            tui.CODEX_BACKEND_BASE, "", "gpt-5.5", provider="codex"
+        )
+
+        stream_rounds = {"n": 0}
+
+        async def scripted_stream(
+            _conversation,
+            usage_box=None,
+            reasoning_box=None,
+            finish_box=None,
+            **_kwargs,
+        ):
+            stream_rounds["n"] += 1
+            if stream_rounds["n"] == 1:
+                box = _kwargs.get("tool_calls_box")
+                assert box is not None
+                box.append(
+                    {
+                        "id": "call_1",
+                        "name": "list_files",
+                        "arguments": '{"path": "."}',
+                    }
+                )
+                yield ""  # no prose alongside the call
+            else:
+                finish_box["finish_reason"] = "stop"
+                yield "All done."
+
+        monkeypatch.setattr(tui, "stream_llm_call", scripted_stream)
+        # Title generation runs through agent.stream_llm_call directly; keep
+        # the Codex-provider test offline.
+        async def fake_title(_messages):
+            return "a finished task"
+
+        monkeypatch.setattr(tui, "generate_chat_title", fake_title)
+        tool_calls_seen = []
+
+        def fake_run_tool(name, args):
+            tool_calls_seen.append((name, args))
+            return {"path": ".", "files": [{"filename": "main.py", "type": "file"}]}
+
+        monkeypatch.setattr(tui, "run_tool", fake_run_tool)
+
+        async def exercise():
+            app = AgentApp()
+            async with app.run_test() as pilot:
+                task = asyncio.create_task(app.run_agent_turn("list the files"))
+                await task
+                await pilot.pause()
+
+                roles = [m["role"] for m in app.conversation]
+                assert roles == [
+                    "system",
+                    "user",
+                    "assistant",
+                    "tool",
+                    "assistant",
+                ]
+                call_msg = app.conversation[2]
+                assert call_msg["tool_calls"] == [
+                    {
+                        "id": "call_1",
+                        "name": "list_files",
+                        "arguments": '{"path": "."}',
+                    }
+                ]
+                result_msg = app.conversation[3]
+                assert result_msg["role"] == "tool"
+                assert result_msg["tool_call_id"] == "call_1"
+                assert result_msg["name"] == "list_files"
+                assert '"files"' in result_msg["content"]
+                assert app.conversation[4]["content"] == "All done."
+                assert tool_calls_seen == [("list_files", {"path": "."})]
+                assert app._agent_running is False
+
+        asyncio.run(exercise())
+    finally:
+        agent.configure_openai(
+            previous.base_url,
+            previous.api_key,
+            previous.model,
+            previous.provider,
+            previous.reasoning_effort,
+            previous.verify_ssl,
+        )
+
+
+def test_native_tools_system_prompt_swaps_protocol(monkeypatch, tmp_path):
+    import remie.agent as agent
+
+    monkeypatch.setattr(tui.codex_auth, "auth_json_path", lambda: tmp_path / "a.json")
+
+    def make_jwt(claims):
+        segment = base64.urlsafe_b64encode(json.dumps(claims).encode()).rstrip(b"=")
+        return f"e.{segment.decode()}.s"
+
+    import time as time_module
+
+    token = make_jwt(
+        {
+            "exp": time_module.time() + 3600,
+            tui.codex_auth.OPENAI_AUTH_CLAIM: {"chatgpt_plan_type": "plus"},
+        }
+    )
+
+    async def exercise():
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            agent.configure_openai(
+                "http://localhost:7070/v1", "k", "m", provider="local"
+            )
+            app._refresh_system_prompt()
+            system_text = app.conversation[0]["content"]
+            assert "tool: TOOL_NAME" in system_text
+            assert "'thinking:'" in system_text
+
+            agent.configure_openai(
+                tui.CODEX_BACKEND_BASE, "", "gpt-5.5", provider="codex"
+            )
+            try:
+                await app._refresh_system_prompt_async() if hasattr(
+                    app, "_refresh_system_prompt_async"
+                ) else None
+                app._refresh_system_prompt()
+                native_text = app.conversation[0]["content"]
+                assert "tool: TOOL_NAME" not in native_text
+                assert "function tools provided with each request" in native_text
+            finally:
+                pass
 
     asyncio.run(exercise())

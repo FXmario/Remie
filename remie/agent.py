@@ -40,9 +40,23 @@ CONFIG_FILE = CONFIG_DIR / "config.json"
 
 OPENCODE_GO_BASE_URL = "https://opencode.ai/zen/go/v1"
 LOCAL_BASE_URL = "http://localhost:7070/v1"
+CODEX_BACKEND_BASE = "https://chatgpt.com/backend-api/codex"
 CONFIG_VERSION = 2
-SUPPORTED_PROVIDERS = ("local", "opencode-go")
+SUPPORTED_PROVIDERS = ("local", "opencode-go", "codex")
 STATUS_ANIMATION_CONFIG_KEY = "status_animation"
+
+# Codex (ChatGPT subscription) models. The live list for the signed-in account
+# is fetched when connecting (GET /codex/models?client_version=...); this
+# bundled list is only a fallback when the backend is unreachable.
+CODEX_MODELS = [
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
+    "gpt-5.5",
+    "gpt-5.4",
+    "gpt-5.4-mini",
+]
+CODEX_DEFAULT_CONTEXT_LIMIT = 272_000
 
 # Bundled fallback model list, used only when the OpenCode Go models API is
 # unreachable. The live list (and each model's context window) is fetched from
@@ -140,6 +154,15 @@ class ConnectionConfig:
 
 
 def _provider_defaults(provider: str) -> ConnectionConfig:
+    if provider == "codex":
+        return ConnectionConfig(
+            CODEX_BACKEND_BASE,
+            "",
+            CODEX_MODELS[0],
+            "codex",
+            "medium",
+            True,
+        )
     if provider == "opencode-go":
         return ConnectionConfig(
             OPENCODE_GO_BASE_URL,
@@ -239,12 +262,16 @@ def load_provider_configs() -> dict[str, ConnectionConfig]:
 
     stored = data.get("providers")
     if isinstance(stored, dict):
-        profiles: dict[str, ConnectionConfig] = {}
+        # Every supported provider gets an entry so newly-added providers
+        # (e.g. codex) have defaults even without a saved profile.
+        profiles: dict[str, ConnectionConfig] = {
+            provider: _provider_defaults(provider) for provider in SUPPORTED_PROVIDERS
+        }
         for provider in SUPPORTED_PROVIDERS:
             profile = stored.get(provider)
             if not isinstance(profile, dict):
                 continue
-            defaults = _provider_defaults(provider)
+            defaults = profiles[provider]
             profiles[provider] = ConnectionConfig(
                 profile.get("base_url", defaults.base_url),
                 profile.get("api_key", defaults.api_key),
@@ -422,12 +449,27 @@ async def fetch_opencode_go_models(api_key: str) -> list[str]:
             return list(OPENCODE_GO_MODELS)
 
 
+async def fetch_codex_models() -> list[str]:
+    """Fetch the signed-in account's live Codex model list; fall back to the
+    bundled list when not signed in or the backend is unreachable."""
+    from remie.codex_client import fetch_codex_models as _fetch_live_models
+
+    try:
+        models = await _fetch_live_models()
+    except Exception:
+        return list(CODEX_MODELS)
+    return models or list(CODEX_MODELS)
+
+
 def get_model_context_limit(model: str, provider: str = "local") -> int | None:
     """Best-known context window for a model/provider pair (used for compaction).
 
     OpenCode Go context windows come from the live model list fetched at
     connect time; models without a reported window fall back to the default.
+    Codex subscription models expose a 272k input window (400k total).
     """
+    if provider == "codex":
+        return CODEX_DEFAULT_CONTEXT_LIMIT
     if provider != "opencode-go":
         return None
     return _opencode_go_model_context.get(model, OPENCODE_GO_DEFAULT_CONTEXT_LIMIT)
@@ -498,15 +540,69 @@ def load_agent_memory() -> str:
     return f'\n\n## Agent memory (from .remie/memory: "{memory["name"]}")\n{content}'
 
 
-def get_full_system_prompt():
-    tool_str_repr = ""
-    for tool_name in TOOL_REGISTRY:
-        tool_str_repr += "TOOL\n===" + get_tool_str_representation(tool_name)
-        tool_str_repr += f"\n{'=' * 15}\n"
+def get_full_system_prompt(native_tools: bool = False):
+    """Build the system prompt.
+
+    With ``native_tools`` (Codex provider) the text-protocol instructions are
+    replaced by a note that tools are called natively through the API, and the
+    textual tool list is dropped since schemas travel with the request.
+    """
+    if native_tools:
+        protocol = (
+            "You have access to the function tools provided with each request. "
+            "Call them natively instead of describing tool usage in plain text; "
+            "results arrive as tool outputs between your turns.\n"
+        )
+        tool_list_repr = ""
+    else:
+        tool_list_repr = ""
+        for tool_name in TOOL_REGISTRY:
+            tool_list_repr += "TOOL\n===" + get_tool_str_representation(tool_name)
+            tool_list_repr += f"\n{'=' * 15}\n"
+        protocol = (
+            "When you want to use a tool, first provide a short 'thinking:' line "
+            "explaining your reasoning, then reply with exactly one line in the "
+            "format: 'tool: TOOL_NAME({{JSON_ARGS}})' and nothing else.\n"
+            "Use compact single-line JSON with double quotes. After receiving a "
+            "tool_result(...) message, continue the task.\n"
+            "If no tool is needed, respond normally.\n"
+        )
     return (
-        SYSTEM_PROMPT.format(tool_list_repr=tool_str_repr)
+        _compose_system_prompt(tool_list_repr, protocol)
         + load_project_context()
         + load_agent_memory()
+    )
+
+
+_ASK_USER_PARAGRAPH = (
+    "When multiple valid approaches have meaningful tradeoffs or require a user "
+    "preference, do not choose silently. Briefly explain the options and ask the "
+    "user which they prefer. Continue autonomously for routine implementation "
+    "details or when one option clearly dominates. Do not ask unnecessary "
+    "confirmation questions.\nTo ask the user a question, call the 'ask_user' "
+    "tool and wait for its result instead of ending your turn."
+)
+
+_MEMORY_PARAGRAPH = (
+    "Use the 'memory' tool to persist durable facts, decisions, user preferences, "
+    "and open tasks that should be remembered across chats. Add a note when you "
+    "learn something that will matter later; do not log routine progress and do "
+    "not use memory as a chat transcript. Remie keeps an active project memory, "
+    'so use memory(action="add", text=...) without a name to append to it. Use '
+    'memory(action="list") to see older memories (each with an id and a name), '
+    'and target one by name or id only when needed; memory(action="delete", '
+    "name=...) removes a memory entirely."
+)
+
+
+def _compose_system_prompt(tool_list_repr: str, protocol: str) -> str:
+    return (
+        f"You are a coding assistant whose goal it is to help us solve coding tasks. \n"
+        f"You have access to a series of tools you can execute. Here are the tools you can execute:\n\n"
+        f"{tool_list_repr}\n"
+        f"{protocol}\n"
+        f"{_ASK_USER_PARAGRAPH}\n"
+        f"{_MEMORY_PARAGRAPH}"
     )
 
 
@@ -681,7 +777,28 @@ async def stream_llm_call(
     usage_box: dict[str, int] | None = None,
     reasoning_box: list[str] | None = None,
     finish_box: dict[str, Any] | None = None,
+    tool_calls_box: list[dict[str, str]] | None = None,
 ) -> AsyncIterator[str]:
+    if _config.provider == "codex":
+        # Imported lazily to avoid a module-level import cycle. Codex uses the
+        # OpenAI SDK with native function calling: schemas travel with the
+        # request and the model's function_call items land in tool_calls_box.
+        from remie.codex_client import stream_codex_call
+        from remie.tools import get_tool_schemas
+
+        async for content in stream_codex_call(
+            conversation,
+            model=_config.model,
+            reasoning_effort=_config.reasoning_effort,
+            tools=get_tool_schemas(),
+            usage_box=usage_box,
+            reasoning_box=reasoning_box,
+            finish_box=finish_box,
+            tool_calls_box=tool_calls_box,
+        ):
+            yield content
+        return
+
     max_output_tokens = get_max_output_tokens(_config.provider)
     reasoning_supported = supports_reasoning_effort(_config.model, _config.provider)
     payload: dict[str, Any] = {

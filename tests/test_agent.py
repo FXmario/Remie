@@ -14,6 +14,7 @@ from remie.agent import (
     LLMRequestError,
     OPENCODE_GO_BASE_URL,
     OPENCODE_GO_MODELS,
+    _provider_defaults,
     configure_openai,
     estimate_conversation_tokens,
     estimate_message_tokens,
@@ -1114,7 +1115,7 @@ class TestChatStorage:
 
 class TestSummarizeMessages:
     def test_returns_joined_summary(self, monkeypatch):
-        async def fake_stream(conversation, usage_box=None, reasoning_box=None, finish_box=None):
+        async def fake_stream(conversation, usage_box=None, reasoning_box=None, finish_box=None, **_kwargs):
             yield "key fact one"
             yield "key fact two"
 
@@ -1128,7 +1129,7 @@ class TestSummarizeMessages:
         assert asyncio.run(summarize_messages([])) == ""
 
     def test_failure_returns_empty(self, monkeypatch):
-        async def failing_stream(conversation, usage_box=None, reasoning_box=None, finish_box=None):
+        async def failing_stream(conversation, usage_box=None, reasoning_box=None, finish_box=None, **_kwargs):
             raise RuntimeError("boom")
             yield
 
@@ -1705,7 +1706,11 @@ class TestConnectionConfig:
         }
         save_provider_configs(profiles, "opencode-go")
         assert load_config() == profiles["opencode-go"]
-        assert load_provider_configs() == profiles
+        # Providers without a saved profile (e.g. newly added ones) come back
+        # with their defaults so the connection picker always has entries.
+        expected = dict(profiles)
+        expected.setdefault("codex", _provider_defaults("codex"))
+        assert load_provider_configs() == expected
 
     def test_load_config_derives_provider_for_legacy_file(self, tmp_path, monkeypatch):
         import remie.agent as agent

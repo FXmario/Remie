@@ -46,7 +46,10 @@ from textual.widgets import (
 from textual_image.widget import SixelImage as TerminalImage
 from textual.widgets.option_list import Option
 
+from remie import codex_auth
 from remie.agent import (
+    CODEX_BACKEND_BASE,
+    CODEX_MODELS,
     ConnectionConfig,
     LLMRequestError,
     OPENCODE_GO_BASE_URL,
@@ -59,6 +62,7 @@ from remie.agent import (
     estimate_tokens_from_counts,
     extract_thinking,
     extract_tool_invocations,
+    fetch_codex_models,
     fetch_opencode_go_models,
     generate_chat_title,
     get_config,
@@ -126,6 +130,7 @@ STREAM_UPDATE_CHARS_PER_SECOND = 50_000
 STREAM_PREVIEW_MAX_CHARS = 3000
 PROVIDER_BASE_URLS = {
     "opencode-go": OPENCODE_GO_BASE_URL,
+    "codex": CODEX_BACKEND_BASE,
 }
 
 CSS = """
@@ -771,6 +776,7 @@ class ModelBadge(Label):
             provider = "opencode-go"
         vendor = {
             "opencode-go": "OpenCode Go",
+            "codex": "Codex (ChatGPT)",
         }.get(provider, "Local")
         self._model_text = config.model
         self._vendor_text = vendor
@@ -960,6 +966,7 @@ class ConnectionScreen(ModalScreen):
                     [
                         ("Local (llama.cpp)", "local"),
                         ("OpenCode Go", "opencode-go"),
+                        ("Codex (ChatGPT Plus/Pro)", "codex"),
                     ],
                     value=self._active_provider,
                     id="provider-select",
@@ -978,10 +985,20 @@ class ConnectionScreen(ModalScreen):
                     placeholder="API key",
                     id="api-key-input",
                 )
+                yield Label("ChatGPT account", id="codex-account-label")
+                yield Horizontal(
+                    Button(
+                        "Sign in with ChatGPT", variant="primary", id="codex-signin-button"
+                    ),
+                    Button("Sign out", id="codex-signout-button"),
+                    classes="row",
+                )
                 yield Label("Model")
-                model_list = list(OPENCODE_GO_MODELS)
-                if current.provider == "local":
-                    model_list = list(OPENCODE_GO_MODELS)
+                model_list = (
+                    list(CODEX_MODELS)
+                    if current.provider == "codex"
+                    else list(OPENCODE_GO_MODELS)
+                )
                 if (
                     current.provider != "local"
                     and current.model
@@ -1026,22 +1043,142 @@ class ConnectionScreen(ModalScreen):
         provider = self.query_one("#provider-select", Select).value
         self._set_provider_fields(provider)
         self._update_reasoning_fields()
-        self.query_one("#api-key-input", Input).focus()
+        if provider == "local":
+            self.query_one("#api-key-input", Input).focus()
         if provider == "opencode-go":
             api_key = self.query_one("#api-key-input", Input).value.strip()
             if api_key:
                 self.run_worker(
                     self._refresh_models(api_key, str(provider)), exclusive=False
                 )
+        if provider == "codex":
+            self._refresh_codex_models()
+            self.run_worker(self._prefetch_codex_models(), exclusive=False)
+
+    def _codex_account_text(self) -> str:
+        auth = codex_auth.load_auth()
+        if auth is None:
+            return "Not signed in — your ChatGPT Plus/Pro plan signs in via the browser."
+        return f"Signed in: {codex_auth.account_summary(auth)}"
+
+    def _update_codex_account_label(self) -> None:
+        self.query_one("#codex-account-label", Label).update(
+            f"ChatGPT account — {self._codex_account_text()}"
+        )
+
+    def _refresh_codex_models(self) -> None:
+        select = self.query_one("#model-select", Select)
+        profile = self._profiles.get("codex")
+        fallback = list(CODEX_MODELS)
+        if profile is not None and profile.model and profile.model not in fallback:
+            fallback.insert(0, profile.model)
+        current_value = (
+            profile.model
+            if profile is not None and profile.model in fallback
+            else fallback[0]
+        )
+        select.set_options([_model_option(model) for model in fallback])
+        select.value = current_value
+
+    async def _prefetch_codex_models(self) -> None:
+        """Replace the bundled Codex list with the account's live models."""
+        if not codex_auth.is_signed_in():
+            return
+        try:
+            models = await fetch_codex_models()
+        except Exception:
+            return
+        if not models or not self.is_running:
+            return
+        select = self.query_one("#model-select", Select)
+        previously_selected = str(select.value)
+        options = [model for model in models]
+        if previously_selected and previously_selected not in options:
+            options.insert(0, previously_selected)
+        select.set_options([_model_option(model) for model in options])
+        select.value = previously_selected if previously_selected in options else options[0]
+        self._update_codex_account_label()
+
+    async def _run_codex_signin(self, button: Button) -> None:
+        button.disabled = True
+        button.label = "Waiting for browser..."
+        self.notify(
+            "Opening the browser to sign in to ChatGPT. Complete the sign-in in "
+            "the browser tab; Remie continues automatically.",
+            title="ChatGPT sign-in",
+            timeout=10,
+        )
+
+        def show_login_url(url: str) -> None:
+            self.app.call_from_thread(
+                self.notify,
+                f"If the browser did not open, visit:\n{url}",
+                title="ChatGPT sign-in URL",
+                severity="information",
+                timeout=20,
+            )
+
+        try:
+            auth = await asyncio.to_thread(
+                lambda: asyncio.run(codex_auth.login(on_login_url=show_login_url))
+            )
+        except codex_auth.CodexAuthError as error:
+            self.notify(str(error), title="ChatGPT sign-in failed", severity="error")
+        except Exception as error:  # noqa: BLE001 — surface any failure to the user
+            self.notify(
+                f"{type(error).__name__}: {error}",
+                title="ChatGPT sign-in failed",
+                severity="error",
+            )
+        else:
+            self._profiles["codex"] = ConnectionConfig(
+                CODEX_BACKEND_BASE,
+                "",
+                str(self.query_one("#model-select", Select).value),
+                "codex",
+                self.query_one("#reasoning-effort-select", Select).value
+                if isinstance(
+                    self.query_one("#reasoning-effort-select", Select).value, str
+                )
+                else "medium",
+                True,
+            )
+            self.notify(
+                f"Signed in as {codex_auth.account_summary(auth)}",
+                title="ChatGPT connected",
+            )
+            await self._prefetch_codex_models()
+        finally:
+            if self.is_running:
+                button = self.query_one("#codex-signin-button", Button)
+                button.disabled = False
+                button.label = "Sign in with ChatGPT"
+            self._update_codex_account_label()
+
+    def _sign_out_codex(self) -> None:
+        removed = codex_auth.clear_auth()
+        message = (
+            "Signed out of ChatGPT; tokens were removed."
+            if removed
+            else "No stored ChatGPT tokens found."
+        )
+        self.notify(message, title="Codex (ChatGPT)")
+        self._update_codex_account_label()
 
     def _set_provider_fields(self, provider: object) -> None:
         is_local = provider == "local"
-        has_provider = provider in {"local", "opencode-go"}
+        is_codex = provider == "codex"
+        has_provider = provider in {"local", "opencode-go", "codex"}
         base_url_input = self.query_one("#base-url-input", Input)
         base_url_label = self.query_one("#base-url-label", Label)
         base_url_input.display = is_local
         base_url_label.display = is_local
         base_url_input.disabled = not is_local
+        api_key_input = self.query_one("#api-key-input", Input)
+        api_key_input.display = not is_codex
+        api_key_input.disabled = is_codex
+        api_key_label = self.query_one("#api-key-label", Label)
+        api_key_label.display = not is_codex
         model_select = self.query_one("#model-select", Select)
         local_model_input = self.query_one("#local-model-input", Input)
         model_select.display = has_provider and not is_local
@@ -1057,6 +1194,16 @@ class ConnectionScreen(ModalScreen):
         verify_label.display = is_local
         verify_switch.display = is_local
         verify_switch.disabled = not is_local
+        account_label = self.query_one("#codex-account-label", Label)
+        signin_button = self.query_one("#codex-signin-button", Button)
+        signout_button = self.query_one("#codex-signout-button", Button)
+        account_label.display = is_codex
+        signin_button.display = is_codex
+        signout_button.display = is_codex
+        signin_button.disabled = not is_codex
+        signout_button.disabled = not is_codex
+        if is_codex:
+            self._update_codex_account_label()
 
     def _capture_profile(self) -> None:
         """Keep edits made to the current provider before switching away."""
@@ -1100,7 +1247,7 @@ class ConnectionScreen(ModalScreen):
         """
         model = selected_model or self._selected_model()
         provider = self.query_one("#provider-select", Select).value
-        if provider not in {"local", "opencode-go"}:
+        if provider not in {"local", "opencode-go", "codex"}:
             return
         supported = supports_reasoning_effort(model, provider)
         select = self.query_one("#reasoning-effort-select", Select)
@@ -1124,7 +1271,10 @@ class ConnectionScreen(ModalScreen):
             self._active_provider = str(event.value)
             self._apply_profile(self._active_provider)
             self._set_provider_fields(event.value)
-            if event.value in PROVIDER_BASE_URLS:
+            if event.value == "codex":
+                self._refresh_codex_models()
+                self.run_worker(self._prefetch_codex_models(), exclusive=False)
+            elif event.value in PROVIDER_BASE_URLS:
                 self.query_one("#base-url-input", Input).value = PROVIDER_BASE_URLS[
                     event.value
                 ]
@@ -1150,7 +1300,11 @@ class ConnectionScreen(ModalScreen):
         if event.button.id == "cancel-button":
             self.dismiss()
             return
-        if event.button.id == "submit-button":
+        if event.button.id == "codex-signin-button":
+            await self._run_codex_signin(event.button)
+        elif event.button.id == "codex-signout-button":
+            self._sign_out_codex()
+        elif event.button.id == "submit-button":
             self._connect()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
@@ -1175,10 +1329,14 @@ class ConnectionScreen(ModalScreen):
 
     def _connect(self) -> None:
         provider = self.query_one("#provider-select", Select).value
-        if provider not in {"local", "opencode-go"}:
+        if provider not in {"local", "opencode-go", "codex"}:
             self.notify("Choose a provider first", severity="warning")
             return
-        if provider != "local":
+        if provider == "codex":
+            base_url = CODEX_BACKEND_BASE
+            api_key = ""
+            model = self._selected_model()
+        elif provider != "local":
             base_url = PROVIDER_BASE_URLS.get(str(provider), OPENCODE_GO_BASE_URL)
             api_key = self.query_one("#api-key-input", Input).value.strip()
             model = self._selected_model()
@@ -1206,6 +1364,13 @@ class ConnectionScreen(ModalScreen):
             effort = "medium"
         if not supports_reasoning_effort(model, str(provider)):
             effort = "off"
+        if provider == "codex" and not codex_auth.is_signed_in():
+            self.notify(
+                "Sign in with ChatGPT before connecting.",
+                title="Not signed in",
+                severity="error",
+            )
+            return
         config = configure_openai(
             base_url,
             api_key,
@@ -1229,7 +1394,11 @@ class ConnectionScreen(ModalScreen):
         value = self.query_one("#model-select", Select).value
         if isinstance(value, str):
             return value
-        return OPENCODE_GO_MODELS[0]
+        return (
+            CODEX_MODELS[0]
+            if provider == "codex"
+            else OPENCODE_GO_MODELS[0]
+        )
 
 
 class AskUserScreen(ModalScreen):
@@ -1756,7 +1925,12 @@ class AgentApp(App):
             chat = create_chat()
             self._chat_id = chat["id"]
             self.conversation = [
-                {"role": "system", "content": get_full_system_prompt()}
+                {
+                    "role": "system",
+                    "content": get_full_system_prompt(
+                        native_tools=self._native_tool_calling()
+                    ),
+                }
             ]
             self._transcript = []
             self.sub_title = chat["name"]
@@ -1775,10 +1949,20 @@ class AgentApp(App):
         state = "shown" if self._status_animation_enabled else "hidden"
         self.notify(f"Status image {state}", title="Status image")
 
+    def _native_tool_calling(self) -> bool:
+        """Native function calling is used for the Codex provider; other
+        providers rely on the text protocol."""
+        return get_config().provider == "codex"
+
     def _refresh_system_prompt(self) -> None:
         """Rebuild the system message from the current prompt (incl. memory) and
         keep the conversation token cache in sync."""
-        new_system = {"role": "system", "content": get_full_system_prompt()}
+        new_system = {
+            "role": "system",
+            "content": get_full_system_prompt(
+                native_tools=self._native_tool_calling()
+            ),
+        }
         if self.conversation and self.conversation[0]["role"] == "system":
             self._cached_conv_tokens += estimate_message_tokens(
                 new_system
@@ -1827,6 +2011,9 @@ class AgentApp(App):
         for message in self._transcript:
             role = message.get("role")
             content = message.get("content")
+            if role == "tool":
+                log.write("[dim]· tool result[/]")
+                continue
             if role == "user":
                 if isinstance(content, str):
                     if content.startswith("tool_result("):
@@ -1979,11 +2166,13 @@ class AgentApp(App):
         config = get_config()
         return get_model_context_limit(config.model, config.provider)
 
-    def _push_message(self, role: str, content: Any) -> None:
+    def _push_message(self, role: str, content: Any, extra: dict | None = None) -> None:
         """Append a message to the conversation and keep the running token
         estimate current so compaction checks stay O(1). Non-system messages
         are also appended to the visible transcript."""
         message = {"role": role, "content": content}
+        if extra:
+            message.update(extra)
         self.conversation.append(message)
         if role != "system":
             self._transcript.append(message)
@@ -2025,6 +2214,10 @@ class AgentApp(App):
         self._agent_task = current_task
         try:
             self._agent_running = True
+            # Keep the system prompt in sync with the active provider (text
+            # protocol vs native function calling) before every turn.
+            self._refresh_system_prompt()
+            native_tool_calling = self._native_tool_calling()
             self._push_message("user", user_content)
             continuations = 0
             empty_retries = 0
@@ -2046,13 +2239,18 @@ class AgentApp(App):
                 usage_box: dict[str, int] = {}
                 reasoning_box: list[str] = []
                 finish_box: dict[str, Any] = {}
+                tool_calls_box: list[dict[str, str]] = []
                 badge = self.query_one(ModelBadge)
                 stream_started = time.monotonic()
                 last_preview_update = stream_started
                 reasoning_text = ""
                 reasoning_chunks_done = 0
                 async for delta in stream_llm_call(
-                    self.conversation, usage_box, reasoning_box, finish_box
+                    self.conversation,
+                    usage_box,
+                    reasoning_box,
+                    finish_box,
+                    tool_calls_box=tool_calls_box,
                 ):
                     if self._stop_requested:
                         break
@@ -2127,7 +2325,33 @@ class AgentApp(App):
                 self.query_one(ModelBadge).set_tokens(
                     self._total_input_tokens, self._total_output_tokens
                 )
-                tool_invocations = extract_tool_invocations(full_text)
+                # Native function calls (Codex provider) arrive as structured
+                # items; other providers parse the text protocol.
+                pending_calls: list[dict[str, Any]] = []
+                if native_tool_calling:
+                    for call in tool_calls_box:
+                        try:
+                            args = json.loads(call.get("arguments") or "{}")
+                        except json.JSONDecodeError:
+                            args = {}
+                        if not isinstance(args, dict):
+                            args = {}
+                        pending_calls.append(
+                            {
+                                "id": call.get("id") or "",
+                                "name": call.get("name") or "",
+                                "args": args,
+                            }
+                        )
+                    tool_invocations = [
+                        (call["name"], call["args"]) for call in pending_calls
+                    ]
+                else:
+                    tool_invocations = extract_tool_invocations(full_text)
+                    pending_calls = [
+                        {"id": None, "name": name, "args": args}
+                        for name, args in tool_invocations
+                    ]
                 content = strip_protocol_lines(full_text).strip()
                 if not tool_invocations and not content:
                     # The model produced no usable output (e.g. only reasoning,
@@ -2221,8 +2445,26 @@ class AgentApp(App):
                         )
                     replacements.append(tool_line)
                 log.replace_stream(*replacements)
-                self._push_message("assistant", full_text)
-                for name, args in tool_invocations:
+                if native_tool_calling:
+                    self._push_message(
+                        "assistant",
+                        full_text,
+                        extra={
+                            "tool_calls": [
+                                {
+                                    "id": call["id"],
+                                    "name": call["name"],
+                                    "arguments": json.dumps(call["args"]),
+                                }
+                                for call in pending_calls
+                            ]
+                        },
+                    )
+                else:
+                    self._push_message("assistant", full_text)
+                for call in pending_calls:
+                    name = call["name"]
+                    args = call["args"]
                     if self._stop_requested:
                         log.write("[dim]Stopped by user[/]")
                         break
@@ -2264,7 +2506,17 @@ class AgentApp(App):
                         result.get("action") in {"add", "clear"}
                     ):
                         self._refresh_system_prompt()
-                    self._push_message("user", f"tool_result({result_json})")
+                    call_id = call.get("id")
+                    if call_id:
+                        # Codex native tool calling: results replay as
+                        # function_call_output items.
+                        self._push_message(
+                            "tool",
+                            result_json,
+                            extra={"tool_call_id": call_id, "name": name},
+                        )
+                    else:
+                        self._push_message("user", f"tool_result({result_json})")
         except asyncio.CancelledError:
             log.replace_stream()
             log.write("[dim]Stopped by user[/]")
