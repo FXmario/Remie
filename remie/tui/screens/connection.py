@@ -82,6 +82,20 @@ class ConnectionScreen(ModalScreen):
         width: 100%;
         align: center middle;
     }
+
+    #connection-dialog .filter-row {
+        height: 3;
+        width: 100%;
+    }
+
+    #connection-dialog .filter-row Select {
+        width: 1fr;
+        margin-right: 1;
+    }
+
+    #connection-dialog .filter-row Input {
+        width: 1fr;
+    }
     """
 
     def compose(self) -> ComposeResult:
@@ -89,21 +103,22 @@ class ConnectionScreen(ModalScreen):
         with Vertical(id="connection-dialog"):
             with VerticalScroll(id="connection-scroll"):
                 yield Label("Connection", id="dialog-title")
-                yield Input(
-                    placeholder="Filter providers…",
-                    id="provider-search",
-                )
-                yield Select(
-                    [
-                        ("Local (llama.cpp)", "local"),
-                        ("OpenCode Go", "opencode-go"),
-                        ("Codex (ChatGPT Plus/Pro)", "codex"),
-                        ("OpenRouter", "openrouter"),
-                    ],
-                    value=self._active_provider,
-                    id="provider-select",
-                    prompt="Choose provider...",
-                )
+                with Horizontal(id="provider-filter-row", classes="filter-row"):
+                    yield Select(
+                        [
+                            ("Local (llama.cpp)", "local"),
+                            ("OpenCode Go", "opencode-go"),
+                            ("Codex (ChatGPT Plus/Pro)", "codex"),
+                            ("OpenRouter", "openrouter"),
+                        ],
+                        value=self._active_provider,
+                        id="provider-select",
+                        prompt="Choose provider...",
+                    )
+                    yield Input(
+                        placeholder="Filter providers…",
+                        id="provider-search",
+                    )
                 yield Label("Base URL", id="base-url-label")
                 yield Input(
                     current.base_url,
@@ -126,10 +141,6 @@ class ConnectionScreen(ModalScreen):
                     classes="row",
                 )
                 yield Label("Model")
-                yield Input(
-                    placeholder="Filter models (name or id)…",
-                    id="model-search",
-                )
                 if current.provider == "codex":
                     model_list = list(CODEX_MODELS)
                 elif current.provider == "openrouter":
@@ -142,34 +153,40 @@ class ConnectionScreen(ModalScreen):
                     and current.model not in model_list
                 ):
                     model_list = [current.model] + model_list
-                yield Select(
-                    [_model_option(model) for model in model_list],
-                    value=(
-                        current.model
-                        if current.model in model_list
-                        else model_list[0]
-                    ),
-                    id="model-select",
-                    prompt="Select model...",
-                )
+                with Horizontal(id="model-filter-row", classes="filter-row"):
+                    yield Select(
+                        [_model_option(model) for model in model_list],
+                        value=(
+                            current.model
+                            if current.model in model_list
+                            else model_list[0]
+                        ),
+                        id="model-select",
+                        prompt="Select model...",
+                    )
+                    yield Input(
+                        placeholder="Filter models (name or id)…",
+                        id="model-search",
+                    )
                 yield Input(
                     current.model if current.provider == "local" else "",
                     placeholder="Enter the local model name",
                     id="local-model-input",
                 )
                 yield Label("Reasoning effort", id="reasoning-effort-label")
-                yield Input(
-                    placeholder="Filter efforts…",
-                    id="reasoning-search",
-                )
-                yield Select(
-                    [(effort.title(), effort) for effort in REASONING_EFFORTS],
-                    value=current.reasoning_effort
-                    if current.reasoning_effort in REASONING_EFFORTS
-                    else "medium",
-                    id="reasoning-effort-select",
-                    prompt="Select reasoning effort...",
-                )
+                with Horizontal(id="reasoning-filter-row", classes="filter-row"):
+                    yield Select(
+                        [(effort.title(), effort) for effort in REASONING_EFFORTS],
+                        value=current.reasoning_effort
+                        if current.reasoning_effort in REASONING_EFFORTS
+                        else "medium",
+                        id="reasoning-effort-select",
+                        prompt="Select reasoning effort...",
+                    )
+                    yield Input(
+                        placeholder="Filter efforts…",
+                        id="reasoning-search",
+                    )
                 yield Label("Verify local SSL certificates", id="verify-ssl-label")
                 yield Switch(
                     value=current.verify_ssl,
@@ -460,7 +477,9 @@ class ConnectionScreen(ModalScreen):
         api_key_label = self.query_one("#api-key-label", Label)
         api_key_label.display = not is_codex
         model_select = self.query_one("#model-select", Select)
+        model_filter_row = self.query_one("#model-filter-row", Horizontal)
         local_model_input = self.query_one("#local-model-input", Input)
+        model_filter_row.display = has_provider and not is_local
         model_select.display = has_provider and not is_local
         model_select.disabled = not has_provider or is_local
         local_model_input.display = is_local

@@ -53,10 +53,16 @@ class MemoryScreen(ModalScreen):
     }
 
     #memory-row {
-        height: auto;
+        height: 3;
+        width: 100%;
     }
 
     #memory-select {
+        width: 1fr;
+        margin-right: 1;
+    }
+
+    #memory-search {
         width: 1fr;
     }
 
@@ -112,11 +118,8 @@ class MemoryScreen(ModalScreen):
         with Vertical(id="memory-dialog"):
             with Horizontal(id="dialog-header"):
                 yield Label("Memories", id="dialog-title")
+                yield Button("🗑", id="memory-delete")
                 yield Button("✕", id="memory-close")
-            yield Input(
-                placeholder="Filter memories…",
-                id="memory-search",
-            )
             with Horizontal(id="memory-row"):
                 yield Select(
                     self._select_options(),
@@ -125,7 +128,10 @@ class MemoryScreen(ModalScreen):
                     prompt="Pick a memory",
                     allow_blank=False,
                 )
-                yield Button("🗑", id="memory-delete")
+                yield Input(
+                    placeholder="Filter memories…",
+                    id="memory-search",
+                )
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id == "memory-search":
