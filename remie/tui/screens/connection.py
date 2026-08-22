@@ -60,27 +60,90 @@ class ConnectionScreen(ModalScreen):
     }
 
     #connection-dialog {
-        width: 60;
-        height: 24;
-        max-height: 90%;
-        padding: 1 2;
+        width: 68;
+        height: 30;
+        max-width: 94%;
+        max-height: 92%;
+        padding: 0;
         border: round $primary;
         background: $surface;
     }
 
+    #connection-header {
+        height: 4;
+        padding-left: 2;
+        background: $primary;
+        color: $text;
+    }
+
+    #connection-heading {
+        width: 1fr;
+        height: 4;
+        padding-top: 1;
+    }
+
+    #connection-title {
+        height: 1;
+        text-style: bold;
+    }
+
+    #connection-subtitle {
+        height: 1;
+        color: $text-muted;
+    }
+
+    #connection-close {
+        width: 5;
+        min-width: 5;
+        height: 4;
+        margin: 0;
+        border: none;
+        background: $primary;
+        color: $text;
+    }
+
+    #connection-close:hover {
+        background: $error;
+    }
+
     #connection-scroll {
         height: 1fr;
+        padding: 0 2 1 2;
         scrollbar-size: 1 1;
     }
 
-    #connection-dialog Label {
+    #connection-dialog .section-title {
+        width: 100%;
+        height: 2;
         margin-top: 1;
+        padding-top: 1;
+        color: $accent;
+        text-style: bold;
+        border-bottom: solid $panel-lighten-1;
+    }
+
+    #connection-dialog .field-label {
+        height: 1;
+        margin-top: 1;
+        color: $text-muted;
     }
 
     #connection-dialog .row {
         height: 3;
         width: 100%;
         align: center middle;
+    }
+
+    #connection-actions {
+        height: 4;
+        padding: 0 2;
+        align: right middle;
+        border-top: solid $panel-lighten-1;
+        background: $panel;
+    }
+
+    #connection-actions Button {
+        margin-left: 1;
     }
 
     #connection-dialog .filter-row {
@@ -101,8 +164,20 @@ class ConnectionScreen(ModalScreen):
     def compose(self) -> ComposeResult:
         current = self._profiles[self._active_provider]
         with Vertical(id="connection-dialog"):
+            with Horizontal(id="connection-header"):
+                with Vertical(id="connection-heading"):
+                    yield Label("Connect a provider", id="connection-title")
+                    yield Label(
+                        "Choose where Remie runs its models",
+                        id="connection-subtitle",
+                    )
+                yield Button("✕", id="connection-close")
             with VerticalScroll(id="connection-scroll"):
-                yield Label("Connection", id="dialog-title")
+                yield Label("PROVIDER", classes="section-title")
+                yield Label(
+                    "Service",
+                    classes="field-label",
+                )
                 with Horizontal(id="provider-filter-row", classes="filter-row"):
                     yield Select(
                         [
@@ -119,20 +194,33 @@ class ConnectionScreen(ModalScreen):
                         placeholder="Filter providers…",
                         id="provider-search",
                     )
-                yield Label("Base URL", id="base-url-label")
+                yield Label("AUTHENTICATION", classes="section-title")
+                yield Label(
+                    "Base URL",
+                    id="base-url-label",
+                    classes="field-label",
+                )
                 yield Input(
                     current.base_url,
                     placeholder="http://localhost:7070/v1",
                     id="base-url-input",
                 )
-                yield Label("API Key", id="api-key-label")
+                yield Label(
+                    "API key",
+                    id="api-key-label",
+                    classes="field-label",
+                )
                 yield Input(
                     current.api_key,
                     password=True,
                     placeholder="API key",
                     id="api-key-input",
                 )
-                yield Label("ChatGPT account", id="codex-account-label")
+                yield Label(
+                    "ChatGPT account",
+                    id="codex-account-label",
+                    classes="field-label",
+                )
                 yield Horizontal(
                     Button(
                         "Sign in with ChatGPT", variant="primary", id="codex-signin-button"
@@ -140,7 +228,8 @@ class ConnectionScreen(ModalScreen):
                     Button("Sign out", id="codex-signout-button"),
                     classes="row",
                 )
-                yield Label("Model")
+                yield Label("MODEL", classes="section-title")
+                yield Label("Model", classes="field-label")
                 if current.provider == "codex":
                     model_list = list(CODEX_MODELS)
                 elif current.provider == "openrouter":
@@ -173,7 +262,12 @@ class ConnectionScreen(ModalScreen):
                     placeholder="Enter the local model name",
                     id="local-model-input",
                 )
-                yield Label("Reasoning effort", id="reasoning-effort-label")
+                yield Label("GENERATION", classes="section-title")
+                yield Label(
+                    "Reasoning effort",
+                    id="reasoning-effort-label",
+                    classes="field-label",
+                )
                 with Horizontal(id="reasoning-filter-row", classes="filter-row"):
                     yield Select(
                         [(effort.title(), effort) for effort in REASONING_EFFORTS],
@@ -187,15 +281,19 @@ class ConnectionScreen(ModalScreen):
                         placeholder="Filter efforts…",
                         id="reasoning-search",
                     )
-                yield Label("Verify local SSL certificates", id="verify-ssl-label")
+                yield Label(
+                    "Verify local SSL certificates",
+                    id="verify-ssl-label",
+                    classes="field-label",
+                )
                 yield Switch(
                     value=current.verify_ssl,
                     id="verify-ssl-switch",
                     animate=False,
                 )
-            with Horizontal(classes="row"):
-                yield Button("Submit", variant="primary", id="submit-button")
+            with Horizontal(id="connection-actions"):
                 yield Button("Cancel", id="cancel-button")
+                yield Button("Connect", variant="primary", id="submit-button")
 
     def on_mount(self) -> None:
         provider = self.query_one("#provider-select", Select).value
@@ -638,7 +736,7 @@ class ConnectionScreen(ModalScreen):
             self._update_reasoning_fields(selected_model)
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "cancel-button":
+        if event.button.id in {"cancel-button", "connection-close"}:
             self.dismiss()
             return
         if event.button.id == "codex-signin-button":

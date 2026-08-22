@@ -212,6 +212,48 @@ def test_ctrl_g_toggles_and_persists_status_animation(monkeypatch, tmp_path):
     asyncio.run(exercise())
 
 
+def test_startup_theme_matches_terminal_background(monkeypatch):
+    monkeypatch.setattr(tui, "_detect_terminal_background", lambda: "light")
+    assert AgentApp().theme == "ansi-light"
+
+    monkeypatch.setattr(tui, "_detect_terminal_background", lambda: "dark")
+    assert AgentApp().theme == "ansi-dark"
+
+    monkeypatch.setattr(tui, "_detect_terminal_background", lambda: None)
+    assert AgentApp().theme == "ansi-dark"
+
+
+def test_ctrl_t_toggles_full_light_and_dark_themes(monkeypatch):
+    monkeypatch.setattr(tui, "_detect_terminal_background", lambda: "dark")
+
+    async def exercise():
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            assert app._theme_mode == "system"
+            assert app.theme == "ansi-dark"
+            assert app._code_theme() == "ansi_dark"
+
+            await pilot.press("ctrl+t")
+            await pilot.pause()
+            assert app._theme_mode == "light"
+            assert app.theme == "textual-light"
+            assert app._code_theme() == "ansi_light"
+
+            await pilot.press("ctrl+t")
+            await pilot.pause()
+            assert app._theme_mode == "dark"
+            assert app.theme == "textual-dark"
+            assert app._code_theme() == "ansi_dark"
+
+            await pilot.press("ctrl+t")
+            await pilot.pause()
+            assert app._theme_mode == "system"
+            assert app.theme == "ansi-dark"
+            assert app._code_theme() == "ansi_dark"
+
+    asyncio.run(exercise())
+
+
 def test_ctrl_g_toggles_static_status_image_in_tmux(monkeypatch, tmp_path):
     import remie.agent as agent
 

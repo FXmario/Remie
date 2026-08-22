@@ -129,7 +129,15 @@ class AgentApp(App):
         super().__init__()
         self.conversation: list[dict[str, Any]] = []
         self._cached_conv_tokens = 0
-        self.theme = "ansi-dark"
+        # Match the terminal's background at startup. OSC 11 detection may be
+        # unavailable (non-interactive terminals, unsupported emulators), in
+        # which case dark mode is the safe default. Textual's full palettes
+        # visibly theme the entire UI rather than only ANSI accents.
+        self._system_theme = _tui_pkg._detect_terminal_background() or "dark"
+        self._theme_mode = "system"
+        # ANSI themes inherit the terminal's background, preserving terminal
+        # transparency. Explicit light/dark overrides use opaque full palettes.
+        self.theme = f"ansi-{self._system_theme}"
         self._agent_running = False
         self._agent_task: asyncio.Task[Any] | None = None
         self._stop_requested = False
@@ -157,7 +165,8 @@ class AgentApp(App):
         yield Footer()
 
     def _code_theme(self) -> str:
-        return "ansi_light" if self.theme == "ansi-light" else "ansi_dark"
+        theme = self.available_themes.get(self.theme)
+        return "ansi_light" if theme is not None and not theme.dark else "ansi_dark"
 
     def _set_status(self, status: str) -> None:
         self.query_one(StatusIndicator).set_status(status)
@@ -943,7 +952,26 @@ class AgentApp(App):
         self.exit()
 
     def action_toggle_theme(self) -> None:
-        self.theme = "ansi-dark" if self.theme == "ansi-light" else "ansi-light"
+        modes = ("system", "light", "dark")
+        self._theme_mode = modes[
+            (modes.index(self._theme_mode) + 1) % len(modes)
+        ]
+        resolved = (
+            self._system_theme
+            if self._theme_mode == "system"
+            else self._theme_mode
+        )
+        self.theme = (
+            f"ansi-{resolved}"
+            if self._theme_mode == "system"
+            else f"textual-{resolved}"
+        )
+        label = (
+            f"system theme ({resolved})"
+            if self._theme_mode == "system"
+            else f"{resolved} theme"
+        )
+        self.notify(f"Switched to {label}", title="Theme")
 
     def action_stop_agent(self) -> None:
         """Stop the active agent turn and clear pending messages."""
