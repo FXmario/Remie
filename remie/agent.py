@@ -28,7 +28,6 @@ from remie.tools import (
     memory_tool,
     read_file_tool,
     run_command_tool,
-    session_file_path,
     tree_files_tool,
 )
 
@@ -110,7 +109,6 @@ def get_max_output_tokens(provider: str = "local") -> int:
 OPENCODE_GO_DEFAULT_CONTEXT_LIMIT = 128_000
 PROJECT_CONTEXT_MAX_CHARS = 8000
 MEMORY_MAX_CHARS = 4000
-SESSION_VERSION = 1
 
 # Live context windows for OpenCode Go models, populated from the models API
 # (each model reports its own context_length). Used for context compaction so
@@ -448,7 +446,7 @@ If no tool is needed, respond normally.
 When multiple valid approaches have meaningful tradeoffs or require a user preference, do not choose silently. Briefly explain the options and ask the user which they prefer. Continue autonomously for routine implementation details or when one option clearly dominates. Do not ask unnecessary confirmation questions.
 To ask the user a question, call the 'ask_user' tool and wait for its result instead of ending your turn.
 
-Use the 'memory' tool to persist durable facts, decisions, user preferences, and open tasks that should be remembered across sessions. Add a note when you learn something that will matter later; do not log routine progress. Remie creates and activates a fresh memory automatically on every launch, so use memory(action="add", text=...) without a name to append to it. Use memory(action="list") to see older memories (each with an id and a name), and target one by name or id only when needed; memory(action="delete", name=...) removes a memory entirely.
+Use the 'memory' tool to persist durable facts, decisions, user preferences, and open tasks that should be remembered across chats. Add a note when you learn something that will matter later; do not log routine progress and do not use memory as a chat transcript. Remie keeps an active project memory, so use memory(action="add", text=...) without a name to append to it. Use memory(action="list") to see older memories (each with an id and a name), and target one by name or id only when needed; memory(action="delete", name=...) removes a memory entirely.
 """
 
 
@@ -793,7 +791,7 @@ async def summarize_messages(messages: list[dict[str, Any]]) -> str:
     return "".join(chunks).strip()
 
 
-async def generate_memory_title(messages: list[dict[str, Any]]) -> str:
+async def generate_chat_title(messages: list[dict[str, Any]]) -> str:
     """Ask the active model for a short title for a completed task."""
     if not messages:
         return ""
@@ -812,50 +810,6 @@ async def generate_memory_title(messages: list[dict[str, Any]]) -> str:
     except Exception:
         return ""
     return " ".join(title.split()).strip(" `\"'.,:;!?\n")
-
-
-def save_session(conversation: list[dict[str, Any]]) -> None:
-    """
-    Persist the conversation to .remie/session.json for resume across launches.
-    No-op when the conversation contains only the system prompt.
-    """
-    if len(conversation) <= 1:
-        return
-    path = session_file_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    import datetime as _dt
-
-    payload = {
-        "version": SESSION_VERSION,
-        "saved_at": _dt.datetime.now().isoformat(timespec="seconds"),
-        "model": _config.model,
-        "messages": conversation,
-    }
-    path.write_text(json.dumps(payload, default=str), encoding="utf-8")
-
-
-def load_session() -> dict[str, Any] | None:
-    """Return the saved session payload, or None when absent or corrupt."""
-    path = session_file_path()
-    if not path.is_file():
-        return None
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError):
-        return None
-    if not isinstance(data, dict) or data.get("version") != SESSION_VERSION:
-        return None
-    messages = data.get("messages")
-    if not isinstance(messages, list) or not messages:
-        return None
-    return data
-
-
-def clear_session() -> None:
-    """Remove the saved session file, if present."""
-    path = session_file_path()
-    if path.is_file():
-        path.unlink()
 
 
 def get_connection_error_message(error: Exception) -> str | None:

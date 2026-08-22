@@ -14,17 +14,14 @@ from remie.agent import (
     LLMRequestError,
     ConnectionConfig,
     OPENCODE_GO_BASE_URL,
-    clear_session,
     configure_openai,
     get_config,
-    load_session,
-    save_session,
-    session_file_path,
 )
 from remie.tui import (
     MAX_AUTO_CONTINUATIONS,
     AgentApp,
     AskUserScreen,
+    ChatScreen,
     ConnectionScreen,
     MemoryScreen,
     ModelBadge,
@@ -38,9 +35,16 @@ from remie.tui import (
     _load_status_gif,
 )
 from remie.tools import (
+    create_chat,
+    find_chat_by_id,
     find_memory_by_id,
     get_active_memory_id,
+    list_chats,
+    load_chat_index,
+    load_latest_chat,
     memory_tool,
+    save_chat,
+    save_chat_index,
     set_active_memory_id,
 )
 
@@ -1007,49 +1011,58 @@ def test_compaction_falls_back_when_summary_fails(monkeypatch):
     asyncio.run(exercise())
 
 
-def test_on_mount_starts_fresh_and_preserves_old_memory(monkeypatch):
+def test_on_mount_resumes_latest_chat_and_preserves_memory(monkeypatch):
     async def exercise():
         old_memory = memory_tool("add", "keep this", name="old work")
-        save_session(
+        chat = create_chat("earlier work")
+        save_chat(
+            chat["id"],
             [
                 {"role": "system", "content": "sys"},
                 {"role": "user", "content": "hello there"},
                 {"role": "assistant", "content": "hi"},
-            ]
+            ],
+            [
+                {"role": "user", "content": "hello there"},
+                {"role": "assistant", "content": "hi"},
+            ],
         )
         app = AgentApp()
         async with app.run_test() as pilot:
-            assert len(app.conversation) == 1
+            assert app._chat_id == chat["id"]
+            assert len(app.conversation) == 3
             assert app.conversation[0]["role"] == "system"
+            # The saved system prompt is replaced with the current one.
+            assert "Agent memory" in app.conversation[0]["content"]
             assert app._cached_conv_tokens == tui.estimate_conversation_tokens(
                 app.conversation
             )
             log_lines = [strip.text for strip in app.query_one("#log").lines]
-            assert not any("Session resumed" in line for line in log_lines)
+            assert any("Resumed chat" in line for line in log_lines)
+            assert any("hello there" in line for line in log_lines)
             active = find_memory_by_id(get_active_memory_id())
             assert active is not None
-            assert active["name"] == "session 1"
-            assert find_memory_by_id(old_memory["id"]) is not None
-            assert load_session() is None
+            assert active["name"] == "old work"
 
     asyncio.run(exercise())
 
 
-def test_on_mount_fresh_when_no_session(monkeypatch):
+def test_on_mount_fresh_when_no_chats(monkeypatch):
     async def exercise():
-        clear_session()
         app = AgentApp()
         async with app.run_test() as pilot:
             assert len(app.conversation) == 1
             assert app.conversation[0]["role"] == "system"
+            assert app._chat_id is not None
+            assert find_chat_by_id(app._chat_id) is not None
             active = find_memory_by_id(get_active_memory_id())
             assert active is not None
-            assert active["name"] == "session 1"
+            assert active["name"] == "general"
 
     asyncio.run(exercise())
 
 
-def test_action_clear_log_drops_session(monkeypatch):
+def test_action_new_chat_keeps_previous_chat(monkeypatch):
     async def exercise():
         async def fake_stream(_conversation, usage_box=None, reasoning_box=None, finish_box=None):
             if False:
@@ -1059,20 +1072,22 @@ def test_action_clear_log_drops_session(monkeypatch):
 
         app = AgentApp()
         async with app.run_test() as pilot:
+            first_id = app._chat_id
             app.conversation.append({"role": "user", "content": "hello"})
-            save_session(app.conversation)
-            assert len(app.conversation) == 2
+            app._transcript.append({"role": "user", "content": "hello"})
             await pilot.press("ctrl+l")
             await pilot.pause()
+            assert app._chat_id != first_id
             assert len(app.conversation) == 1
             assert app.conversation[0]["role"] == "system"
-            assert not session_file_path().exists()
-            assert load_session() is None
+            # The previous chat was kept, not deleted.
+            assert find_chat_by_id(first_id) is not None
+            assert load_chat_index().get(app._chat_id) is not None
 
     asyncio.run(exercise())
 
 
-def test_session_saved_after_turn(monkeypatch):
+def test_chat_saved_after_turn(monkeypatch):
     async def exercise():
         async def fake_stream(_conversation, usage_box=None, reasoning_box=None, finish_box=None):
             yield "final reply"
@@ -1083,13 +1098,16 @@ def test_session_saved_after_turn(monkeypatch):
         async with app.run_test() as pilot:
             await app.run_agent_turn("hello")
             await pilot.pause()
-            assert session_file_path().is_file()
-            data = load_session()
+            data = load_latest_chat()
             assert data is not None
             joined = " ".join(
-                str(m.get("content")) for m in data["messages"]
+                str(m.get("content")) for m in data["context_messages"]
             )
             assert "final reply" in joined
+            transcript_joined = " ".join(
+                str(m.get("content")) for m in data["transcript"]
+            )
+            assert "final reply" in transcript_joined
 
     asyncio.run(exercise())
 
@@ -1119,7 +1137,7 @@ def test_memory_tool_add_refreshes_system_prompt(monkeypatch):
     asyncio.run(exercise())
 
 
-def test_memory_add_without_name_uses_launch_memory(monkeypatch):
+def test_memory_add_without_name_uses_active_memory(monkeypatch):
     async def exercise():
         calls = 0
 
@@ -1137,15 +1155,20 @@ def test_memory_add_without_name_uses_launch_memory(monkeypatch):
 
         app = AgentApp()
         async with app.run_test() as pilot:
-            launch_memory_id = get_active_memory_id()
+            active_memory_id = get_active_memory_id()
             await app.run_agent_turn("refactor the parser module")
             await pilot.pause()
 
+            # The note goes to the still-active durable memory...
             active = get_active_memory_id()
-            assert active == launch_memory_id
-            assert find_memory_by_id(active)["name"] == "refactor the parser"
+            assert active == active_memory_id
+            assert find_memory_by_id(active)["name"] == "general"
             assert "remember Y" in memory_tool("read")["content"]
             assert "remember Y" in app.conversation[0]["content"]
+            # ...while the chat itself is auto-named after the task.
+            chat = find_chat_by_id(app._chat_id)
+            assert chat is not None
+            assert chat["name"] == "refactor the parser"
             log_lines = [strip.text for strip in app.query_one("#log").lines]
             assert not any("auto-named" in line for line in log_lines)
 
@@ -1176,8 +1199,9 @@ def test_named_memory_add_is_not_renamed(monkeypatch):
             await app.run_agent_turn("refactor the parser module")
             await pilot.pause()
 
-            # Explicitly named notes remain isolated from the active launch memory.
-            assert find_memory_by_id(get_active_memory_id())["name"] == "refactor the parser"
+            # Explicitly named notes remain isolated from the active memory,
+            # which keeps its default name now that chats are named instead.
+            assert find_memory_by_id(get_active_memory_id())["name"] == "general"
             assert "design fact" in memory_tool("read", name="design")["content"]
 
     asyncio.run(exercise())
@@ -1191,19 +1215,22 @@ def test_ctrl_m_opens_memory_picker(monkeypatch):
             await pilot.pause()
             assert len(app.screen_stack) == 2
             assert isinstance(app.screen, MemoryScreen)
-            assert app.screen.query_one("#memory-list", OptionList)
-            # Launch memories are created automatically, so the picker only
-            # offers Switch / Delete / Cancel.
+            # Memories are picked from a dropdown, not an option list.
+            assert app.screen.query_one("#memory-select", Select)
+            assert not app.screen.query("#memory-list")
+            assert not app.screen.query("#memory-switch")
             assert not app.screen.query("#new-memory-input")
-            assert app.screen.query_one("#memory-switch")
+            # Closing is done via the ✕ button in the dialog header.
+            assert not app.screen.query("#memory-cancel")
+            assert app.screen.query_one("#memory-close", Button)
             assert app.screen.query_one("#memory-delete")
-            assert app.screen.query_one("#memory-cancel")
 
     asyncio.run(exercise())
 
 
 def test_memory_picker_switch_updates_active(monkeypatch):
     async def exercise():
+        memory_tool("add", "base note")  # activates 'general'
         design = memory_tool("add", "design fact", name="design")
 
         app = AgentApp()
@@ -1213,14 +1240,8 @@ def test_memory_picker_switch_updates_active(monkeypatch):
             screen = app.screen
             assert isinstance(screen, MemoryScreen)
             assert get_active_memory_id() != design["id"]
-            memory_list = screen.query_one("#memory-list", OptionList)
-            index = memory_list.get_option_index(design["id"])
-            memory_list.highlighted = index
-            option = memory_list.highlighted_option
-            assert option is not None
-            screen.on_option_list_option_selected(
-                OptionList.OptionSelected(memory_list, option, index)
-            )
+            memory_select = screen.query_one("#memory-select", Select)
+            memory_select.value = design["id"]
             await pilot.pause()
             assert get_active_memory_id() == design["id"]
             assert "design fact" in app.conversation[0]["content"]
@@ -1228,7 +1249,7 @@ def test_memory_picker_switch_updates_active(monkeypatch):
     asyncio.run(exercise())
 
 
-def test_memory_picker_selects_launch_memory(monkeypatch):
+def test_memory_picker_selects_active_memory(monkeypatch):
     async def exercise():
         app = AgentApp()
         async with app.run_test() as pilot:
@@ -1236,14 +1257,11 @@ def test_memory_picker_selects_launch_memory(monkeypatch):
             await pilot.pause()
             screen = app.screen
             assert isinstance(screen, MemoryScreen)
-            launch_memory = find_memory_by_id(get_active_memory_id())
-            assert launch_memory is not None
-            assert launch_memory["name"] == "session 1"
-            memory_list = screen.query_one("#memory-list", OptionList)
-            select_options = [option.id for option in memory_list.options]
-            assert launch_memory["id"] in select_options
-            assert memory_list.highlighted_option is not None
-            assert memory_list.highlighted_option.id == launch_memory["id"]
+            active_memory = find_memory_by_id(get_active_memory_id())
+            assert active_memory is not None
+            assert active_memory["name"] == "general"
+            memory_select = screen.query_one("#memory-select", Select)
+            assert memory_select.value == active_memory["id"]
 
     asyncio.run(exercise())
 
@@ -1286,10 +1304,10 @@ def test_memory_picker_deletes_memory(monkeypatch):
             await pilot.pause()
 
             assert find_memory_by_id(design["id"]) is None
-            select_options = [
-                option.id for option in screen.query_one("#memory-list", OptionList).options
-            ]
-            assert design["id"] not in select_options
+            memory_select = screen.query_one("#memory-select", Select)
+            assert memory_select.value != design["id"]
+            # Deleting the active memory falls back to 'general'.
+            assert find_memory_by_id(get_active_memory_id())["name"] == "general"
 
     asyncio.run(exercise())
 
@@ -1305,8 +1323,9 @@ def test_memory_picker_delete_is_immediate(monkeypatch):
             screen = app.screen
             assert isinstance(screen, MemoryScreen)
 
-            memory_list = screen.query_one("#memory-list", OptionList)
-            memory_list.highlighted = memory_list.get_option_index(design["id"])
+            memory_select = screen.query_one("#memory-select", Select)
+            memory_select.value = design["id"]
+            await pilot.pause()
             await screen._delete_current()
             await pilot.pause()
 
@@ -1330,6 +1349,184 @@ def test_memory_picker_blocked_while_agent_running(monkeypatch):
             await app.action_open_memory()
             await pilot.pause()
             assert len(app.screen_stack) == 1
+
+    asyncio.run(exercise())
+
+
+def test_ctrl_r_opens_chat_picker(monkeypatch):
+    async def exercise():
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            await pilot.press("ctrl+r")
+            await pilot.pause()
+            assert len(app.screen_stack) == 2
+            assert isinstance(app.screen, ChatScreen)
+            assert app.screen.query_one("#chat-list", OptionList)
+            assert app.screen.query_one("#chat-new", Button)
+            assert app.screen.query_one("#chat-switch", Button)
+            assert app.screen.query_one("#chat-delete", Button)
+            assert app.screen.query_one("#chat-cancel", Button)
+
+    asyncio.run(exercise())
+
+
+def test_chat_picker_blocked_while_agent_running(monkeypatch):
+    async def exercise():
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            app._agent_running = True
+            await app.action_open_chats()
+            await pilot.pause()
+            assert len(app.screen_stack) == 1
+
+    asyncio.run(exercise())
+
+
+def test_chat_picker_switch_loads_chat(monkeypatch):
+    async def exercise():
+        first = create_chat("first chat")
+        save_chat(
+            first["id"],
+            [
+                {"role": "system", "content": "sys"},
+                {"role": "user", "content": "first question"},
+                {"role": "assistant", "content": "first answer"},
+            ],
+            [
+                {"role": "user", "content": "first question"},
+                {"role": "assistant", "content": "first answer"},
+            ],
+        )
+        second = create_chat("second chat")
+        save_chat(
+            second["id"],
+            [
+                {"role": "system", "content": "sys"},
+                {"role": "user", "content": "second question"},
+            ],
+            [{"role": "user", "content": "second question"}],
+        )
+        chats = load_chat_index()
+        chats[first["id"]]["updated_at"] = "2026-01-01T10:00:00"
+        chats[second["id"]]["updated_at"] = "2026-01-02T10:00:00"
+        save_chat_index(chats)
+
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            # Latest chat resumes on launch.
+            assert app._chat_id == second["id"]
+            await pilot.press("ctrl+r")
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, ChatScreen)
+            screen._switch(first["id"])
+            await pilot.pause()
+            assert len(app.screen_stack) == 1
+            assert app._chat_id == first["id"]
+            assert len(app.conversation) == 3
+            assert app._transcript[0]["content"] == "first question"
+            log_lines = [strip.text for strip in app.query_one("#log").lines]
+            assert any("Switched to chat" in line for line in log_lines)
+            assert any("first answer" in line for line in log_lines)
+
+    asyncio.run(exercise())
+
+
+def test_chat_picker_new_starts_fresh_chat(monkeypatch):
+    async def exercise():
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            original_id = app._chat_id
+            app.conversation.append({"role": "user", "content": "hi"})
+            app._transcript.append({"role": "user", "content": "hi"})
+            await pilot.press("ctrl+r")
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, ChatScreen)
+            screen.query_one("#chat-new", Button).press()
+            await pilot.pause()
+            assert len(app.screen_stack) == 1
+            assert app._chat_id != original_id
+            assert len(app.conversation) == 1
+            assert find_chat_by_id(original_id) is not None
+
+    asyncio.run(exercise())
+
+
+def test_chat_picker_delete_requires_confirmation(monkeypatch):
+    async def exercise():
+        kept = create_chat("kept chat")
+        doomed = create_chat("doomed chat")
+
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            await pilot.press("ctrl+r")
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, ChatScreen)
+            chat_list = screen.query_one("#chat-list", OptionList)
+            chat_list.highlighted = chat_list.get_option_index(doomed["id"])
+
+            delete_button = screen.query_one("#chat-delete", Button)
+            delete_button.press()
+            await pilot.pause()
+            # First press only arms the button.
+            assert find_chat_by_id(doomed["id"]) is not None
+            assert delete_button.label == "Really delete?"
+
+            delete_button.press()
+            await pilot.pause()
+            assert find_chat_by_id(doomed["id"]) is None
+            remaining_ids = [option.id for option in chat_list.options]
+            assert doomed["id"] not in remaining_ids
+            assert kept["id"] in remaining_ids
+
+    asyncio.run(exercise())
+
+
+def test_deleting_active_chat_loads_next_latest(monkeypatch):
+    async def exercise():
+        older = create_chat("older chat")
+        save_chat(
+            older["id"],
+            [
+                {"role": "system", "content": "sys"},
+                {"role": "user", "content": "older"},
+            ],
+            [{"role": "user", "content": "older"}],
+        )
+        newer = create_chat("newer chat")
+        save_chat(
+            newer["id"],
+            [
+                {"role": "system", "content": "sys"},
+                {"role": "user", "content": "newer"},
+            ],
+            [{"role": "user", "content": "newer"}],
+        )
+        chats = load_chat_index()
+        chats[older["id"]]["updated_at"] = "2026-01-01T10:00:00"
+        chats[newer["id"]]["updated_at"] = "2026-01-02T10:00:00"
+        save_chat_index(chats)
+
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            # The newest chat resumes on launch.
+            assert app._chat_id == newer["id"]
+            await pilot.press("ctrl+r")
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, ChatScreen)
+            chat_list = screen.query_one("#chat-list", OptionList)
+            chat_list.highlighted = chat_list.get_option_index(newer["id"])
+            delete_button = screen.query_one("#chat-delete", Button)
+            delete_button.press()
+            await pilot.pause()
+            delete_button.press()
+            await pilot.pause()
+            assert find_chat_by_id(newer["id"]) is None
+            assert app._chat_id == older["id"]
+            assert app.conversation[-1]["content"] == "older"
 
     asyncio.run(exercise())
 
@@ -1455,8 +1652,8 @@ def test_prompt_history_down_past_end_restores_draft(monkeypatch):
         monkeypatch.setattr(tui, "stream_llm_call", fake_stream)
 
         app = AgentApp()
-        app._prompt_history = ["hello", "world"]
         async with app.run_test() as pilot:
+            app._prompt_history = ["hello", "world"]
             prompt = app.query_one("#prompt", PromptTextArea)
             prompt.focus()
             await pilot.press("d")
@@ -1503,8 +1700,8 @@ def test_prompt_history_skips_consecutive_duplicates(monkeypatch):
 def test_up_arrow_moves_lines_before_history(monkeypatch):
     async def exercise():
         app = AgentApp()
-        app._prompt_history = ["saved"]
         async with app.run_test() as pilot:
+            app._prompt_history = ["saved"]
             prompt = app.query_one("#prompt", PromptTextArea)
             prompt.focus()
             await pilot.press("l")

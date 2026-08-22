@@ -52,7 +52,6 @@ from remie.agent import (
     OPENCODE_GO_BASE_URL,
     OPENCODE_GO_MODELS,
     UnsupportedModelError,
-    clear_session,
     configure_openai,
     estimate_conversation_tokens,
     estimate_message_tokens,
@@ -61,20 +60,18 @@ from remie.agent import (
     extract_thinking,
     extract_tool_invocations,
     fetch_opencode_go_models,
-    generate_memory_title,
+    generate_chat_title,
     get_config,
     get_connection_error_message,
     get_full_system_prompt,
     get_model_context_limit,
     load_status_animation_enabled,
     load_provider_configs,
-    load_session,
     render_assistant_panel,
     render_user_message,
     run_tool,
     save_provider_configs,
     save_status_animation_enabled,
-    save_session,
     stream_llm_call,
     strip_protocol_lines,
     summarize_messages,
@@ -82,15 +79,24 @@ from remie.agent import (
 )
 
 from remie.tools import (
+    DEFAULT_CHAT_NAME,
     MEMORY_NAME_MAX_CHARS,
-    create_launch_memory,
+    create_chat,
+    delete_chat,
     delete_memory,
+    ensure_active_memory,
     ensure_general_memory,
+    find_chat_by_id,
     find_memory_by_id,
     get_active_memory_id,
     get_tool_summary,
+    list_chats,
     list_memories,
+    load_chat,
+    load_latest_chat,
+    rename_chat,
     rename_memory,
+    save_chat,
     set_active_memory_id,
 )
 
@@ -1337,14 +1343,41 @@ class MemoryScreen(ModalScreen):
         background: $surface;
     }
 
-    #memory-list {
+    #dialog-header {
         height: auto;
-        max-height: 14;
         margin-bottom: 1;
     }
 
-    #memory-dialog Label {
-        margin-top: 1;
+    #dialog-title {
+        width: 1fr;
+        padding-top: 1;
+        text-style: bold;
+    }
+
+    #memory-close {
+        width: auto;
+        min-width: 4;
+        height: 3;
+        border: none;
+        background: $panel;
+    }
+
+    #memory-row {
+        height: auto;
+    }
+
+    #memory-select {
+        width: 1fr;
+    }
+
+    #memory-delete {
+        width: auto;
+        min-width: 4;
+        height: 3;
+        border: none;
+        background: $panel;
+        margin-left: 1;
+        margin-right: 0;
     }
 
     #memory-dialog Button {
@@ -1359,6 +1392,9 @@ class MemoryScreen(ModalScreen):
     def _refresh_memories(self) -> None:
         self._memories = list_memories()
 
+    def _select_options(self) -> list[tuple[str, str]]:
+        return [(memory["name"], memory["id"]) for memory in self._memories]
+
     def compose(self) -> ComposeResult:
         # Auto-create the default memory (and activate it) when none exist, so
         # the picker always has something to select and switch to. Memories are
@@ -1372,31 +1408,31 @@ class MemoryScreen(ModalScreen):
             if isinstance(app, AgentApp):
                 app._refresh_system_prompt()
         self._refresh_memories()
+        # Pass the active memory as the initial value so the Select's own
+        # mount-time init emits a Changed event that matches the active memory
+        # (and is ignored by on_select_changed) instead of auto-picking the
+        # first option and spuriously switching memories.
         active = get_active_memory_id()
         with Vertical(id="memory-dialog"):
-            yield Label("Memories", id="dialog-title")
-            yield OptionList(
-                *[
-                    Option(memory["name"], id=memory["id"])
-                    for memory in self._memories
-                ],
-                id="memory-list",
-            )
-            with Horizontal(classes="row"):
-                yield Button("Switch", variant="primary", id="memory-switch")
-                yield Button("Delete", variant="error", id="memory-delete")
-                yield Button("Cancel", id="memory-cancel")
+            with Horizontal(id="dialog-header"):
+                yield Label("Memories", id="dialog-title")
+                yield Button("✕", id="memory-close")
+            with Horizontal(id="memory-row"):
+                yield Select(
+                    self._select_options(),
+                    value=active,
+                    id="memory-select",
+                    prompt="Pick a memory",
+                    allow_blank=False,
+                )
+                yield Button("🗑", id="memory-delete")
 
     def on_mount(self) -> None:
-        memory_list = self.query_one("#memory-list", OptionList)
-        active = get_active_memory_id()
-        if active is not None:
-            memory_list.highlighted = memory_list.get_option_index(active)
-        memory_list.focus()
+        self.query_one("#memory-select", Select).focus()
 
     def _selected_id(self) -> str | None:
-        option = self.query_one("#memory-list", OptionList).highlighted_option
-        return option.id if option is not None else None
+        value = self.query_one("#memory-select", Select).value
+        return str(value) if value is not Select.BLANK else None
 
     def _switch(self, memory_id: str | None) -> None:
         if not memory_id:
@@ -1424,30 +1460,202 @@ class MemoryScreen(ModalScreen):
             return
         delete_memory(memory_id)
         self._refresh_memories()
-        memory_list = self.query_one("#memory-list", OptionList)
-        memory_list.set_options(
-            [Option(memory["name"], id=memory["id"]) for memory in self._memories]
-        )
+        memory_select = self.query_one("#memory-select", Select)
+        memory_select.set_options(self._select_options())
         active = get_active_memory_id()
         if active is not None:
-            memory_list.highlighted = memory_list.get_option_index(active)
+            memory_select.value = active
         app = self.app
         if isinstance(app, AgentApp):
             app._refresh_system_prompt()
         self.notify(f"Deleted memory '{memory['name']}'", title="Memory")
 
-    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
-        if event.option_list.id == "memory-list" and event.option_id is not None:
-            self._switch(event.option_id)
+    def on_select_changed(self, event: Select.Changed) -> None:
+        if event.select.id != "memory-select":
+            return
+        # Ignore programmatic syncs that just reselect the active memory.
+        if event.value == get_active_memory_id():
+            return
+        self._switch(str(event.value))
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "memory-cancel":
+        if event.button.id == "memory-close":
             self.dismiss()
             return
-        if event.button.id == "memory-switch":
+        if event.button.id == "memory-delete":
+            await self._delete_current()
+
+
+class ChatScreen(ModalScreen):
+    """Modal to switch between, create, or delete saved chats."""
+
+    BINDINGS = [("escape", "dismiss", "Cancel")]
+
+    CSS = """
+    ChatScreen {
+        align: center middle;
+    }
+
+    #chat-dialog {
+        width: 60;
+        height: auto;
+        max-height: 70%;
+        padding: 1 2;
+        border: round $primary;
+        background: $surface;
+    }
+
+    #chat-list {
+        height: auto;
+        max-height: 14;
+        margin-bottom: 1;
+    }
+
+    #chat-dialog Label {
+        margin-top: 1;
+    }
+
+    #chat-dialog Button {
+        margin-right: 1;
+    }
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._chats: list[dict] = []
+        self._delete_armed = False
+
+    def _refresh_chats(self) -> None:
+        self._chats = list_chats()
+
+    def compose(self) -> ComposeResult:
+        self._refresh_chats()
+        app = self.app
+        current_id = app._chat_id if isinstance(app, AgentApp) else None
+        with Vertical(id="chat-dialog"):
+            yield Label("Chats", id="dialog-title")
+            yield OptionList(
+                *[
+                    Option(chat["name"] or DEFAULT_CHAT_NAME, id=chat["id"])
+                    for chat in self._chats
+                ],
+                id="chat-list",
+            )
+            with Horizontal(classes="row"):
+                yield Button("New", variant="primary", id="chat-new")
+                yield Button("Switch", variant="primary", id="chat-switch")
+                yield Button("Delete", variant="error", id="chat-delete")
+                yield Button("Cancel", id="chat-cancel")
+
+    def on_mount(self) -> None:
+        chat_list = self.query_one("#chat-list", OptionList)
+        app = self.app
+        current_id = app._chat_id if isinstance(app, AgentApp) else None
+        if self._chats:
+            highlight = current_id or self._chats[0]["id"]
+            index = chat_list.get_option_index(highlight)
+            if index is not None:
+                chat_list.highlighted = index
+        chat_list.focus()
+
+    def _selected_id(self) -> str | None:
+        option = self.query_one("#chat-list", OptionList).highlighted_option
+        return option.id if option is not None else None
+
+    def _disarm_delete(self) -> None:
+        self._delete_armed = False
+        self.query_one("#chat-delete", Button).label = "Delete"
+
+    def _switch(self, chat_id: str | None) -> None:
+        if not chat_id:
+            self.notify("Pick a chat to switch to", severity="warning")
+            return
+        app = self.app
+        if isinstance(app, AgentApp) and app._chat_id == chat_id:
+            self.dismiss()
+            return
+        if isinstance(app, AgentApp) and app._load_chat_into_ui(chat_id):
+            app.notify("Chat loaded", title="Chats")
+        self.dismiss()
+
+    def _reload_options(self) -> None:
+        self._refresh_chats()
+        self._disarm_delete()
+        chat_list = self.query_one("#chat-list", OptionList)
+        chat_list.set_options(
+            [
+                Option(chat["name"] or DEFAULT_CHAT_NAME, id=chat["id"])
+                for chat in self._chats
+            ]
+        )
+        app = self.app
+        current_id = app._chat_id if isinstance(app, AgentApp) else None
+        if self._chats:
+            highlight = current_id or self._chats[0]["id"]
+            index = chat_list.get_option_index(highlight)
+            if index is not None:
+                chat_list.highlighted = index
+
+    def _new_chat(self) -> None:
+        app = self.app
+        if isinstance(app, AgentApp):
+            app.action_new_chat()
+            app.notify("Started a new chat", title="Chats")
+        self.dismiss()
+
+    def _delete_current(self) -> None:
+        chat_id = self._selected_id()
+        if not chat_id:
+            self.notify("Select a chat to delete", severity="warning")
+            return
+        if not self._delete_armed:
+            self._delete_armed = True
+            self.query_one("#chat-delete", Button).label = "Really delete?"
+            return
+        chat = delete_chat(chat_id)
+        app = self.app
+        if chat is None:
+            self.notify("Unknown chat", severity="warning")
+            self._disarm_delete()
+            return
+        if isinstance(app, AgentApp):
+            if app._chat_id == chat_id:
+                latest = load_latest_chat()
+                app.query_one("#log", RichLog).clear()
+                if latest is not None:
+                    app._chat_id = latest["id"]
+                    app.conversation = list(latest.get("context_messages") or [])
+                    app._transcript = list(latest.get("transcript") or [])
+                    app._refresh_system_prompt()
+                    app._cached_conv_tokens = estimate_conversation_tokens(
+                        app.conversation
+                    )
+                    app._rebuild_prompt_history()
+                    app.sub_title = latest.get("name", "")
+                    app._replay_transcript()
+                else:
+                    fresh = create_chat()
+                    app._chat_id = fresh["id"]
+                    app.sub_title = fresh["name"]
+                    app._reset_conversation_state()
+            app.notify(f"Deleted chat '{chat['name']}'", title="Chats")
+        self._reload_options()
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        if event.option_list.id == "chat-list" and event.option_id is not None:
+            self._switch(event.option_id)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        button_id = event.button.id
+        if button_id == "chat-cancel":
+            self.dismiss()
+            return
+        if button_id == "chat-new":
+            self._new_chat()
+        elif button_id == "chat-switch":
             self._switch(self._selected_id())
-        elif event.button.id == "memory-delete":
-            self.app.run_worker(self._delete_current(), exclusive=False)
+        elif button_id == "chat-delete":
+            self._delete_current()
 
 
 class AgentScreen(Screen):
@@ -1469,8 +1677,9 @@ class AgentApp(App):
     ENABLE_COMMAND_PALETTE = False
     BINDINGS: ClassVar[list[BindingType]] = [
         ("ctrl+c,super+c", "copy_or_quit", "Copy/Quit"),
-        ("ctrl+l", "clear_log", "Clear log"),
+        ("ctrl+l", "new_chat", "New chat"),
         ("ctrl+o", "open_memory", "Memories"),
+        ("ctrl+r", "open_chats", "Chats"),
         ("ctrl+p", "open_connection", "Connect"),
         ("ctrl+g", "toggle_status_image", "Toggle status image"),
         ("ctrl+t", "toggle_theme", "Toggle theme"),
@@ -1503,7 +1712,8 @@ class AgentApp(App):
         self._total_input_tokens = 0
         self._total_output_tokens = 0
         self._status_animation_enabled = load_status_animation_enabled()
-        self._launch_memory_id: str | None = None
+        self._chat_id: str | None = None
+        self._transcript: list[dict[str, Any]] = []
         self.debug_mode = os.environ.get("REMIE_DEBUG", "").lower() in {
             "1",
             "true",
@@ -1531,10 +1741,27 @@ class AgentApp(App):
         self.query_one(StatusIndicator).set_animation_enabled(
             self._status_animation_enabled
         )
-        self._launch_memory_id = create_launch_memory()["id"]
-        clear_session()
-        self.conversation = [{"role": "system", "content": get_full_system_prompt()}]
+        ensure_active_memory()
+        chat = load_latest_chat()
+        if chat is not None:
+            self._chat_id = chat["id"]
+            self.conversation = list(chat.get("context_messages") or [])
+            self._transcript = list(chat.get("transcript") or [])
+            self._refresh_system_prompt()
+            self.sub_title = chat.get("name", "")
+            log = self.query_one("#log", StreamingRichLog)
+            log.write("[dim]Resumed chat:[/] " + escape(chat.get("name", "")))
+            self._replay_transcript()
+        else:
+            chat = create_chat()
+            self._chat_id = chat["id"]
+            self.conversation = [
+                {"role": "system", "content": get_full_system_prompt()}
+            ]
+            self._transcript = []
+            self.sub_title = chat["name"]
         self._cached_conv_tokens = estimate_conversation_tokens(self.conversation)
+        self._rebuild_prompt_history()
         prompt.focus()
         self._prefetch_model_context()
 
@@ -1561,16 +1788,16 @@ class AgentApp(App):
             self.conversation.insert(0, new_system)
             self._cached_conv_tokens += estimate_message_tokens(new_system)
 
-    async def _name_launch_memory(
+    async def _name_current_chat(
         self, user_content: str | list, assistant_content: str
     ) -> None:
-        """Name the fresh launch memory after the first completed task."""
-        if not self._launch_memory_id:
+        """Name a still-default chat after its first completed task."""
+        if not self._chat_id:
             return
-        memory = find_memory_by_id(self._launch_memory_id)
-        if memory is None or not memory["name"].startswith("session "):
+        chat = find_chat_by_id(self._chat_id)
+        if chat is None or not chat["name"].startswith(DEFAULT_CHAT_NAME):
             return
-        title = await generate_memory_title(
+        title = await generate_chat_title(
             [
                 {"role": "user", "content": user_content},
                 {"role": "assistant", "content": assistant_content},
@@ -1579,21 +1806,64 @@ class AgentApp(App):
         name = title[:MEMORY_NAME_MAX_CHARS].rstrip() or _fallback_memory_name(
             user_content
         )
-        try:
-            rename_memory(self._launch_memory_id, name)
-        except ValueError:
-            return
-        self._refresh_system_prompt()
+        renamed = rename_chat(self._chat_id, name)
+        if renamed is not None:
+            self.sub_title = renamed["name"]
 
-    def _save_session(self) -> None:
-        save_session(self.conversation)
+    def _save_current_chat(self) -> None:
+        if self._chat_id:
+            save_chat(self._chat_id, self.conversation, self._transcript)
 
     def on_unmount(self) -> None:
-        """Persist the conversation so a later launch can resume it."""
+        """Persist the current chat so a later launch can resume it."""
         try:
-            self._save_session()
+            self._save_current_chat()
         except Exception:
             pass
+
+    def _replay_transcript(self) -> None:
+        """Replay a loaded chat's visible history into the log."""
+        log = self.query_one("#log", StreamingRichLog)
+        for message in self._transcript:
+            role = message.get("role")
+            content = message.get("content")
+            if role == "user":
+                if isinstance(content, str):
+                    if content.startswith("tool_result("):
+                        log.write("[dim]· tool result[/]")
+                        continue
+                    log.write(render_user_message(content))
+                elif isinstance(content, list):
+                    text = " ".join(
+                        part.get("text", "")
+                        for part in content
+                        if isinstance(part, dict) and isinstance(part.get("text"), str)
+                    ).strip()
+                    has_image = any(
+                        isinstance(part, dict) and part.get("type") == "image_url"
+                        for part in content
+                    )
+                    if text:
+                        log.write(render_user_message(text))
+                    if has_image:
+                        log.write("[dim]📷 image attached[/]")
+                log.write("")
+            elif role == "assistant":
+                text = strip_protocol_lines(str(content or "")).strip()
+                if text:
+                    log.write(render_assistant_panel(text, self._code_theme()))
+                    log.write("")
+
+    def _rebuild_prompt_history(self) -> None:
+        """Seed prompt recall from the loaded transcript's user messages."""
+        history: list[str] = []
+        for message in self._transcript:
+            if message.get("role") != "user":
+                continue
+            content = message.get("content")
+            if isinstance(content, str) and not content.startswith("tool_result("):
+                history.append(content)
+        self._prompt_history = history[-PROMPT_HISTORY_LIMIT:]
 
     @work(exclusive=False)
     async def _prefetch_model_context(self) -> None:
@@ -1711,9 +1981,12 @@ class AgentApp(App):
 
     def _push_message(self, role: str, content: Any) -> None:
         """Append a message to the conversation and keep the running token
-        estimate current so compaction checks stay O(1)."""
+        estimate current so compaction checks stay O(1). Non-system messages
+        are also appended to the visible transcript."""
         message = {"role": role, "content": content}
         self.conversation.append(message)
+        if role != "system":
+            self._transcript.append(message)
         self._cached_conv_tokens += estimate_message_tokens(message)
 
     def _conversation_too_large(self, limit: int | None) -> bool:
@@ -1920,7 +2193,7 @@ class AgentApp(App):
                     log.replace_stream(*renderables)
                     self._push_message("assistant", full_text)
                     completed = True
-                    await self._name_launch_memory(user_content, full_text)
+                    await self._name_current_chat(user_content, full_text)
                     self._set_status("done")
                     return
                 replacements: list[RenderableType] = []
@@ -2012,7 +2285,7 @@ class AgentApp(App):
             if "context" in message.lower() or "maximum context length" in message.lower():
                 self.notify(
                     "The conversation exceeded the model's context window. "
-                    "Clear the log or start a new session.",
+                    "Start a new chat (Ctrl+L).",
                     title="Context window full",
                     severity="error",
                 )
@@ -2030,18 +2303,57 @@ class AgentApp(App):
             if self._agent_task is current_task:
                 self._agent_task = None
             if completed:
-                self._save_session()
+                self._save_current_chat()
             else:
                 self._set_status("ready")
 
-    def action_clear_log(self) -> None:
-        self.query_one("#log", RichLog).clear()
+    def _reset_conversation_state(self) -> None:
+        """Start an empty conversation for a fresh chat."""
+        self.conversation = [{"role": "system", "content": get_full_system_prompt()}]
+        self._transcript = []
+        self._cached_conv_tokens = estimate_conversation_tokens(self.conversation)
         self._total_input_tokens = 0
         self._total_output_tokens = 0
         self.query_one(ModelBadge).set_tokens(0, 0)
-        clear_session()
-        self.conversation = [{"role": "system", "content": get_full_system_prompt()}]
+        self._prompt_history = []
+        self._history_index = None
+        self._history_draft = ""
+
+    def action_new_chat(self) -> None:
+        """Start a new chat; the previous one stays in the chat history."""
+        if self._agent_running:
+            return
+        self._save_current_chat()
+        self.query_one("#log", RichLog).clear()
+        chat = create_chat()
+        self._chat_id = chat["id"]
+        self.sub_title = chat["name"]
+        self._reset_conversation_state()
+
+    def _load_chat_into_ui(self, chat_id: str) -> bool:
+        """Switch to another saved chat, keeping the current one on disk."""
+        if self._agent_running:
+            return False
+        chat = load_chat(chat_id)
+        if chat is None:
+            self.notify("Could not load that chat", severity="warning")
+            return False
+        self._save_current_chat()
+        self.query_one("#log", RichLog).clear()
+        self._chat_id = chat["id"]
+        self.conversation = list(chat.get("context_messages") or [])
+        self._transcript = list(chat.get("transcript") or [])
+        self._refresh_system_prompt()
         self._cached_conv_tokens = estimate_conversation_tokens(self.conversation)
+        self._total_input_tokens = 0
+        self._total_output_tokens = 0
+        self.query_one(ModelBadge).set_tokens(0, 0)
+        self._rebuild_prompt_history()
+        self.sub_title = chat.get("name", "")
+        log = self.query_one("#log", StreamingRichLog)
+        log.write("[dim]Switched to chat:[/] " + escape(chat.get("name", "")))
+        self._replay_transcript()
+        return True
 
     def action_copy_or_quit(self) -> None:
         """Copy selected text, or quit when nothing is selected."""
@@ -2074,6 +2386,12 @@ class AgentApp(App):
         if self._agent_running:
             return
         await self.push_screen(MemoryScreen())
+
+    async def action_open_chats(self) -> None:
+        """Open the chat history picker. Ignored while the agent is busy."""
+        if self._agent_running:
+            return
+        await self.push_screen(ChatScreen())
 
 
 def run_tui() -> None:

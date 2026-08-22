@@ -250,8 +250,288 @@ def create_launch_memory() -> dict[str, Any]:
     return memory
 
 
+def ensure_active_memory() -> dict[str, Any]:
+    """Return the active durable-note memory, falling back to 'general'.
+
+    Keeps the previously selected memory across launches; creates and
+    activates 'general' when no valid active memory is set.
+    """
+    _migrate_to_uuid_index()
+    active = get_active_memory_id()
+    if active is not None:
+        memory = find_memory_by_id(active)
+        if memory is not None:
+            return memory
+    memory = ensure_general_memory()
+    set_active_memory_id(memory["id"])
+    return memory
+
+
 def session_file_path() -> Path:
     return _remie_dir() / "session.json"
+
+
+# --- Chats ------------------------------------------------------------------
+#
+# Chats are named conversation histories, separate from durable notes.
+# .remie/chats/index.json maps uuid -> {name, created_at, updated_at, model};
+# each chat's messages live in .remie/chats/<uuid>.json.
+
+CHAT_INDEX_VERSION = 1
+CHAT_FILE_VERSION = 1
+LEGACY_SESSION_VERSION = 1
+DEFAULT_CHAT_NAME = "New chat"
+
+
+def chat_dir() -> Path:
+    return _remie_dir() / "chats"
+
+
+def chat_index_path() -> Path:
+    return chat_dir() / "index.json"
+
+
+def chat_file_path(chat_id: str) -> Path:
+    return chat_dir() / f"{chat_id}.json"
+
+
+def _write_json_atomic(path: Path, payload: Any) -> None:
+    """Write JSON via a sibling temp file so interruptions cannot leave a
+    truncated file behind."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f"{path.name}.tmp-{os.getpid()}")
+    tmp_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    os.replace(tmp_path, path)
+
+
+def load_chat_index() -> dict[str, Any]:
+    """Return {uuid: {name, created_at, updated_at, model}} (empty if absent)."""
+    path = chat_index_path()
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return {}
+    chats = data.get("chats")
+    return chats if isinstance(chats, dict) else {}
+
+
+def save_chat_index(chats: dict[str, Any]) -> None:
+    _write_json_atomic(chat_index_path(), {
+        "version": CHAT_INDEX_VERSION,
+        "chats": chats,
+    })
+
+
+def find_chat_by_id(chat_id: str) -> dict[str, Any] | None:
+    """Return {id, name, created_at, updated_at, model} for a uuid, or None."""
+    entry = load_chat_index().get(chat_id)
+    if entry is None:
+        return None
+    return {
+        "id": chat_id,
+        "name": entry.get("name", ""),
+        "created_at": entry.get("created_at", ""),
+        "updated_at": entry.get("updated_at", ""),
+        "model": entry.get("model", ""),
+    }
+
+
+def list_chats() -> list[dict[str, Any]]:
+    """Return [{id, name, created_at, updated_at, model}] newest first."""
+    chats = []
+    for chat_id, entry in load_chat_index().items():
+        chats.append(
+            {
+                "id": chat_id,
+                "name": entry.get("name", ""),
+                "created_at": entry.get("created_at", ""),
+                "updated_at": entry.get("updated_at", ""),
+                "model": entry.get("model", ""),
+            }
+        )
+    return sorted(chats, key=lambda item: item["updated_at"], reverse=True)
+
+
+def create_chat(name: str = DEFAULT_CHAT_NAME) -> dict[str, Any]:
+    """Register a new chat and return its index entry (file written on save)."""
+    name = " ".join(name.split())[:MEMORY_NAME_MAX_CHARS].rstrip() or DEFAULT_CHAT_NAME
+    chat_id = str(uuid.uuid4())
+    now = _dt.datetime.now().isoformat(timespec="seconds")
+    chats = load_chat_index()
+    chats[chat_id] = {
+        "name": name,
+        "created_at": now,
+        "updated_at": now,
+        "model": "",
+    }
+    save_chat_index(chats)
+    return find_chat_by_id(chat_id)  # type: ignore[return-value]
+
+
+def rename_chat(chat_id: str, name: str) -> dict[str, Any] | None:
+    """Rename a chat, disambiguating duplicates like rename_memory does."""
+    chats = load_chat_index()
+    if chat_id not in chats:
+        return None
+    name = " ".join(name.split())[:MEMORY_NAME_MAX_CHARS].rstrip()
+    if not name:
+        return find_chat_by_id(chat_id)
+    existing_names = {
+        str(entry.get("name", "")).strip().lower()
+        for other_id, entry in chats.items()
+        if other_id != chat_id
+    }
+    if name.strip().lower() in existing_names:
+        base = name
+        suffix = 2
+        candidate = f"{base} {suffix}"
+        while candidate.strip().lower() in existing_names:
+            suffix += 1
+            suffix_text = f" {suffix}"
+            candidate = (
+                f"{base[:MEMORY_NAME_MAX_CHARS - len(suffix_text)].rstrip()}"
+                f"{suffix_text}"
+            )
+        name = candidate
+    chats[chat_id]["name"] = name
+    save_chat_index(chats)
+    return find_chat_by_id(chat_id)
+
+
+def delete_chat(chat_id: str) -> dict[str, Any] | None:
+    """Remove a chat's file and index entry; returns the removed entry."""
+    chat = find_chat_by_id(chat_id)
+    if chat is None:
+        return None
+    path = chat_file_path(chat_id)
+    if path.is_file():
+        path.unlink()
+    chats = load_chat_index()
+    chats.pop(chat_id, None)
+    save_chat_index(chats)
+    return chat
+
+
+def save_chat(
+    chat_id: str,
+    context_messages: list[dict[str, Any]],
+    transcript: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Persist a chat's resumable context and visible transcript.
+
+    A brand-new default-named chat with nothing beyond the system prompt is
+    dropped from the index instead of being saved, so unused Ctrl+L chats do
+    not accumulate.
+    """
+    chats = load_chat_index()
+    if chat_id not in chats:
+        return None
+    has_content = bool(transcript) or len(context_messages) > 1
+    path = chat_file_path(chat_id)
+    if not has_content and not path.is_file():
+        if chats[chat_id].get("name", "").strip().lower() == DEFAULT_CHAT_NAME.lower():
+            chats.pop(chat_id, None)
+            save_chat_index(chats)
+            return None
+    payload = {
+        "version": CHAT_FILE_VERSION,
+        "id": chat_id,
+        "context_messages": context_messages,
+        "transcript": transcript,
+    }
+    _write_json_atomic(path, payload)
+    chats[chat_id]["updated_at"] = _dt.datetime.now().isoformat(timespec="seconds")
+    save_chat_index(chats)
+    return find_chat_by_id(chat_id)
+
+
+def load_chat(chat_id: str) -> dict[str, Any] | None:
+    """Return {id, name, created_at, updated_at, model, context_messages,
+    transcript} for a chat, or None when absent or corrupt."""
+    chat = find_chat_by_id(chat_id)
+    if chat is None:
+        return None
+    path = chat_file_path(chat_id)
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict) or data.get("version") != CHAT_FILE_VERSION:
+        return None
+    context = data.get("context_messages")
+    transcript = data.get("transcript")
+    if not isinstance(context, list) or not isinstance(transcript, list):
+        return None
+    chat["context_messages"] = context
+    chat["transcript"] = transcript
+    return chat
+
+
+def migrate_legacy_session() -> str | None:
+    """Import a legacy .remie/session.json as the first chat, exactly once.
+
+    The legacy file is only removed after the chat file and index entry have
+    been written successfully, so an interrupted migration retries instead of
+    losing data. Returns the created chat id, or None.
+    """
+    path = session_file_path()
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict) or data.get("version") != LEGACY_SESSION_VERSION:
+        return None
+    messages = data.get("messages")
+    if not isinstance(messages, list) or not messages:
+        return None
+
+    def _chat_title() -> str:
+        for message in messages:
+            if message.get("role") != "user":
+                continue
+            content = message.get("content")
+            if isinstance(content, str) and content.strip():
+                text = " ".join(content.split())
+                if text.startswith("tool_result("):
+                    continue
+                return text[:MEMORY_NAME_MAX_CHARS].rstrip() or DEFAULT_CHAT_NAME
+        return "Previous session"
+
+    saved_at = str(data.get("saved_at") or _dt.datetime.now().isoformat(timespec="seconds"))
+    chat_id = str(uuid.uuid4())
+    chat_payload = {
+        "version": CHAT_FILE_VERSION,
+        "id": chat_id,
+        "context_messages": messages,
+        "transcript": [m for m in messages if m.get("role") != "system"],
+    }
+    _write_json_atomic(chat_file_path(chat_id), chat_payload)
+    chats = load_chat_index()
+    chats[chat_id] = {
+        "name": _chat_title(),
+        "created_at": saved_at,
+        "updated_at": saved_at,
+        "model": str(data.get("model", "")),
+    }
+    save_chat_index(chats)
+    path.unlink(missing_ok=True)
+    return chat_id
+
+
+def load_latest_chat() -> dict[str, Any] | None:
+    """Return the most recently updated chat, migrating legacy sessions first."""
+    migrate_legacy_session()
+    for chat in list_chats():
+        loaded = load_chat(chat["id"])
+        if loaded is not None:
+            return loaded
+    return None
 
 
 def resolve_abs_path(path_str: str) -> Path:

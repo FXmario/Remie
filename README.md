@@ -2,6 +2,32 @@
 
 A terminal-based coding agent with a [Textual](https://textual.textualize.io/) TUI. It chats with a local LLM (OpenAI-compatible endpoint) and can call tools to read, list, and edit files on your project.
 
+## Zig Preview
+
+The parallel Zig implementation is built with Zig 0.16 and libvaxis. It is currently
+available as `zig-remie` and provides a workspace-confined TUI shell with the initial
+`/read`, `/list`, and `/edit` tools. Build and run it with:
+
+```bash
+cd zig-remie
+zig build
+zig build run
+zig build test
+```
+
+The Python `remie` command remains available. The Zig preview accepts these commands:
+
+```text
+/connect local http://localhost:7070/v1 llama-cpp local-model
+/connect opencode-go YOUR_API_KEY deepseek-v4-flash
+/models
+your normal chat prompt
+```
+
+The Local connector targets an OpenAI-compatible `/chat/completions` server. OpenCode
+Go model discovery uses `https://opencode.ai/zen/go/v1/models` and saves the active
+profile to the shared Remie configuration file.
+
 ## Features
 
 - Textual TUI with bordered panels per message (user and assistant) and color-coded tool activity
@@ -16,8 +42,8 @@ A terminal-based coding agent with a [Textual](https://textual.textualize.io/) T
 - Uses your terminal's native color scheme (ANSI), so the UI matches your system theme — like opencode
 - Async agent loop — the UI stays responsive while the LLM responds and tools run
 - Tools: `read_file`, `list_files`, `glob_files`, `tree_files`, `edit_file`, `run_command`, `ask_user`, `memory`
-- **Agent memory** — every launch automatically creates and activates a blank memory named `session N`, while retaining older named memories under `.remie/memory/`. The agent can append durable facts, decisions, and open tasks to the active memory with the `memory` tool; press `Ctrl+O` to switch to or delete an older memory. When a long session nears the context window, dropped messages are summarized into a compact memory note instead of being silently truncated.
-- **Fresh launches** — every launch starts a new conversation and discards the previously saved session; `Ctrl+L` clears the current conversation without creating another memory
+- **Agent memory (durable notes)** — the agent can append durable facts, decisions, user preferences, and open tasks to the active memory with the `memory` tool; press `Ctrl+O` to switch to or delete an older memory. The active memory is remembered across launches and injected into the system prompt. When a long task nears the context window, dropped messages are summarized into a compact note instead of being silently truncated.
+- **Chat history** — every conversation is saved as a named chat under `.remie/chats/`. Launching Remie resumes the most recently used chat automatically; `Ctrl+R` opens a chat picker to switch to an older chat, start a new one, or delete one. A chat is auto-titled after its first completed task; `Ctrl+L` starts a new chat while keeping the previous one. Existing `.remie/session.json` files from older versions are imported as a chat on first launch.
 - **Command safety** — `run_command` blocks destructive commands before they execute (`rm -rf /`, `rm -rf ~`, disk formatting/partitioning, shutdown/reboot, `chmod -R`/`chown -R` on `/` or `~`, fork bombs, `curl | sh`, `dd` to raw block devices, ...) and shows a `Blocked command` line in the log with the reason
 - `REMIE_BLOCKED_COMMANDS` — comma-separated extra substrings (e.g. `git push --force`) that are always blocked, case-insensitive
 - `ask_user` — when the agent needs a decision, it pops a modal with predefined choices and a free-text answer field instead of guessing
@@ -85,7 +111,7 @@ the input. From there you can:
 - Choose a reasoning effort (`off`, `low`, `medium`, `high`, or `max`) supported by your provider
 
 The connection form shows provider-specific fields after you choose a provider.
-Remote providers offer live model dropdowns; local llama.cpp connections use a
+OpenCode Go offers a live model dropdown; local llama.cpp connections use a
 manually entered model name.
 
 Remie remembers each provider's last-used values. Reopening the connection picker
@@ -130,9 +156,10 @@ Type a message at the bottom input and press Enter. The agent will reason (`Thin
 | Key       | Action      |
 | --------- | ----------- |
 | `Ctrl+C`  | Copy selected text, or quit if nothing is selected |
-| `Ctrl+L`  | Clear log   |
+| `Ctrl+L`  | Start a new chat (the previous one is kept in history) |
 | `Ctrl+P`  | Open connection/model picker |
 | `Ctrl+O`  | Open memory picker (switch/delete active memory) |
+| `Ctrl+R`  | Open chat picker (switch/new/delete saved chats) |
 | `Ctrl+T`  | Toggle dark/light theme |
 | `Esc`     | Stop the agent while it is running |
 | `Enter`   | Send the message |

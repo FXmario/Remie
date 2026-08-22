@@ -1,6 +1,8 @@
 import asyncio
 import contextlib
+import json
 import subprocess
+from pathlib import Path
 
 import pytest
 import httpx
@@ -12,7 +14,6 @@ from remie.agent import (
     LLMRequestError,
     OPENCODE_GO_BASE_URL,
     OPENCODE_GO_MODELS,
-    clear_session,
     configure_openai,
     estimate_conversation_tokens,
     estimate_message_tokens,
@@ -29,14 +30,12 @@ from remie.agent import (
     load_agent_memory,
     load_config,
     load_provider_configs,
-    load_session,
     render_assistant_message,
     render_assistant_panel,
     render_user_message,
     run_tool,
     save_config,
     save_provider_configs,
-    save_session,
     stream_llm_call,
     strip_protocol_lines,
     summarize_messages,
@@ -48,10 +47,15 @@ from remie.tools import (
     RUN_COMMAND_TIMEOUT,
     TOOL_REGISTRY,
     ask_user_tool,
+    chat_file_path,
+    chat_index_path,
+    create_chat,
     create_launch_memory,
     create_memory,
+    delete_chat,
     delete_memory,
     edit_file_tool,
+    find_chat_by_id,
     find_memory_by_id,
     find_memory_by_name,
     get_active_memory_id,
@@ -59,13 +63,21 @@ from remie.tools import (
     get_custom_blocked_commands,
     get_tool_summary,
     glob_files_tool,
+    list_chats,
     list_files_tool,
     list_memories,
+    load_chat,
+    load_chat_index,
+    load_latest_chat,
     memory_file_path,
     memory_tool,
+    migrate_legacy_session,
     read_file_tool,
+    rename_chat,
     resolve_abs_path,
     run_command_tool,
+    save_chat,
+    save_chat_index,
     session_file_path,
     set_active_memory_id,
     tree_files_tool,
@@ -957,37 +969,147 @@ class TestLoadAgentMemory:
         assert len(section) < 9000
 
 
-class TestSessionSaveLoadClear:
-    def test_save_load_roundtrip(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        messages = [
+class TestChatStorage:
+    def _context(self):
+        return [
             {"role": "system", "content": "sys"},
             {"role": "user", "content": "hello"},
         ]
-        save_session(messages)
-        data = load_session()
+
+    def test_save_load_roundtrip(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        chat = create_chat("my chat")
+        context = self._context()
+        transcript = [{"role": "user", "content": "hello"}]
+        save_chat(chat["id"], context, transcript)
+        data = load_chat(chat["id"])
         assert data is not None
-        assert data["version"] == 1
-        assert data["messages"] == messages
-        assert session_file_path().is_file()
+        assert data["context_messages"] == context
+        assert data["transcript"] == transcript
+        assert chat_file_path(chat["id"]).is_file()
 
-    def test_clear_removes_file(self, tmp_path, monkeypatch):
+    def test_empty_new_default_chat_is_dropped(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        save_session([{"role": "system", "content": "s"}, {"role": "user", "content": "u"}])
-        clear_session()
-        assert not session_file_path().exists()
-        assert load_session() is None
+        chat = create_chat()
+        result = save_chat(chat["id"], [{"role": "system", "content": "sys"}], [])
+        assert result is None
+        assert not chat_file_path(chat["id"]).exists()
+        assert list_chats() == []
 
-    def test_system_only_not_saved(self, tmp_path, monkeypatch):
+    def test_named_empty_chat_is_kept(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        save_session([{"role": "system", "content": "only"}])
-        assert not session_file_path().exists()
+        chat = create_chat("keep me")
+        save_chat(chat["id"], [{"role": "system", "content": "sys"}], [])
+        assert load_chat(chat["id"]) is not None
 
     def test_corrupt_file_returns_none(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
+        chat = create_chat()
+        save_chat(chat["id"], self._context(), [])
+        chat_file_path(chat["id"]).write_text("{not json", encoding="utf-8")
+        assert load_chat(chat["id"]) is None
+
+    def test_list_chats_newest_first(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        first = create_chat("first")
+        second = create_chat("second")
+        chats = load_chat_index()
+        chats[first["id"]]["updated_at"] = "2026-01-01T10:00:00"
+        chats[second["id"]]["updated_at"] = "2026-01-02T10:00:00"
+        save_chat_index(chats)
+        assert [c["name"] for c in list_chats()] == ["second", "first"]
+
+    def test_load_latest_returns_most_recent(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        old = create_chat("old")
+        new = create_chat("new")
+        chats = load_chat_index()
+        chats[old["id"]]["updated_at"] = "2026-01-01T10:00:00"
+        chats[new["id"]]["updated_at"] = "2026-01-02T10:00:00"
+        save_chat_index(chats)
+        save_chat(old["id"], self._context(), [])
+        # Saving 'old' bumps it back to the top.
+        latest = load_latest_chat()
+        assert latest is not None
+        assert latest["name"] == "old"
+
+    def test_rename_disambiguates_duplicates(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        first = create_chat("dup")
+        second = create_chat("other")
+        renamed = rename_chat(second["id"], "dup")
+        assert renamed is not None
+        assert renamed["name"] == "dup 2"
+        third = create_chat("another")
+        again = rename_chat(third["id"], "dup")
+        assert again is not None
+        assert again["name"] == "dup 3"
+        # Renaming onto its own current name only avoids *other* chats.
+        self_named = rename_chat(second["id"], "dup")
+        assert self_named is not None
+        assert self_named["name"] == "dup 2"
+
+    def test_rename_unknown_returns_none(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        assert rename_chat("missing-id", "x") is None
+
+    def test_delete_removes_file_and_entry(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        chat = create_chat("doomed")
+        save_chat(chat["id"], self._context(), [])
+        removed = delete_chat(chat["id"])
+        assert removed is not None
+        assert removed["name"] == "doomed"
+        assert not chat_file_path(chat["id"]).exists()
+        assert list_chats() == []
+
+    def test_migrate_legacy_session_imports_once(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        session_file_path().parent.mkdir(parents=True, exist_ok=True)
+        session_file_path().write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "saved_at": "2026-08-21T11:15:25",
+                    "model": "test-model",
+                    "messages": [
+                        {"role": "system", "content": "sys"},
+                        {"role": "user", "content": "explain this project"},
+                        {"role": "assistant", "content": "hi"},
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        chat_id = migrate_legacy_session()
+        assert chat_id is not None
+        chat = load_chat(chat_id)
+        assert chat is not None
+        assert chat["name"] == "explain this project"
+        assert chat["model"] == "test-model"
+        assert chat["created_at"] == "2026-08-21T11:15:25"
+        assert len(chat["context_messages"]) == 3
+        assert all(m["role"] != "system" for m in chat["transcript"])
+        assert not session_file_path().exists()
+        # Idempotent: a second run imports nothing new.
+        assert migrate_legacy_session() is None
+        assert len(list_chats()) == 1
+
+    def test_migrate_skips_invalid_legacy(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
         session_file_path().parent.mkdir(parents=True, exist_ok=True)
         session_file_path().write_text("{not json", encoding="utf-8")
-        assert load_session() is None
+        assert migrate_legacy_session() is None
+        assert session_file_path().exists()  # left alone, retried later
+
+    def test_memory_index_untouched_by_chats(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        memory_tool("add", "note", name="design")
+        before = Path(".remie/memory/index.json").read_text(encoding="utf-8")
+        chat = create_chat("chat")
+        save_chat(chat["id"], self._context(), [])
+        after = Path(".remie/memory/index.json").read_text(encoding="utf-8")
+        assert before == after
 
 
 class TestSummarizeMessages:
