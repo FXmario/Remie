@@ -46,6 +46,7 @@ from remie.tools import (
     create_chat,
     ensure_active_memory,
     find_chat_by_id,
+    get_tool_summary,
     load_chat,
     load_latest_chat,
     rename_chat,

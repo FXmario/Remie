@@ -19,7 +19,6 @@ from remie.agent import (
     configure_openai,
     fetch_codex_models,
     fetch_openrouter_models,
-    fetch_opencode_go_models,
     get_config,
     load_provider_configs,
     save_provider_configs,
@@ -29,6 +28,9 @@ from remie.model_names import ModelInfo
 from remie.tui.constants import REASONING_EFFORTS, PROVIDER_BASE_URLS
 from remie.tui.helpers import _coerce_model_info, _model_option
 from remie.tui.widgets import ModelBadge
+
+import remie.tui as _tui_pkg
+
 
 class ConnectionScreen(ModalScreen):
     """Modal to select a provider and connect to the LLM API."""
@@ -631,7 +633,9 @@ class ConnectionScreen(ModalScreen):
         select = self.query_one("#model-select", Select)
         previously_selected = select.value
         select.loading = True
-        models: "list[str | ModelInfo]" = await fetch_opencode_go_models(api_key)
+        models: "list[str | ModelInfo]" = await _tui_pkg.fetch_opencode_go_models(
+            api_key
+        )
         select.loading = False
         self._set_model_options(models)
         # Keep the user's selection when it is still offered by the live list;
