@@ -81,6 +81,30 @@ _openrouter_model_context: dict[str, int] = {}
 # account's model list at connect time.
 _codex_model_context: dict[str, int] = {}
 
+# Display metadata per model id, populated by the provider fetchers. Used by
+# UI surfaces (badge, toasts) that only receive the raw id; ids never fetched
+# fall back to heuristic prettification.
+_model_info_cache: dict[str, ModelInfo] = {}
+
+
+def _cache_model_info(info: ModelInfo) -> ModelInfo:
+    if info.id:
+        _model_info_cache[info.id] = info
+    return info
+
+
+def get_model_info(model_id: str) -> ModelInfo:
+    """Display metadata for a raw model id.
+
+    Returns the cached catalog row when a fetcher has seen the id; otherwise
+    falls back to heuristic prettification so hand-typed local models still
+    render readably.
+    """
+    cached = _model_info_cache.get(model_id)
+    if cached is not None:
+        return cached
+    return prettify_model_id(model_id)
+
 # Bundled fallback model list, used only when the OpenCode Go models API is
 # unreachable. The live list (and each model's context window) is fetched from
 # the API when connecting, so this does not restrict which models can be used.
@@ -476,12 +500,12 @@ async def fetch_opencode_go_models(api_key: str) -> list[ModelInfo]:
                 context = item.get("context_length")
                 if isinstance(context, int) and context > 0:
                     _opencode_go_model_context[model_id] = context
-                infos.append(prettify_model_id(str(model_id)))
+                infos.append(_cache_model_info(prettify_model_id(str(model_id))))
             if not infos:
-                return [prettify_model_id(m) for m in OPENCODE_GO_MODELS]
+                return [_cache_model_info(prettify_model_id(m)) for m in OPENCODE_GO_MODELS]
             return infos
         except (httpx.HTTPError, ValueError, KeyError, TypeError, AttributeError):
-            return [prettify_model_id(m) for m in OPENCODE_GO_MODELS]
+            return [_cache_model_info(prettify_model_id(m)) for m in OPENCODE_GO_MODELS]
 
 
 async def fetch_codex_models() -> list[ModelInfo]:
@@ -495,7 +519,9 @@ async def fetch_codex_models() -> list[ModelInfo]:
         rows = []
     if not rows:
         return [
-            ModelInfo(id=m, display=prettify_model_name(m), vendor="OpenAI")
+            _cache_model_info(
+                ModelInfo(id=m, display=prettify_model_name(m), vendor="OpenAI")
+            )
             for m in CODEX_MODELS
         ]
     infos: list[ModelInfo] = []
@@ -504,10 +530,12 @@ async def fetch_codex_models() -> list[ModelInfo]:
         if isinstance(context, int) and context > 0:
             _codex_model_context[row["id"]] = context
         infos.append(
-            ModelInfo(
-                id=row["id"],
-                display=row.get("display") or row["id"],
-                vendor="OpenAI",
+            _cache_model_info(
+                ModelInfo(
+                    id=row["id"],
+                    display=row.get("display") or row["id"],
+                    vendor="OpenAI",
+                )
             )
         )
     return infos
@@ -523,18 +551,20 @@ async def fetch_openrouter_models() -> list[ModelInfo]:
     except Exception:
         rows = []
     if not rows:
-        return [prettify_model_id(m) for m in OPENROUTER_MODELS]
+        return [_cache_model_info(prettify_model_id(m)) for m in OPENROUTER_MODELS]
     infos: list[ModelInfo] = []
     for row in rows:
         context = row.get("context_length") or 0
         if isinstance(context, int) and context > 0:
             _openrouter_model_context[row["id"]] = context
         infos.append(
-            ModelInfo(
-                id=row["id"],
-                display=row.get("display") or row["id"],
-                vendor=row.get("vendor") or "",
-                free=bool(row.get("free")),
+            _cache_model_info(
+                ModelInfo(
+                    id=row["id"],
+                    display=row.get("display") or row["id"],
+                    vendor=row.get("vendor") or "",
+                    free=bool(row.get("free")),
+                )
             )
         )
     return infos

@@ -703,7 +703,12 @@ class ConnectionScreen(ModalScreen):
         if isinstance(app, AgentApp):
             app.query_one(ModelBadge).update_config(config)
         self.dismiss()
-        self.app.notify(f"Connected to {model}", title="Connection updated")
+        from remie.agent import get_model_info
+
+        self.app.notify(
+            f"Connected to {get_model_info(model).resolved_display()}",
+            title="Connection updated",
+        )
 
     def _selected_model(self) -> str:
         provider = self.query_one("#provider-select", Select).value

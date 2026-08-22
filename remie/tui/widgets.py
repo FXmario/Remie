@@ -20,6 +20,7 @@ from textual_image.widget import SixelImage as TerminalImage
 from remie.agent import (
     OPENCODE_GO_BASE_URL,
     get_config,
+    get_model_info,
 )
 from remie.agent import strip_protocol_lines
 from remie.tui.helpers import _format_tokens, _is_tmux
@@ -226,7 +227,7 @@ class ModelBadge(Label):
             "codex": "Codex (ChatGPT)",
             "openrouter": "OpenRouter",
         }.get(provider, "Local")
-        self._model_text = config.model
+        self._model_text = get_model_info(config.model).resolved_display()
         self._vendor_text = vendor
         self._reasoning_effort = config.reasoning_effort
         self._show(self._input_tokens, self._output_tokens)

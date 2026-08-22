@@ -466,6 +466,49 @@ class AgentApp(App):
         ] + tail
         self._cached_conv_tokens = estimate_conversation_tokens(self.conversation)
 
+    def _drain_live_reasoning(self) -> None:
+        """Timer callback: render newly-arrived reasoning while the stream is
+        otherwise silent.
+
+        Providers append reasoning deltas to reasoning_box without yielding,
+        so during a long think the async-for body never runs and the inline
+        update path never fires. This drains the box every 100 ms and
+        re-renders the Reasoning panel so reasoning streams live.
+        """
+        state = getattr(self, "_live_stream", None)
+        if not state or not state.get("active"):
+            return
+        box: list[str] = state["reasoning_box"]
+        consumed: int = state["consumed"]
+        if len(box) <= consumed:
+            return
+        now = time.monotonic()
+        if now - state["last_render"] < 0.1:
+            return
+        state["last_render"] = now
+        new_text = "".join(box[consumed:])
+        state["consumed"] = len(box)
+        log = state["log"]
+        # Reconstruct the full accumulated reasoning from what has been
+        # consumed so far plus this batch.
+        state.setdefault("text", "")
+        state["text"] += new_text
+        shown = state["text"]
+        if self._stop_requested:
+            return
+        log.update_stream(
+            _safe_reasoning_markdown(_preview_window(shown), self._code_theme()),
+            title="Reasoning",
+            border_style="dim",
+        )
+
+    def _stop_live_stream_timer(self, timer) -> None:
+        """Stop the live-reasoning timer and mark its state inactive."""
+        timer.stop()
+        state = getattr(self, "_live_stream", None)
+        if state:
+            state["active"] = False
+
     async def run_agent_turn(self, user_content: str | list) -> None:
         log = self.query_one("#log", StreamingRichLog)
         completed = False
@@ -503,7 +546,18 @@ class AgentApp(App):
                 stream_started = time.monotonic()
                 last_preview_update = stream_started
                 reasoning_text = ""
-                reasoning_chunks_done = 0
+                # Shared state for the live-stream timer below. Providers only
+                # append reasoning to reasoning_box without yielding, so the
+                # async-for body stays silent during a long think; a timer
+                # drains it so the Reasoning panel still streams live.
+                self._live_stream = {
+                    "log": log,
+                    "reasoning_box": reasoning_box,
+                    "consumed": 0,
+                    "last_render": stream_started,
+                    "active": True,
+                }
+                reasoning_timer = self.set_interval(0.1, self._drain_live_reasoning)
                 async for delta in _tui_pkg.stream_llm_call(
                     self.conversation,
                     usage_box,
@@ -540,11 +594,15 @@ class AgentApp(App):
                     if not should_render:
                         continue
                     last_preview_update = now
-                    if len(reasoning_box) > reasoning_chunks_done:
-                        reasoning_text += "".join(
-                            reasoning_box[reasoning_chunks_done:]
+                    # Consume any reasoning the live-stream timer has not
+                    # drained yet (shared counter avoids double rendering).
+                    if len(reasoning_box) > self._live_stream["consumed"]:
+                        new_reasoning = "".join(
+                            reasoning_box[self._live_stream["consumed"]:]
                         )
-                        reasoning_chunks_done = len(reasoning_box)
+                        reasoning_text += new_reasoning
+                        self._live_stream["consumed"] = len(reasoning_box)
+                        self._live_stream["last_render"] = now
                     if tool_detected:
                         shown = reasoning_text or extract_thinking(full_text)
                     elif reasoning_text:
@@ -570,9 +628,11 @@ class AgentApp(App):
                             _safe_stream_markdown(preview, self._code_theme()),
                         )
                 if self._stop_requested:
+                    self._stop_live_stream_timer(reasoning_timer)
                     log.replace_stream()
                     log.write("[dim]Stopped by user[/]")
                     break
+                self._stop_live_stream_timer(reasoning_timer)
                 self.query_one(ModelBadge).set_speed(None)
                 reasoning_text = "".join(reasoning_box) or extract_thinking(full_text)
                 input_tokens = usage_box.get("prompt_tokens") or self._cached_conv_tokens
@@ -612,6 +672,8 @@ class AgentApp(App):
                         for name, args in tool_invocations
                     ]
                 content = strip_protocol_lines(full_text).strip()
+                import sys as _sys
+                print("DBG native:", native_tool_calling, "| full_text:", repr(full_text[:120]), "| invocations:", tool_invocations, file=_sys.stderr)
                 if not tool_invocations and not content:
                     # The model produced no usable output (e.g. only reasoning,
                     # or the stream ended prematurely). Don't silently mark the

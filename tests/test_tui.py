@@ -342,7 +342,7 @@ def test_model_badge_includes_vendor():
     local_badge.update_config(
         ConnectionConfig("http://localhost/v1", "key", "local", reasoning_effort="off")
     )
-    assert local_badge.render().plain == "local  Local"
+    assert local_badge.render().plain == "Local  Local"
 
     remote_badge = ModelBadge()
     remote_badge.update_config(
@@ -350,7 +350,7 @@ def test_model_badge_includes_vendor():
             OPENCODE_GO_BASE_URL, "key", "kimi-k3", reasoning_effort="off"
         )
     )
-    assert remote_badge.render().plain == "kimi-k3  OpenCode Go"
+    assert remote_badge.render().plain == "Kimi K3  OpenCode Go"
 
 def test_connection_error_shows_toast_and_keeps_app_running(monkeypatch):
     async def exercise():
@@ -1798,7 +1798,7 @@ def test_model_badge_shows_token_usage():
         )
     )
     badge.set_tokens(1234, 5678)
-    assert badge.render().plain == "kimi-k3  OpenCode Go · 6.9k tok"
+    assert badge.render().plain == "Kimi K3  OpenCode Go · 6.9k tok"
 
 
 def test_model_badge_hides_usage_when_zero():
@@ -1806,7 +1806,7 @@ def test_model_badge_hides_usage_when_zero():
     badge.update_config(
         ConnectionConfig("http://localhost/v1", "key", "local", reasoning_effort="off")
     )
-    assert badge.render().plain == "local  Local"
+    assert badge.render().plain == "Local  Local"
 
 
 def test_model_badge_shows_reasoning_effort():
@@ -1819,7 +1819,7 @@ def test_model_badge_shows_reasoning_effort():
             reasoning_effort="max",
         )
     )
-    assert badge.render().plain == "kimi-k3  OpenCode Go · effort max"
+    assert badge.render().plain == "Kimi K3  OpenCode Go · effort max"
 
 
 def test_token_speed_shown_and_cleared():
