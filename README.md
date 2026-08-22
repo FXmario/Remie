@@ -2,19 +2,6 @@
 
 A terminal-based coding agent with a [Textual](https://textual.textualize.io/) TUI. It chats with a local LLM (OpenAI-compatible endpoint) and can call tools to read, list, and edit files on your project.
 
-## Zig Preview
-
-The parallel Zig implementation is built with Zig 0.16 and libvaxis. It is currently
-available as `zig-remie` and provides a workspace-confined TUI shell with the initial
-`/read`, `/list`, and `/edit` tools. Build and run it with:
-
-```bash
-cd zig-remie
-zig build
-zig build run
-zig build test
-```
-
 The Python `remie` command remains available. The Zig preview accepts these commands:
 
 ```text
