@@ -2,15 +2,6 @@
 
 A terminal-based coding agent with a [Textual](https://textual.textualize.io/) TUI. It chats with a local LLM (OpenAI-compatible endpoint) and can call tools to read, list, and edit files on your project.
 
-The Python `remie` command remains available. The Zig preview accepts these commands:
-
-```text
-/connect local http://localhost:7070/v1 llama-cpp local-model
-/connect opencode-go YOUR_API_KEY deepseek-v4-flash
-/models
-your normal chat prompt
-```
-
 The Local connector targets an OpenAI-compatible `/chat/completions` server. OpenCode
 Go model discovery uses `https://opencode.ai/zen/go/v1/models` and saves the active
 profile to the shared Remie configuration file.
