@@ -452,8 +452,18 @@ def test_fetch_openrouter_models_parses_catalog(monkeypatch):
             200,
             json={
                 "data": [
-                    {"id": "anthropic/claude-sonnet-4.6", "context_length": 200000},
-                    {"id": "openai/gpt-5.6", "context_length": 400000},
+                    {
+                        "id": "anthropic/claude-sonnet-4.6",
+                        "name": "Anthropic: Claude Sonnet 4.6",
+                        "context_length": 200000,
+                        "pricing": {"prompt": "0.000003", "completion": "0.000015"},
+                    },
+                    {
+                        "id": "openai/gpt-5.6",
+                        "name": "OpenAI: GPT 5.6",
+                        "context_length": 400000,
+                        "pricing": {"prompt": "0", "completion": "0"},
+                    },
                     {"id": "no-context-model"},
                     "not-a-dict",
                 ]
@@ -463,9 +473,27 @@ def test_fetch_openrouter_models_parses_catalog(monkeypatch):
     install_transport(monkeypatch, handler)
     rows = asyncio.run(openrouter_client.fetch_openrouter_models())
     assert rows == [
-        ("anthropic/claude-sonnet-4.6", 200000),
-        ("openai/gpt-5.6", 400000),
-        ("no-context-model", 0),
+        {
+            "id": "anthropic/claude-sonnet-4.6",
+            "display": "Claude Sonnet 4.6",
+            "vendor": "Anthropic",
+            "context_length": 200000,
+            "free": False,
+        },
+        {
+            "id": "openai/gpt-5.6",
+            "display": "GPT 5.6",
+            "vendor": "OpenAI",
+            "context_length": 400000,
+            "free": True,
+        },
+        {
+            "id": "no-context-model",
+            "display": "No Context Model",
+            "vendor": "",
+            "context_length": 0,
+            "free": False,
+        },
     ]
 
 

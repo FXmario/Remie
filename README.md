@@ -105,6 +105,13 @@ The connection form shows provider-specific fields after you choose a provider.
 OpenCode Go offers a live model dropdown; local llama.cpp connections use a
 manually entered model name.
 
+**Model names are prettified everywhere**: raw ids like `z-ai/glm-5.3` render
+as "GLM 5.3" with a dimmed vendor label, catalogs that ship display metadata
+(OpenRouter, Codex) use it directly, `:free` ids get a green **Free** badge,
+and the stored value stays the raw id. Every dropdown — provider, model,
+reasoning effort, chats (`Ctrl+R`), memories (`Ctrl+O`) — has a filter box;
+type to narrow by name or id.
+
 Remie remembers each provider's last-used values. Reopening the connection picker
 preselects the active provider, and switching providers restores that provider's
 URL, API key, model, reasoning setting, and local SSL preference.

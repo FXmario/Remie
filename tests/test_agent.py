@@ -1738,7 +1738,8 @@ class TestConnectionConfig:
 
         monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
         models = asyncio.run(fetch_opencode_go_models("invalid"))
-        assert models == OPENCODE_GO_MODELS
+        assert [m.id for m in models] == OPENCODE_GO_MODELS
+        assert all(m.display for m in models)
         # A failed fetch must not touch the cached context windows.
         assert agent._opencode_go_model_context == {"stale": 999}
 
@@ -1767,7 +1768,12 @@ class TestConnectionConfig:
         monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
         models = asyncio.run(fetch_opencode_go_models("valid"))
         # All live models are returned, including ones not in the bundled list.
-        assert models == ["kimi-k3", "grok-4.5", "brand-new-model"]
+        assert [(m.id, m.display) for m in models] == [
+            ("kimi-k3", "Kimi K3"),
+            ("grok-4.5", "Grok 4.5"),
+            ("brand-new-model", "Brand New Model"),
+        ]
+        assert agent._opencode_go_model_context["kimi-k3"] == 256000
         # Context windows are cached live for compaction; models without a
         # reported window fall back to the default.
         assert get_model_context_limit("kimi-k3", "opencode-go") == 256_000
@@ -1793,7 +1799,8 @@ class TestConnectionConfig:
         finally:
             monkeypatch.undo()
         # No allowlist filtering: every model the API lists becomes available.
-        assert models == ["gpt-5.6-luna", "kimi-k3"]
+        assert [m.id for m in models] == ["gpt-5.6-luna", "kimi-k3"]
+        assert models[0].display.startswith("GPT 5.6")
 
     def test_opencode_models_fallback_when_payload_is_empty(self, monkeypatch):
         import asyncio
@@ -1810,7 +1817,8 @@ class TestConnectionConfig:
 
         monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
         models = asyncio.run(fetch_opencode_go_models("valid"))
-        assert models == list(OPENCODE_GO_MODELS)  # bundled list is the fallback
+        assert [m.id for m in models] == list(OPENCODE_GO_MODELS)  # bundled fallback
+        assert all(m.display for m in models)
 
     def test_opencode_go_constants(self):
         assert OPENCODE_GO_BASE_URL == "https://opencode.ai/zen/go/v1"

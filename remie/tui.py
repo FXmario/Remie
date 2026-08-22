@@ -85,6 +85,8 @@ from remie.agent import (
     supports_reasoning_effort,
 )
 
+from remie.model_names import ModelInfo, prettify_model_id
+
 from remie.tools import (
     DEFAULT_CHAT_NAME,
     MEMORY_NAME_MAX_CHARS,
@@ -350,8 +352,22 @@ def _format_tokens(count: int) -> str:
     return str(count)
 
 
-def _model_option(model: str) -> tuple[str, str]:
-    return model, model
+def _coerce_model_info(model: "str | ModelInfo") -> ModelInfo:
+    """Accept raw ids or ModelInfo rows; ids get heuristic display names."""
+    if isinstance(model, ModelInfo):
+        return model
+    return prettify_model_id(str(model))
+
+
+def _model_option(model: "str | ModelInfo") -> tuple[Text, str]:
+    """Build a dropdown option: pretty label + raw id as the stored value."""
+    info = _coerce_model_info(model)
+    label = Text(info.resolved_display())
+    if info.vendor:
+        label.append(f"  {info.vendor}", style="dim")
+    if info.free:
+        label.append("  Free", style="green")
+    return label, info.id
 
 
 def _fallback_memory_name(task: str | list) -> str:
@@ -931,6 +947,15 @@ class ConnectionScreen(ModalScreen):
         current = get_config()
         self._profiles[current.provider] = current
         self._active_provider = current.provider
+        # Master option lists per Select id; the visible (filtered) options
+        # are derived from these whenever a search input changes.
+        self._select_masters: dict[str, list[tuple[Text, str]]] = {}
+        # Value tokens for filter-driven Select syncs: when a search filter
+        # rebuilds options, the value we programmatically assign is recorded
+        # here so the resulting (queued) Select.Changed is recognized as a
+        # programmatic sync instead of a user action — deterministic no matter
+        # when the queued message runs.
+        self._select_tokens: dict[str, str | None] = {}
 
     CSS = """
     ConnectionScreen {
@@ -967,6 +992,10 @@ class ConnectionScreen(ModalScreen):
         with Vertical(id="connection-dialog"):
             with VerticalScroll(id="connection-scroll"):
                 yield Label("Connection", id="dialog-title")
+                yield Input(
+                    placeholder="Filter providers…",
+                    id="provider-search",
+                )
                 yield Select(
                     [
                         ("Local (llama.cpp)", "local"),
@@ -1000,6 +1029,10 @@ class ConnectionScreen(ModalScreen):
                     classes="row",
                 )
                 yield Label("Model")
+                yield Input(
+                    placeholder="Filter models (name or id)…",
+                    id="model-search",
+                )
                 if current.provider == "codex":
                     model_list = list(CODEX_MODELS)
                 elif current.provider == "openrouter":
@@ -1028,6 +1061,10 @@ class ConnectionScreen(ModalScreen):
                     id="local-model-input",
                 )
                 yield Label("Reasoning effort", id="reasoning-effort-label")
+                yield Input(
+                    placeholder="Filter efforts…",
+                    id="reasoning-search",
+                )
                 yield Select(
                     [(effort.title(), effort) for effort in REASONING_EFFORTS],
                     value=current.reasoning_effort
@@ -1048,6 +1085,17 @@ class ConnectionScreen(ModalScreen):
 
     def on_mount(self) -> None:
         provider = self.query_one("#provider-select", Select).value
+        # Seed the master option lists for the searchable dropdowns.
+        self._store_options(
+            "provider-select",
+            [
+                ("Local (llama.cpp)", "local"),
+                ("OpenCode Go", "opencode-go"),
+                ("Codex (ChatGPT Plus/Pro)", "codex"),
+                ("OpenRouter", "openrouter"),
+            ],
+        )
+        self._store_options("reasoning-effort-select", list(REASONING_EFFORTS))
         self._set_provider_fields(provider)
         self._update_reasoning_fields()
         if provider == "local":
@@ -1065,6 +1113,81 @@ class ConnectionScreen(ModalScreen):
             self._refresh_openrouter_models()
             self.run_worker(self._prefetch_openrouter_models(), exclusive=False)
 
+    def _store_options(
+        self, select_id: str, models: "list[str | ModelInfo | tuple[Text, str]]"
+    ) -> None:
+        """Remember the full option list for a Select; filtering narrows a
+        copy of it. Accepts raw ids, ModelInfo rows, or prebuilt options."""
+        master: list[tuple[Text, str]] = []
+        for model in models:
+            if (
+                isinstance(model, tuple)
+                and len(model) == 2
+                and isinstance(model[1], str)
+            ):
+                master.append(model)
+            else:
+                master.append(_model_option(model))
+        self._select_masters[select_id] = master
+
+    def _apply_select_filter(self, select_id: str, query: str) -> None:
+        """Narrow a Select to master entries matching the query (matches both
+        the pretty label and the raw value); keeps the current selection when
+        it still matches."""
+        master = self._select_masters.get(select_id)
+        if master is None:
+            return
+        select = self.query_one(f"#{select_id}", Select)
+        previous = select.value
+        q = query.strip().lower()
+        if q:
+            filtered = [
+                (label, value)
+                for label, value in master
+                if q in value.lower() or q in label.plain.lower()
+            ]
+        else:
+            filtered = master
+        # Programmatic value syncs during filtering must not trigger the
+        # screen's Select.Changed side effects; record the assigned value as
+        # this Select's token so the queued Changed is recognized.
+        select.set_options(filtered)
+        values = [value for _, value in filtered]
+        assigned: str | None = None
+        if isinstance(previous, str) and previous in values:
+            assigned = previous
+        elif values:
+            assigned = values[0]
+        self._select_tokens[select_id] = assigned
+        if assigned is not None:
+            select.value = assigned
+
+    def _search_input_for(self, select_id: str) -> Input | None:
+        search_ids = {
+            "provider-select": "provider-search",
+            "model-select": "model-search",
+            "reasoning-effort-select": "reasoning-search",
+        }
+        search_id = search_ids.get(select_id)
+        if not search_id:
+            return None
+        try:
+            return self.query_one(f"#{search_id}", Input)
+        except Exception:
+            return None
+
+    def _current_query(self, select_id: str) -> str:
+        search_input = self._search_input_for(select_id)
+        if search_input is None:
+            return ""
+        return search_input.value or ""
+
+    def _set_model_options(self, models: "list[str | ModelInfo]") -> None:
+        """Replace the model dropdown's master list and re-apply any active
+        filter, keeping the profile's model selected when it survives."""
+        self._store_options("model-select", models)
+        self._apply_select_filter("model-select", self._current_query("model-select"))
+
     def _codex_account_text(self) -> str:
         auth = codex_auth.load_auth()
         if auth is None:
@@ -1077,7 +1200,6 @@ class ConnectionScreen(ModalScreen):
         )
 
     def _refresh_codex_models(self) -> None:
-        select = self.query_one("#model-select", Select)
         profile = self._profiles.get("codex")
         fallback = list(CODEX_MODELS)
         if profile is not None and profile.model and profile.model not in fallback:
@@ -1087,8 +1209,11 @@ class ConnectionScreen(ModalScreen):
             if profile is not None and profile.model in fallback
             else fallback[0]
         )
-        select.set_options([_model_option(model) for model in fallback])
-        select.value = current_value
+        self._set_model_options(fallback)
+        select = self.query_one("#model-select", Select)
+        values = [value for _, value in self._select_masters.get("model-select", [])]
+        if current_value in values:
+            select.value = current_value
 
     async def _prefetch_codex_models(self) -> None:
         """Replace the bundled Codex list with the account's live models."""
@@ -1103,10 +1228,15 @@ class ConnectionScreen(ModalScreen):
         select = self.query_one("#model-select", Select)
         previously_selected = str(select.value)
         options = [model for model in models]
-        if previously_selected and previously_selected not in options:
+        if previously_selected and previously_selected not in [
+            _coerce_model_info(model).id for model in options
+        ]:
             options.insert(0, previously_selected)
-        select.set_options([_model_option(model) for model in options])
-        select.value = previously_selected if previously_selected in options else options[0]
+        self._set_model_options(options)
+        ids = [_coerce_model_info(model).id for model in options]
+        select.value = (
+            previously_selected if previously_selected in ids else ids[0]
+        )
         self._update_codex_account_label()
 
     async def _run_codex_signin(self, button: Button) -> None:
@@ -1176,7 +1306,6 @@ class ConnectionScreen(ModalScreen):
         self._update_codex_account_label()
 
     def _refresh_openrouter_models(self) -> None:
-        select = self.query_one("#model-select", Select)
         profile = self._profiles.get("openrouter")
         fallback = list(OPENROUTER_MODELS)
         if profile is not None and profile.model and profile.model not in fallback:
@@ -1186,8 +1315,11 @@ class ConnectionScreen(ModalScreen):
             if profile is not None and profile.model in fallback
             else fallback[0]
         )
-        select.set_options([_model_option(model) for model in fallback])
-        select.value = current_value
+        self._set_model_options(fallback)
+        select = self.query_one("#model-select", Select)
+        values = [value for _, value in self._select_masters.get("model-select", [])]
+        if current_value in values:
+            select.value = current_value
 
     async def _prefetch_openrouter_models(self) -> None:
         """Replace the bundled OpenRouter list with the live catalog (public
@@ -1200,15 +1332,17 @@ class ConnectionScreen(ModalScreen):
             return
         select = self.query_one("#model-select", Select)
         previously_selected = str(select.value)
-        if previously_selected and previously_selected in models:
-            options = models
+        ids = [_coerce_model_info(model).id for model in models]
+        if previously_selected and previously_selected in ids:
+            options: "list[str | ModelInfo]" = models
         else:
             options = (
                 [previously_selected] + models if previously_selected else models
             )
-        select.set_options([_model_option(model) for model in options])
+            ids.insert(0, previously_selected)
+        self._set_model_options(options)
         select.value = (
-            previously_selected if previously_selected in options else options[0]
+            previously_selected if previously_selected in ids else ids[0]
         )
         self._update_reasoning_fields()
 
@@ -1251,6 +1385,40 @@ class ConnectionScreen(ModalScreen):
         signout_button.disabled = not is_codex
         if is_codex:
             self._update_codex_account_label()
+        # Search inputs mirror their dropdown's visibility.
+        model_search = self.query_one("#model-search", Input)
+        model_search.display = has_provider and not is_local
+        provider_search = self.query_one("#provider-search", Input)
+        provider_search.display = True
+        reasoning_search = self.query_one("#reasoning-search", Input)
+        reasoning_search.display = has_provider
+        reasoning_search.disabled = not has_provider
+
+    _SEARCH_TARGETS = {
+        "provider-search": "provider-select",
+        "model-search": "model-select",
+        "reasoning-search": "reasoning-effort-select",
+    }
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        select_id = self._SEARCH_TARGETS.get(event.input.id or "")
+        if select_id:
+            event.stop()
+            self._apply_select_filter(select_id, event.value or "")
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        """Submit modal fields without leaking them to the chat input."""
+        event.stop()
+        if (event.input.id or "") in self._SEARCH_TARGETS:
+            # Enter inside a filter box jumps to its dropdown instead of
+            # submitting the whole form.
+            select_id = self._SEARCH_TARGETS[event.input.id or ""]
+            try:
+                self.query_one(f"#{select_id}", Select).focus()
+            except Exception:
+                pass
+            return
+        self._connect()
 
     def _capture_profile(self) -> None:
         """Keep edits made to the current provider before switching away."""
@@ -1313,7 +1481,14 @@ class ConnectionScreen(ModalScreen):
             label.disabled = True
 
     async def on_select_changed(self, event: Select.Changed) -> None:
-        if event.select.id == "provider-select":
+        select_id = event.select.id or ""
+        if self._select_tokens.get(select_id) == event.value:
+            # Programmatic sync from the search filter, not a user action.
+            return
+        self._select_tokens[select_id] = (
+            event.value if isinstance(event.value, str) else None
+        )
+        if select_id == "provider-select":
             self._capture_profile()
             self._active_provider = str(event.value)
             self._apply_profile(self._active_provider)
@@ -1328,14 +1503,12 @@ class ConnectionScreen(ModalScreen):
                 self.query_one("#base-url-input", Input).value = PROVIDER_BASE_URLS[
                     event.value
                 ]
-                model_select = self.query_one("#model-select", Select)
-                fallback_models = list(OPENCODE_GO_MODELS)
+                fallback_models: "list[str | ModelInfo]" = list(OPENCODE_GO_MODELS)
                 profile = self._profiles[self._active_provider]
                 if profile.model and profile.model not in fallback_models:
                     fallback_models.insert(0, profile.model)
-                model_select.set_options(
-                    [(model, model) for model in fallback_models]
-                )
+                self._set_model_options(fallback_models)
+                model_select = self.query_one("#model-select", Select)
                 model_select.value = profile.model or fallback_models[0]
                 api_key = self.query_one("#api-key-input", Input).value.strip()
                 if api_key:
@@ -1357,24 +1530,20 @@ class ConnectionScreen(ModalScreen):
         elif event.button.id == "submit-button":
             self._connect()
 
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        """Submit modal fields without leaking them to the chat input."""
-        event.stop()
-        self._connect()
-
     async def _refresh_models(self, api_key: str, provider: str = "opencode-go") -> None:
         select = self.query_one("#model-select", Select)
         previously_selected = select.value
         select.loading = True
-        models = await fetch_opencode_go_models(api_key)
+        models: "list[str | ModelInfo]" = await fetch_opencode_go_models(api_key)
         select.loading = False
-        select.set_options([_model_option(model) for model in models])
+        self._set_model_options(models)
         # Keep the user's selection when it is still offered by the live list;
         # only fall back to the first model when it is gone.
-        if previously_selected in models:
+        ids = [_coerce_model_info(model).id for model in models]
+        if isinstance(previously_selected, str) and previously_selected in ids:
             select.value = previously_selected
-        elif models:
-            select.value = models[0]
+        elif ids:
+            select.value = ids[0]
         self._update_reasoning_fields()
 
     def _connect(self) -> None:
@@ -1607,6 +1776,12 @@ class MemoryScreen(ModalScreen):
     def __init__(self) -> None:
         super().__init__()
         self._memories: list[dict] = []
+        # Value the search filter programmatically assigned to the dropdown;
+        # the resulting queued Select.Changed must not count as a user switch.
+        self._programmatic_value: str | None = None
+        # True while the search filter rebuilds options; Select.Changed fired
+        # by programmatic value syncs must not count as a user switch.
+        self._filtering = False
 
     def _refresh_memories(self) -> None:
         self._memories = list_memories()
@@ -1636,6 +1811,10 @@ class MemoryScreen(ModalScreen):
             with Horizontal(id="dialog-header"):
                 yield Label("Memories", id="dialog-title")
                 yield Button("✕", id="memory-close")
+            yield Input(
+                placeholder="Filter memories…",
+                id="memory-search",
+            )
             with Horizontal(id="memory-row"):
                 yield Select(
                     self._select_options(),
@@ -1645,6 +1824,34 @@ class MemoryScreen(ModalScreen):
                     allow_blank=False,
                 )
                 yield Button("🗑", id="memory-delete")
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id == "memory-search":
+            event.stop()
+            self._apply_memory_filter(event.value or "")
+
+    def _apply_memory_filter(self, query: str) -> None:
+        """Narrow the memory dropdown to entries matching the query."""
+        select = self.query_one("#memory-select", Select)
+        q = query.strip().lower()
+        options = self._select_options()
+        if q:
+            options = [
+                (name, memory_id)
+                for name, memory_id in options
+                if q in name.lower() or q in memory_id.lower()
+            ]
+        previous = select.value
+        select.set_options(options)
+        values = [memory_id for _, memory_id in options]
+        assigned: str | None = None
+        if isinstance(previous, str) and previous in values:
+            assigned = previous
+        elif options:
+            assigned = options[0][1]
+        self._programmatic_value = assigned
+        if assigned is not None:
+            select.value = assigned
 
     def on_mount(self) -> None:
         self.query_one("#memory-select", Select).focus()
@@ -1679,11 +1886,14 @@ class MemoryScreen(ModalScreen):
             return
         delete_memory(memory_id)
         self._refresh_memories()
-        memory_select = self.query_one("#memory-select", Select)
-        memory_select.set_options(self._select_options())
+        self._apply_memory_filter(self.query_one("#memory-search", Input).value or "")
         active = get_active_memory_id()
         if active is not None:
-            memory_select.value = active
+            memory_select = self.query_one("#memory-select", Select)
+            if isinstance(active, str) and active in [
+                memory_id for _, memory_id in memory_select._options
+            ]:
+                memory_select.value = active
         app = self.app
         if isinstance(app, AgentApp):
             app._refresh_system_prompt()
@@ -1692,7 +1902,13 @@ class MemoryScreen(ModalScreen):
     def on_select_changed(self, event: Select.Changed) -> None:
         if event.select.id != "memory-select":
             return
-        # Ignore programmatic syncs that just reselect the active memory.
+        # Ignore programmatic syncs (search filter) and reselects of the
+        # active memory; anything else is a genuine user switch.
+        if event.value == self._programmatic_value:
+            return
+        self._programmatic_value = (
+            event.value if isinstance(event.value, str) else None
+        )
         if event.value == get_active_memory_id():
             return
         self._switch(str(event.value))
@@ -1753,6 +1969,10 @@ class ChatScreen(ModalScreen):
         current_id = app._chat_id if isinstance(app, AgentApp) else None
         with Vertical(id="chat-dialog"):
             yield Label("Chats", id="dialog-title")
+            yield Input(
+                placeholder="Filter chats…",
+                id="chat-search",
+            )
             yield OptionList(
                 *[
                     Option(chat["name"] or DEFAULT_CHAT_NAME, id=chat["id"])
@@ -1765,6 +1985,40 @@ class ChatScreen(ModalScreen):
                 yield Button("Switch", variant="primary", id="chat-switch")
                 yield Button("Delete", variant="error", id="chat-delete")
                 yield Button("Cancel", id="chat-cancel")
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id == "chat-search":
+            event.stop()
+            self._apply_chat_filter(event.value or "")
+
+    def _apply_chat_filter(self, query: str) -> None:
+        """Narrow the chat list to chats whose name matches the query."""
+        chat_list = self.query_one("#chat-list", OptionList)
+        app = self.app
+        current_id = app._chat_id if isinstance(app, AgentApp) else None
+        q = query.strip().lower()
+        if q:
+            visible = [
+                chat
+                for chat in self._chats
+                if q in (chat["name"] or DEFAULT_CHAT_NAME).lower()
+            ]
+        else:
+            visible = self._chats
+        chat_list.set_options(
+            [
+                Option(chat["name"] or DEFAULT_CHAT_NAME, id=chat["id"])
+                for chat in visible
+            ]
+        )
+        highlight = current_id or (visible[0]["id"] if visible else None)
+        if highlight is not None:
+            try:
+                index = chat_list.get_option_index(highlight)
+            except Exception:
+                # Highlighted chat is filtered out; leave the list as-is.
+                return
+            chat_list.highlighted = index
 
     def on_mount(self) -> None:
         chat_list = self.query_one("#chat-list", OptionList)
@@ -1800,20 +2054,7 @@ class ChatScreen(ModalScreen):
     def _reload_options(self) -> None:
         self._refresh_chats()
         self._disarm_delete()
-        chat_list = self.query_one("#chat-list", OptionList)
-        chat_list.set_options(
-            [
-                Option(chat["name"] or DEFAULT_CHAT_NAME, id=chat["id"])
-                for chat in self._chats
-            ]
-        )
-        app = self.app
-        current_id = app._chat_id if isinstance(app, AgentApp) else None
-        if self._chats:
-            highlight = current_id or self._chats[0]["id"]
-            index = chat_list.get_option_index(highlight)
-            if index is not None:
-                chat_list.highlighted = index
+        self._apply_chat_filter(self.query_one("#chat-search", Input).value or "")
 
     def _new_chat(self) -> None:
         app = self.app

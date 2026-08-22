@@ -795,10 +795,16 @@ def test_fetch_codex_models_parses_slugs(monkeypatch):
             200,
             json={
                 "models": [
-                    {"slug": "gpt-5.5"},
-                    {"id": "gpt-5.4-mini"},
-                    "gpt-5.2-codex",
-                    {"slug": "gpt-5.5"},
+                    {
+                        "slug": "gpt-5.6-sol",
+                        "display_name": "GPT-5.6-Sol",
+                        "description": "Latest frontier agentic coding model.",
+                        "context_window": 400000,
+                    },
+                    {"slug": "gpt-5.5", "context_window": 200000},
+                    {"slug": "hidden-one", "visibility": "hidden"},
+                    "not-a-dict",
+                    {"slug": "gpt-5.6-sol"},
                 ]
             },
         )
@@ -807,10 +813,25 @@ def test_fetch_codex_models_parses_slugs(monkeypatch):
     monkeypatch.setattr(
         codex_client,
         "_CLIENT_FACTORY",
-        lambda: httpx.AsyncClient(transport=transport, timeout=codex_client.HTTP_TIMEOUT),
+        lambda: httpx.AsyncClient(
+            transport=transport, timeout=codex_client.HTTP_TIMEOUT
+        ),
     )
-    models = asyncio.run(codex_client.fetch_codex_models())
-    assert models == ["gpt-5.5", "gpt-5.4-mini", "gpt-5.2-codex"]
+    rows = asyncio.run(codex_client.fetch_codex_models())
+    assert rows == [
+        {
+            "id": "gpt-5.6-sol",
+            "display": "GPT-5.6-Sol",
+            "description": "Latest frontier agentic coding model.",
+            "context_window": 400000,
+        },
+        {
+            "id": "gpt-5.5",
+            "display": "GPT 5.5",
+            "description": "",
+            "context_window": 200000,
+        },
+    ]
 
 
 def test_agent_routes_codex_provider_through_codex_stream(monkeypatch):

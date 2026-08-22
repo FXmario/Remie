@@ -2936,3 +2936,138 @@ def test_connection_screen_openrouter_live_model_list(monkeypatch):
             previous.reasoning_effort,
             previous.verify_ssl,
         )
+
+
+def test_connection_screen_model_search_filters_live_list(monkeypatch):
+    import remie.agent as _agent
+    from remie.model_names import ModelInfo
+
+    async def fake_fetch():
+        return [
+            ModelInfo(id="google/gemini-x", display="Gemini X", vendor="Google"),
+            ModelInfo(id="z-ai/glm-5.3", display="GLM 5.3", vendor="Z.AI"),
+            ModelInfo(
+                id="dots-studio/dots-3:free",
+                display="Dots 3",
+                vendor="Dots Studio",
+                free=True,
+            ),
+        ]
+
+    monkeypatch.setattr(tui, "fetch_openrouter_models", fake_fetch)
+    previous = get_config()
+    _agent.configure_openai("http://localhost:7070/v1", "k", "m", provider="local")
+    try:
+
+        async def exercise():
+            app = AgentApp()
+            async with app.run_test() as pilot:
+                await pilot.press("ctrl+p")
+                await pilot.pause()
+                screen = app.screen
+                assert isinstance(screen, ConnectionScreen)
+                screen.query_one("#provider-select", Select).value = "openrouter"
+                await pilot.pause()
+
+                model_select = screen.query_one("#model-select", Select)
+
+                def current_values():
+                    return [
+                        option.value
+                        if hasattr(option, "value") else option[1]
+                        for option in model_select._options
+                        if (option.value if hasattr(option, "value") else option[1])
+                        is not Select.NULL
+                    ]
+
+                for _ in range(100):
+                    if "google/gemini-x" in current_values():
+                        break
+                    await pilot.pause()
+                assert "z-ai/glm-5.3" in current_values()
+
+                search = screen.query_one("#model-search", Input)
+                search.value = "gem"
+                await pilot.pause()
+                assert current_values() == ["google/gemini-x"]
+
+                # Clearing restores the full (filtered-out) catalog.
+                search.value = ""
+                await pilot.pause()
+                values = current_values()
+                assert "z-ai/glm-5.3" in values and "dots-studio/dots-3:free" in values
+
+        asyncio.run(exercise())
+    finally:
+        _agent.configure_openai(
+            previous.base_url,
+            previous.api_key,
+            previous.model,
+            previous.provider,
+            previous.reasoning_effort,
+            previous.verify_ssl,
+        )
+
+
+def test_chat_picker_search_filters(monkeypatch):
+    from remie.tools import create_chat, rename_chat
+
+    alpha = create_chat()
+    rename_chat(alpha["id"], "alpha refactor")
+    beta = create_chat()
+    rename_chat(beta["id"], "beta migration")
+
+    async def exercise():
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            app._load_chat_into_ui(alpha["id"])
+            await pilot.press("ctrl+r")
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, ChatScreen)
+
+            search = screen.query_one("#chat-search", Input)
+            search.value = "migration"
+            await pilot.pause()
+
+            chat_list = screen.query_one("#chat-list", OptionList)
+            visible_ids = [option.id for option in chat_list._options]
+            assert visible_ids == [beta["id"]]
+
+            search.value = ""
+            await pilot.pause()
+            visible_ids = [option.id for option in chat_list._options]
+            assert alpha["id"] in visible_ids and beta["id"] in visible_ids
+
+    asyncio.run(exercise())
+
+
+def test_memory_picker_search_filters(monkeypatch):
+    async def exercise():
+        memory_tool("add", "base note")  # activates 'general'
+        memory_tool("add", "design fact", name="design-notes")
+
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            await pilot.press("ctrl+o")
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, MemoryScreen)
+
+            search = screen.query_one("#memory-search", Input)
+            search.value = "design"
+            await pilot.pause()
+
+            memory_select = screen.query_one("#memory-select", Select)
+            names = [name for name, _ in memory_select._options]
+            assert names == ["design-notes"]
+            from remie.tools import find_memory_by_name as _find_by_name
+
+            assert memory_select.value == _find_by_name("design-notes")["id"]
+
+            search.value = ""
+            await pilot.pause()
+            names = [name for name, _ in memory_select._options]
+            assert "general" in names
+
+    asyncio.run(exercise())

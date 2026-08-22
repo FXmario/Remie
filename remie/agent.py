@@ -16,6 +16,7 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.text import Text
 
+from remie.model_names import ModelInfo, prettify_model_id, prettify_model_name
 from remie.tools import (
     TOOL_REGISTRY,
     edit_file_tool,
@@ -75,6 +76,10 @@ OPENROUTER_DEFAULT_CONTEXT_LIMIT = 128_000
 # Live context windows for OpenRouter models, populated from the public
 # models API at connect time (used for context compaction).
 _openrouter_model_context: dict[str, int] = {}
+
+# Live context windows for Codex subscription models, populated from the
+# account's model list at connect time.
+_codex_model_context: dict[str, int] = {}
 
 # Bundled fallback model list, used only when the OpenCode Go models API is
 # unreachable. The live list (and each model's context window) is fetched from
@@ -450,10 +455,11 @@ def _get_local_openai_client() -> AsyncOpenAI:
     return _local_openai_client
 
 
-async def fetch_opencode_go_models(api_key: str) -> list[str]:
-    """Fetch the live OpenCode Go model list and each model's context window;
-    fall back to a bundled list when the API is unreachable or returns nothing
-    usable. The fetched context windows are cached for context compaction."""
+async def fetch_opencode_go_models(api_key: str) -> list[ModelInfo]:
+    """Fetch the live OpenCode Go model list with each model's real context
+    window (cached for compaction); fall back to prettified bundled ids when
+    the API is unreachable. The catalog exposes raw ids only, so display names
+    come from heuristics."""
     async with httpx.AsyncClient(timeout=10) as client:
         try:
             response = await client.get(
@@ -462,7 +468,7 @@ async def fetch_opencode_go_models(api_key: str) -> list[str]:
             )
             response.raise_for_status()
             payload = response.json()
-            models = []
+            infos: list[ModelInfo] = []
             for item in payload.get("data", []):
                 model_id = item.get("id")
                 if not model_id:
@@ -470,39 +476,68 @@ async def fetch_opencode_go_models(api_key: str) -> list[str]:
                 context = item.get("context_length")
                 if isinstance(context, int) and context > 0:
                     _opencode_go_model_context[model_id] = context
-                models.append(model_id)
-            return models or list(OPENCODE_GO_MODELS)
+                infos.append(prettify_model_id(str(model_id)))
+            if not infos:
+                return [prettify_model_id(m) for m in OPENCODE_GO_MODELS]
+            return infos
         except (httpx.HTTPError, ValueError, KeyError, TypeError, AttributeError):
-            return list(OPENCODE_GO_MODELS)
+            return [prettify_model_id(m) for m in OPENCODE_GO_MODELS]
 
 
-async def fetch_codex_models() -> list[str]:
-    """Fetch the signed-in account's live Codex model list; fall back to the
-    bundled list when not signed in or the backend is unreachable."""
+async def fetch_codex_models() -> list[ModelInfo]:
+    """Fetch the signed-in account's live Codex models as ModelInfo rows;
+    fall back to the bundled list when offline or unsigned."""
     from remie.codex_client import fetch_codex_models as _fetch_live_models
 
     try:
-        models = await _fetch_live_models()
+        rows = await _fetch_live_models()
     except Exception:
-        return list(CODEX_MODELS)
-    return models or list(CODEX_MODELS)
+        rows = []
+    if not rows:
+        return [
+            ModelInfo(id=m, display=prettify_model_name(m), vendor="OpenAI")
+            for m in CODEX_MODELS
+        ]
+    infos: list[ModelInfo] = []
+    for row in rows:
+        context = row.get("context_window") or 0
+        if isinstance(context, int) and context > 0:
+            _codex_model_context[row["id"]] = context
+        infos.append(
+            ModelInfo(
+                id=row["id"],
+                display=row.get("display") or row["id"],
+                vendor="OpenAI",
+            )
+        )
+    return infos
 
 
-async def fetch_openrouter_models() -> list[str]:
-    """Fetch the live OpenRouter catalog and each model's real context window
-    (cached for compaction); fall back to the bundled list on failure."""
+async def fetch_openrouter_models() -> list[ModelInfo]:
+    """Fetch the live OpenRouter catalog; fall back to prettified bundled ids
+    on failure. Context windows are cached for compaction."""
     from remie.openrouter_client import fetch_openrouter_models as _fetch_live
 
     try:
         rows = await _fetch_live()
     except Exception:
-        return list(OPENROUTER_MODELS)
-    models: list[str] = []
-    for model_id, context_length in rows:
-        if context_length > 0:
-            _openrouter_model_context[model_id] = context_length
-        models.append(model_id)
-    return models or list(OPENROUTER_MODELS)
+        rows = []
+    if not rows:
+        return [prettify_model_id(m) for m in OPENROUTER_MODELS]
+    infos: list[ModelInfo] = []
+    for row in rows:
+        context = row.get("context_length") or 0
+        if isinstance(context, int) and context > 0:
+            _openrouter_model_context[row["id"]] = context
+        infos.append(
+            ModelInfo(
+                id=row["id"],
+                display=row.get("display") or row["id"],
+                vendor=row.get("vendor") or "",
+                free=bool(row.get("free")),
+            )
+        )
+    return infos
 
 
 def get_model_context_limit(model: str, provider: str = "local") -> int | None:

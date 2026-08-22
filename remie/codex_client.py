@@ -17,6 +17,7 @@ from openai import APIStatusError, AsyncOpenAI
 
 from remie.agent import LLMRequestError
 from remie.codex_auth import CodexAuth, ensure_valid_auth, refresh_auth
+from remie.model_names import prettify_model_name
 
 CODEX_BACKEND_BASE = "https://chatgpt.com/backend-api/codex"
 CODEX_MODELS_URL = f"{CODEX_BACKEND_BASE}/models"
@@ -454,8 +455,12 @@ async def stream_codex_call(
         yield chunk
 
 
-async def fetch_codex_models() -> list[str]:
-    """Fetch the account's live Codex model list; empty list on failure."""
+async def fetch_codex_models() -> list[dict[str, Any]]:
+    """Fetch the account's live Codex model metadata; [] on failure.
+
+    Rows carry ``{"id", "display", "description", "context_window"}`` straight
+    from the backend's ``display_name`` / ``description`` fields.
+    """
     from remie.codex_auth import load_auth
 
     auth = load_auth()
@@ -478,20 +483,37 @@ async def fetch_codex_models() -> list[str]:
             payload = response.json()
     except (httpx.HTTPError, ValueError):
         return []
-    models: list[str] = []
-    if isinstance(payload, dict):
-        rows = payload.get("models") or payload.get("data") or []
-    elif isinstance(payload, list):
-        rows = payload
-    else:
-        rows = []
-    for row in rows:
-        if isinstance(row, str):
-            models.append(row)
-        elif isinstance(row, dict):
-            slug = row.get("slug") or row.get("id") or row.get("model")
-            if isinstance(slug, str) and slug:
-                models.append(slug)
+    rows = payload.get("models") if isinstance(payload, dict) else None
+    results: list[dict[str, Any]] = []
+    if not isinstance(rows, list):
+        return []
     seen: set[str] = set()
-    unique = [model for model in models if not (model in seen or seen.add(model))]
-    return unique
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        slug = row.get("slug")
+        if not isinstance(slug, str) or not slug or slug in seen:
+            continue
+        seen.add(slug)
+        if row.get("visibility") == "hidden":
+            continue
+        display_name = row.get("display_name")
+        description = row.get("description")
+        context_window = row.get("context_window")
+        results.append(
+            {
+                "id": slug,
+                "display": (
+                    display_name.strip()
+                    if isinstance(display_name, str) and display_name.strip()
+                    else prettify_model_name(slug)
+                ),
+                "description": (
+                    description.strip() if isinstance(description, str) else ""
+                ),
+                "context_window": (
+                    context_window if isinstance(context_window, int) else 0
+                ),
+            }
+        )
+    return results

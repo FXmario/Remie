@@ -14,6 +14,7 @@ from typing import Any
 import httpx
 
 from remie.agent import LLMRequestError
+from remie.model_names import VENDORS, prettify_model_id
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 OPENROUTER_MODELS_URL = f"{OPENROUTER_BASE_URL}/models"
@@ -376,8 +377,13 @@ async def stream_openrouter_call(
         yield chunk
 
 
-async def fetch_openrouter_models() -> list[tuple[str, int]]:
-    """Fetch live model ids with their context windows; [] on failure."""
+async def fetch_openrouter_models() -> list[dict[str, Any]]:
+    """Fetch live catalog entries as metadata rows; [] on failure.
+
+    Rows carry ``{"id", "display", "vendor", "context_length", "free"}``.
+    OpenRouter's ``name`` field is formatted like ``"Meta: Muse Spark 1.2"``,
+    so vendor is split out when present; ids fall back to heuristics.
+    """
     try:
         async with _create_client() as client:
             response = await client.get(OPENROUTER_MODELS_URL, timeout=10)
@@ -386,7 +392,7 @@ async def fetch_openrouter_models() -> list[tuple[str, int]]:
     except (httpx.HTTPError, ValueError):
         return []
     rows = payload.get("data") if isinstance(payload, dict) else None
-    results: list[tuple[str, int]] = []
+    results: list[dict[str, Any]] = []
     if not isinstance(rows, list):
         return []
     for row in rows:
@@ -395,8 +401,34 @@ async def fetch_openrouter_models() -> list[tuple[str, int]]:
         model_id = row.get("id")
         if not isinstance(model_id, str) or not model_id:
             continue
+        display = ""
+        vendor = ""
+        raw_name = row.get("name")
+        if isinstance(raw_name, str) and ": " in raw_name:
+            vendor_part, _, display = raw_name.partition(": ")
+            vendor = VENDORS.get(vendor_part.strip().lower(), vendor_part.strip())
+        info = prettify_model_id(model_id)
+        display = display or info.display or model_id
+        vendor = vendor or info.vendor
         context_length = row.get("context_length")
+        pricing = row.get("pricing")
+        free = False
+        if isinstance(pricing, dict):
+            try:
+                free = float(pricing.get("prompt") or 0) == 0 and float(
+                    pricing.get("completion") or 0
+                ) == 0
+            except (TypeError, ValueError):
+                free = False
         results.append(
-            (model_id, context_length if isinstance(context_length, int) else 0)
+            {
+                "id": model_id,
+                "display": display,
+                "vendor": vendor,
+                "context_length": (
+                    context_length if isinstance(context_length, int) else 0
+                ),
+                "free": free,
+            }
         )
     return results
