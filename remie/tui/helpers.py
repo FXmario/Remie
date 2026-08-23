@@ -14,7 +14,9 @@ from rich.console import RenderableType
 from remie.tui.constants import (
     STREAM_PREVIEW_MAX_CHARS,
     STREAM_UPDATE_CHARS_PER_SECOND,
+    STREAM_UPDATE_LARGE_PREVIEW_CHARS,
     STREAM_UPDATE_MIN_INTERVAL,
+    STREAM_UPDATE_MIN_INTERVAL_LARGE,
 )
 from remie.model_names import ModelInfo, prettify_model_id
 from remie.tools import MEMORY_NAME_MAX_CHARS
@@ -112,9 +114,18 @@ def _stream_update_interval(text_len: int) -> float:
     render cost: `_preview_window` never renders more than
     `STREAM_PREVIEW_MAX_CHARS`, so the throttle interval must not keep growing
     with the (unbounded) accumulated text.
+
+    Short previews render in well under a millisecond, so they use a ~30 fps
+    floor for a smooth feel; large previews fall back to the slower floor to
+    keep render work bounded.
     """
+    floor = (
+        STREAM_UPDATE_MIN_INTERVAL_LARGE
+        if text_len > STREAM_UPDATE_LARGE_PREVIEW_CHARS
+        else STREAM_UPDATE_MIN_INTERVAL
+    )
     return max(
-        STREAM_UPDATE_MIN_INTERVAL,
+        floor,
         min(text_len, STREAM_PREVIEW_MAX_CHARS)
         / STREAM_UPDATE_CHARS_PER_SECOND,
     )

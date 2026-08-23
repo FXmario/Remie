@@ -293,15 +293,28 @@ def test_ctrl_g_toggles_static_status_image_in_tmux(monkeypatch, tmp_path):
 
 def test_stream_update_interval_is_bounded_by_preview_window():
     # The interval never grows past the preview cap: for text longer than the
-    # preview window the cost is constant, so the throttle stays at the floor
+    # preview window the cost is constant, so the throttle stays at a floor
     # instead of scaling with the (unbounded) accumulated text.
     assert tui._stream_update_interval(0) == tui.STREAM_UPDATE_MIN_INTERVAL
     assert tui._stream_update_interval(100) == tui.STREAM_UPDATE_MIN_INTERVAL
     huge = tui.STREAM_PREVIEW_MAX_CHARS * 100
-    assert tui._stream_update_interval(huge) == tui.STREAM_UPDATE_MIN_INTERVAL
+    assert tui._stream_update_interval(huge) == (
+        tui.STREAM_UPDATE_MIN_INTERVAL_LARGE
+    )
     assert tui._stream_update_interval(huge) < (
         huge / tui.STREAM_UPDATE_CHARS_PER_SECOND
     )
+
+
+def test_stream_update_interval_adaptive_floor():
+    # Short previews use the fast ~30 fps floor; once the text passes the
+    # large-preview threshold the floor rises to keep render work bounded.
+    fast = tui._stream_update_interval(tui.STREAM_UPDATE_LARGE_PREVIEW_CHARS)
+    slow = tui._stream_update_interval(
+        tui.STREAM_UPDATE_LARGE_PREVIEW_CHARS + 1
+    )
+    assert fast == tui.STREAM_UPDATE_MIN_INTERVAL
+    assert slow >= tui.STREAM_UPDATE_MIN_INTERVAL_LARGE
 
 
 def test_push_message_updates_conversation_token_cache(monkeypatch):
@@ -2413,6 +2426,95 @@ def test_connection_screen_preserves_each_provider_form(monkeypatch):
                 previous.reasoning_effort,
                 previous.verify_ssl,
             )
+
+    asyncio.run(exercise())
+
+
+def test_reasoning_stream_keeps_timer_rendered_prefix(monkeypatch):
+    async def exercise():
+        async def fake_stream(
+            _conversation, usage_box=None, reasoning_box=None, finish_box=None, **_kwargs
+        ):
+            assert reasoning_box is not None
+            reasoning_box.append("timer prefix ")
+            # No content is yielded during this pause, so the timer owns the
+            # first render. The following content delta must retain that text.
+            await asyncio.sleep(0.15)
+            reasoning_box.append("content suffix")
+            yield "reply"
+
+        monkeypatch.setattr(tui, "stream_llm_call", fake_stream)
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            await app.run_agent_turn("hello")
+            await pilot.pause()
+
+            joined = "\n".join(strip.text for strip in app.query_one("#log").lines)
+            assert "timer prefix content suffix" in joined
+
+    asyncio.run(exercise())
+
+
+def test_reasoning_stream_coalesces_same_tick_renders(monkeypatch):
+    """When the reasoning timer paints the panel and a content delta arrives
+    within the coalesce window (with no new reasoning), the inline path must
+    skip its duplicate update_stream call."""
+    async def exercise():
+        from remie.tui.widgets import StreamingRichLog
+
+        calls = {"n": 0}
+        real_update = StreamingRichLog.update_stream
+
+        def counting_update(self, *args, **kwargs):
+            calls["n"] += 1
+            return real_update(self, *args, **kwargs)
+
+        async def fake_stream(
+            _conversation, usage_box=None, reasoning_box=None, finish_box=None, **_kwargs
+        ):
+            assert reasoning_box is not None
+            reasoning_box.append("timer renders this ")
+            await asyncio.sleep(0.08)  # timer paints at least once
+            # Content deltas arrive with no fresh reasoning; each would
+            # trigger an inline render without coalescing.
+            for _ in range(5):
+                reasoning_box.append("x")
+                yield "a"
+                await asyncio.sleep(0.005)
+
+        monkeypatch.setattr(tui, "stream_llm_call", fake_stream)
+        monkeypatch.setattr(StreamingRichLog, "update_stream", counting_update)
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            await app.run_agent_turn("hello")
+            await pilot.pause()
+            # Without coalescing every content delta adds a render on top of
+            # the timer's. With coalescing the total stays modest.
+            assert calls["n"] < 8
+            joined = "\n".join(strip.text for strip in app.query_one("#log").lines)
+            assert "timer renders this" in joined
+
+    asyncio.run(exercise())
+
+
+def test_reasoning_timer_stops_when_stream_errors(monkeypatch):
+    async def exercise():
+        async def failing_stream(
+            _conversation, usage_box=None, reasoning_box=None, finish_box=None, **_kwargs
+        ):
+            assert reasoning_box is not None
+            reasoning_box.append("thinking")
+            await asyncio.sleep(0.15)
+            raise RuntimeError("stream failed")
+            yield
+
+        monkeypatch.setattr(tui, "stream_llm_call", failing_stream)
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            await app.run_agent_turn("hello")
+            await pilot.pause()
+            assert app._live_stream["active"] is False
+            assert app._live_reasoning_timer is None
 
     asyncio.run(exercise())
 

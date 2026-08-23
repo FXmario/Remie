@@ -55,9 +55,11 @@ from remie.tools import (
 from remie.tui.constants import (
     COMPACTION_CONTEXT_RATIO,
     COMPACTION_KEEP_MESSAGES,
+    LIVE_REASONING_TICK,
     MAX_AUTO_CONTINUATIONS,
     MAX_EMPTY_RESPONSE_RETRIES,
     PROMPT_HISTORY_LIMIT,
+    STREAM_RENDER_COALESCE_WINDOW,
 )
 from remie.tui.css import CSS
 from remie.tui.helpers import (
@@ -67,6 +69,7 @@ from remie.tui.helpers import (
     _safe_reasoning_markdown,
     _safe_stream_markdown,
     _should_update_stream,
+    _stream_update_interval,
 )
 from remie.tui.render import _render_diff, _render_tool_result
 from remie.tui.screens.ask_user import AskUserScreen
@@ -493,7 +496,9 @@ class AgentApp(App):
         if len(box) <= consumed:
             return
         now = time.monotonic()
-        if now - state["last_render"] < 0.1:
+        if now - state["last_render"] < _stream_update_interval(
+            len(state["text"]) or 1
+        ):
             return
         state["last_render"] = now
         new_text = "".join(box[consumed:])
@@ -501,7 +506,6 @@ class AgentApp(App):
         log = state["log"]
         # Reconstruct the full accumulated reasoning from what has been
         # consumed so far plus this batch.
-        state.setdefault("text", "")
         state["text"] += new_text
         shown = state["text"]
         if self._stop_requested:
@@ -515,9 +519,17 @@ class AgentApp(App):
     def _stop_live_stream_timer(self, timer) -> None:
         """Stop the live-reasoning timer and mark its state inactive."""
         timer.stop()
+        if getattr(self, "_live_reasoning_timer", None) is timer:
+            self._live_reasoning_timer = None
         state = getattr(self, "_live_stream", None)
         if state:
             state["active"] = False
+
+    def _stop_active_reasoning_timer(self) -> None:
+        """Clean up a timer when a stream exits through an exception/cancel."""
+        timer = getattr(self, "_live_reasoning_timer", None)
+        if timer is not None:
+            self._stop_live_stream_timer(timer)
 
     async def run_agent_turn(self, user_content: str | list) -> None:
         log = self.query_one("#log", StreamingRichLog)
@@ -565,9 +577,13 @@ class AgentApp(App):
                     "reasoning_box": reasoning_box,
                     "consumed": 0,
                     "last_render": stream_started,
+                    "text": "",
                     "active": True,
                 }
-                reasoning_timer = self.set_interval(0.1, self._drain_live_reasoning)
+                reasoning_timer = self.set_interval(
+                    LIVE_REASONING_TICK, self._drain_live_reasoning
+                )
+                self._live_reasoning_timer = reasoning_timer
                 async for delta in _tui_pkg.stream_llm_call(
                     self.conversation,
                     usage_box,
@@ -610,9 +626,25 @@ class AgentApp(App):
                         new_reasoning = "".join(
                             reasoning_box[self._live_stream["consumed"]:]
                         )
-                        reasoning_text += new_reasoning
+                        self._live_stream["text"] += new_reasoning
                         self._live_stream["consumed"] = len(reasoning_box)
                         self._live_stream["last_render"] = now
+                    # The timer and this content-driven path share the same
+                    # accumulator. Otherwise a timer-rendered prefix vanishes
+                    # as soon as a content delta renders the next suffix.
+                    reasoning_text = self._live_stream["text"]
+                    # Coalesce: when the timer painted this same panel a few
+                    # ms ago and no fresh reasoning arrived with this delta,
+                    # skip the duplicate paint (the panel content is already
+                    # up to date on screen).
+                    if (
+                        reasoning_text
+                        and len(reasoning_box) <= self._live_stream["consumed"]
+                        and now - self._live_stream["last_render"]
+                        < STREAM_RENDER_COALESCE_WINDOW
+                        and not (tool_detected and not tool_rendered)
+                    ):
+                        continue
                     if tool_detected:
                         shown = reasoning_text or extract_thinking(full_text)
                     elif reasoning_text:
@@ -682,8 +714,6 @@ class AgentApp(App):
                         for name, args in tool_invocations
                     ]
                 content = strip_protocol_lines(full_text).strip()
-                import sys as _sys
-                print("DBG native:", native_tool_calling, "| full_text:", repr(full_text[:120]), "| invocations:", tool_invocations, file=_sys.stderr)
                 if not tool_invocations and not content:
                     # The model produced no usable output (e.g. only reasoning,
                     # or the stream ended prematurely). Don't silently mark the
@@ -886,6 +916,7 @@ class AgentApp(App):
                 severity="error",
             )
         finally:
+            self._stop_active_reasoning_timer()
             self._agent_running = False
             if self._agent_task is current_task:
                 self._agent_task = None
