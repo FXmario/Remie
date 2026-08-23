@@ -19,7 +19,8 @@ profile to the shared Remie configuration file.
 - The model name is shown on the top-right of the input box border
 - Three theme modes: **System** uses terminal-native ANSI colors and preserves transparency, while **Light** and **Dark** use full Textual palettes; `Ctrl+T` cycles between them
 - Async agent loop — the UI stays responsive while the LLM responds and tools run
-- Tools: `read_file`, `list_files`, `glob_files`, `tree_files`, `edit_file`, `run_command`, `ask_user`, `memory`
+- Tools: `read_file`, `list_files`, `glob_files`, `tree_files`, `edit_file`, `run_command`, `ask_user`, `memory`, `web_fetch`, `web_search`
+- **Web access via curl** — `web_fetch` fetches any http(s) URL (custom method, headers, body; HTML is reduced to readable text, other types returned raw, or saved to disk with `save_to`), and `web_search` searches DuckDuckGo's HTML endpoint with automatic Bing fallback when DuckDuckGo is unreachable — both no API key needed. Responses are size-capped and truncated before they reach the context window; timeout configurable with `REMIE_WEB_TIMEOUT`
 - **Agent memory (durable notes)** — the agent can append durable facts, decisions, user preferences, and open tasks to the active memory with the `memory` tool; press `Ctrl+O` to switch to or delete an older memory. The active memory is remembered across launches and injected into the system prompt. When a long task nears the context window, dropped messages are summarized into a compact note instead of being silently truncated.
 - **Chat history** — every conversation is saved as a named chat under `.remie/chats/`. Launching Remie resumes the most recently used chat automatically; `Ctrl+R` opens a chat picker to switch to an older chat, start a new one, or delete one. A chat is auto-titled after its first completed task; `Ctrl+L` starts a new chat while keeping the previous one. Existing `.remie/session.json` files from older versions are imported as a chat on first launch.
 - **Codex (ChatGPT Plus/Pro)** — sign in with a ChatGPT subscription via the native OAuth flow and use Codex models (gpt-5.6-sol/terra/luna, gpt-5.5, …) without an API key, the Codex CLI, or npm
@@ -77,6 +78,7 @@ Configure the LLM connection via environment variables (a `.env` file is loaded 
 | `REMIE_MAX_OUTPUT_TOKENS` | Max output tokens per response | OpenCode Go `32768`, local `8192` |
 | `REMIE_MAX_AUTO_CONTINUATIONS` | Max silent auto-continuations per response | `10` |
 | `REMIE_BLOCKED_COMMANDS` | Comma-separated extra command substrings that are always blocked (e.g. `git push --force,aws s3 rm`) | (unset) |
+| `REMIE_WEB_TIMEOUT` | Seconds before a `web_fetch`/`web_search` request is killed | `20` |
 
 ### OpenCode Go
 

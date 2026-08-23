@@ -92,6 +92,16 @@ from remie.tools.registry import (
     get_tool_str_representation,
     get_tool_summary,
 )
+from remie.tools.web import (
+    SEARCH_RESULT_LIMIT,
+    USER_AGENT,
+    WEB_BODY_MAX_CHARS,
+    WEB_MAX_BYTES,
+    WebToolError,
+    html_to_text,
+    web_fetch_tool,
+    web_search_tool,
+)
 
 __all__ = [
     "CHAT_FILE_VERSION",
@@ -108,12 +118,17 @@ __all__ = [
     "MEMORY_NAME_MAX_CHARS",
     "RUN_COMMAND_MAX_OUTPUT",
     "RUN_COMMAND_TIMEOUT",
+    "SEARCH_RESULT_LIMIT",
     "TIMED_OUT_EXIT_CODE",
     "TOOL_PARAMETERS",
     "TOOL_REGISTRY",
     "TOOL_SUMMARIES",
     "TREE_MAX_DEPTH",
     "TREE_MAX_ENTRIES",
+    "USER_AGENT",
+    "WEB_BODY_MAX_CHARS",
+    "WEB_MAX_BYTES",
+    "WebToolError",
     "_DD_SAFE_DEVICES",
     "__all__",
     "_env_int",
@@ -144,6 +159,7 @@ __all__ = [
     "get_tool_str_representation",
     "get_tool_summary",
     "glob_files_tool",
+    "html_to_text",
     "list_chats",
     "list_files_tool",
     "list_memories",
@@ -165,4 +181,6 @@ __all__ = [
     "session_file_path",
     "set_active_memory_id",
     "tree_files_tool",
+    "web_fetch_tool",
+    "web_search_tool",
 ]

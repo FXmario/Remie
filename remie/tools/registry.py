@@ -21,6 +21,7 @@ from remie.tools.files import (
     tree_files_tool,
 )
 from remie.tools.memory import memory_tool
+from remie.tools.web import web_fetch_tool, web_search_tool
 
 TOOL_REGISTRY = {
     "read_file": read_file_tool,
@@ -31,6 +32,8 @@ TOOL_REGISTRY = {
     "tree_files": tree_files_tool,
     "ask_user": ask_user_tool,
     "memory": memory_tool,
+    "web_fetch": web_fetch_tool,
+    "web_search": web_search_tool,
 }
 
 TOOL_SUMMARIES = {
@@ -42,6 +45,8 @@ TOOL_SUMMARIES = {
     "tree_files": "show the directory tree",
     "ask_user": "ask the user a question",
     "memory": "saving or recalling a memory note",
+    "web_fetch": "fetch a URL over HTTP(S) with curl",
+    "web_search": "search the web with DuckDuckGo",
 }
 
 
@@ -143,6 +148,42 @@ TOOL_PARAMETERS = {
             "name": {"type": "string", "description": "Memory name to target or create."},
         },
         "required": ["action"],
+    },
+    "web_fetch": {
+        "type": "object",
+        "properties": {
+            "url": {"type": "string", "description": "Absolute http:// or https:// URL to fetch."},
+            "method": {
+                "type": "string",
+                "enum": ["GET", "POST", "PUT", "DELETE", "HEAD"],
+                "description": "HTTP method. Defaults to GET.",
+            },
+            "headers": {
+                "type": "object",
+                "additionalProperties": {"type": "string"},
+                "description": "Optional extra request headers.",
+            },
+            "data": {
+                "type": "string",
+                "description": "Request body. For GET it is merged into the query string; otherwise sent as the request body.",
+            },
+            "save_to": {
+                "type": "string",
+                "description": "Optional project-relative path to save the raw response body to instead of returning it inline (e.g. downloading a file).",
+            },
+        },
+        "required": ["url"],
+    },
+    "web_search": {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "description": "The search query text."},
+            "max_results": {
+                "type": "integer",
+                "description": "Maximum number of results to return (default 10).",
+            },
+        },
+        "required": ["query"],
     },
 }
 

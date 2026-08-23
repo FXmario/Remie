@@ -9,6 +9,7 @@ wheels/
 # Virtual environments
 .venv
 .env
+env/
 
 # Remie agent memory / session data
 .remie/
