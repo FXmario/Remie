@@ -25,3 +25,6 @@ dev = ["pytest>=8"]
 
 [tool.setuptools.packages.find]
 include = ["remie*"]
+
+[tool.setuptools.package-data]
+remie = ["assets/*.gif"]

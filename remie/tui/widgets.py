@@ -106,7 +106,11 @@ def _load_status_gif(name: str) -> tuple[list[PILImage.Image], list[float]]:
     prevent the rest of the TUI from starting.
     """
     candidates = (
+        # Bundled with the package: remie/assets/, resolved from
+        # remie/tui/widgets.py via parent.parent (see package-data in
+        # pyproject.toml). Also covers running from a source checkout.
         Path(__file__).resolve().parent.parent / "assets" / name,
+        # Dev fallback when launching from the repo root.
         Path.cwd() / "assets" / name,
     )
     asset = next((path for path in candidates if path.is_file()), None)
