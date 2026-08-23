@@ -200,6 +200,94 @@ def test_status_gifs_load_lazily():
     assert "done" not in indicator._frames
 
 
+def test_missing_status_gif_returns_empty_animation():
+    assert _load_status_gif("does-not-exist.gif") == ([], [])
+
+
+def test_tui_starts_without_status_gif_assets(monkeypatch):
+    """Optional animation files must never be required to mount the app."""
+    import remie.tui.widgets as widgets
+
+    monkeypatch.setattr(widgets, "_load_status_gif", lambda _name: ([], []))
+
+    async def exercise():
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            indicator = app.query_one(StatusIndicator)
+            assert indicator.display is False
+            assert not indicator.query("#status-gif")
+            # Status transitions and preference toggles remain safe too.
+            app._set_status("working")
+            indicator.set_animation_enabled(False)
+            indicator.set_animation_enabled(True)
+            assert indicator.display is False
+
+    asyncio.run(exercise())
+
+
+def test_missing_later_status_gif_disables_animation(monkeypatch):
+    """A missing working/done asset must not crash a mounted indicator."""
+    import remie.tui.widgets as widgets
+
+    original_loader = widgets._load_status_gif
+
+    def load_except_working(name):
+        return ([], []) if name == "working.gif" else original_loader(name)
+
+    monkeypatch.setattr(widgets, "_load_status_gif", load_except_working)
+
+    async def exercise():
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            indicator = app.query_one(StatusIndicator)
+            indicator.set_status("working")
+            await pilot.pause()
+            assert indicator.display is False
+
+    asyncio.run(exercise())
+
+
+def test_load_status_gif_missing_file_returns_empty(tmp_path, monkeypatch):
+    """The real loader degrades to empty data when no GIF exists anywhere."""
+    import remie.tui.widgets as widgets
+
+    # Point the cwd fallback at an empty dir; the package-relative candidate
+    # is bypassed by asking for a name that never ships.
+    monkeypatch.chdir(tmp_path)
+    assert widgets._load_status_gif("does-not-exist.gif") == ([], [])
+
+
+def test_tui_launches_without_status_gif_assets(monkeypatch, tmp_path):
+    """A directory without assets/*.gif must not crash the TUI at startup.
+
+    Regression test: the installed CLI once called PILImage.open() on a
+    non-existent asset path, raising FileNotFoundError during compose().
+    """
+    import remie.tui.widgets as widgets
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        widgets,
+        "_load_status_gif",
+        lambda name: ([], []),
+    )
+
+    async def exercise():
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            indicator = app.query_one(StatusIndicator)
+            assert indicator.display is False
+            # Status transitions stay harmless without any frames.
+            for status in ("working", "done", "ready"):
+                indicator.set_status(status)
+                await pilot.pause()
+                assert indicator.display is False
+
+    asyncio.run(exercise())
+
+
 def test_ctrl_g_toggles_and_persists_status_animation(monkeypatch, tmp_path):
     import remie.agent as agent
 

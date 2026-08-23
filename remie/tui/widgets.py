@@ -12,6 +12,7 @@ from rich.segment import Segment
 from textual.strip import Strip
 from rich.text import Text
 from textual.containers import Horizontal, Vertical
+from textual.css.query import NoMatches
 from textual.geometry import Size
 from textual.message import Message
 from textual.widgets import Label, RichLog, TextArea
@@ -98,16 +99,31 @@ class StreamingRichLog(RichLog):
 
 
 def _load_status_gif(name: str) -> tuple[list[PILImage.Image], list[float]]:
-    """Load GIF frames and their original durations from the project assets."""
-    asset = Path(__file__).resolve().parent.parent / "assets" / name
-    if not asset.exists():
-        asset = Path.cwd() / "assets" / name
-    with PILImage.open(asset) as image:
-        frames = []
-        durations = []
-        for frame in ImageSequence.Iterator(image):
-            frames.append(frame.convert("RGBA").copy())
-            durations.append(max(0.1, frame.info.get("duration", 100) / 1000))
+    """Load a status GIF, returning empty data when no usable asset exists.
+
+    Installations are not required to include the optional animation assets.
+    Also treat unreadable or malformed images as unavailable so they can never
+    prevent the rest of the TUI from starting.
+    """
+    candidates = (
+        Path(__file__).resolve().parent.parent / "assets" / name,
+        Path.cwd() / "assets" / name,
+    )
+    asset = next((path for path in candidates if path.is_file()), None)
+    if asset is None:
+        return [], []
+
+    try:
+        with PILImage.open(asset) as image:
+            frames = []
+            durations = []
+            for frame in ImageSequence.Iterator(image):
+                frames.append(frame.convert("RGBA").copy())
+                durations.append(max(0.1, frame.info.get("duration", 100) / 1000))
+    except Exception:
+        # Any decode failure (corrupt file, PIL limits, unexpected errors)
+        # degrades to "no animation" instead of preventing the TUI launch.
+        return [], []
     return frames, durations
 
 
@@ -131,28 +147,48 @@ class StatusIndicator(Vertical):
         "ready" frames instead of all three animations up front.
         """
         if status not in self._frames:
-            self._frames[status] = _load_status_gif(f"{status}.gif")
+            try:
+                self._frames[status] = _load_status_gif(f"{status}.gif")
+            except Exception:
+                # Asset loading must never take the TUI down (missing or
+                # unreadable GIFs simply mean no status image is shown).
+                self._frames[status] = ([], [])
         return self._frames[status]
 
     def compose(self) -> ComposeResult:
-        yield TerminalImage(
-            self._ensure_loaded(self._state)[0][0], id="status-gif"
-        )
+        frames, _ = self._ensure_loaded(self._state)
+        if frames:
+            yield TerminalImage(frames[0], id="status-gif")
+        else:
+            # An empty optional asset set must not reserve a blank status box.
+            self.display = False
 
     def on_mount(self) -> None:
-        if self._animation_enabled and not _is_tmux():
+        if self._animation_enabled and self.display and not _is_tmux():
             self._schedule_next_frame()
 
     def _schedule_next_frame(self) -> None:
-        durations = self._ensure_loaded(self._state)[1]
+        _, durations = self._ensure_loaded(self._state)
+        if not durations:
+            self.display = False
+            return
         self._timer = self.set_timer(durations[self._frame_index], self._advance)
 
     def _advance(self) -> None:
         if not self._animation_enabled:
             return
-        frames = self._ensure_loaded(self._state)[0]
+        frames, _ = self._ensure_loaded(self._state)
+        if not frames:
+            self.display = False
+            return
         self._frame_index = (self._frame_index + 1) % len(frames)
-        self.query_one("#status-gif", TerminalImage).image = frames[self._frame_index]
+        try:
+            self.query_one("#status-gif", TerminalImage).image = frames[self._frame_index]
+        except NoMatches:
+            # The initial GIF was unavailable, so compose did not create an
+            # image widget. Status changes should remain harmless.
+            self.display = False
+            return
         if self._animation_enabled and not _is_tmux():
             self._schedule_next_frame()
 
@@ -162,8 +198,9 @@ class StatusIndicator(Vertical):
         if self._timer is not None:
             self._timer.stop()
             self._timer = None
-        self.display = enabled
-        if enabled and self.is_attached and not _is_tmux():
+        frames, _ = self._ensure_loaded(self._state)
+        self.display = enabled and bool(frames)
+        if self.display and self.is_attached and not _is_tmux():
             self._schedule_next_frame()
 
     def set_status(self, status: str) -> None:
@@ -171,11 +208,19 @@ class StatusIndicator(Vertical):
             raise ValueError(f"Unknown status: {status}")
         if self._timer is not None:
             self._timer.stop()
+            self._timer = None
         self._state = status
         self._frame_index = 0
-        self.query_one("#status-gif", TerminalImage).image = (
-            self._ensure_loaded(status)[0][0]
-        )
+        frames, _ = self._ensure_loaded(status)
+        if not frames:
+            self.display = False
+            return
+        try:
+            self.query_one("#status-gif", TerminalImage).image = frames[0]
+        except NoMatches:
+            self.display = False
+            return
+        self.display = self._animation_enabled
         if self._animation_enabled and not _is_tmux():
             self._schedule_next_frame()
 
