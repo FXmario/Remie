@@ -38,10 +38,12 @@ from remie.tui import (
 )
 from remie.tools import (
     create_chat,
+    delete_chat,
     find_chat_by_id,
     find_memory_by_id,
     get_active_memory_id,
     list_chats,
+    load_chat,
     load_chat_index,
     load_latest_chat,
     memory_tool,
@@ -1919,6 +1921,24 @@ def test_model_badge_shows_reasoning_effort():
     assert badge.render().plain == "Kimi K3  OpenCode Go · effort max"
 
 
+def test_live_generated_tokens_shown_and_cleared():
+    badge = ModelBadge()
+    badge.update_config(
+        ConnectionConfig(
+            OPENCODE_GO_BASE_URL,
+            "key",
+            "kimi-k3",
+            reasoning_effort="off",
+        )
+    )
+    badge.set_live_generated_tokens(0)
+    assert "0 generated" in badge.render().plain
+    badge.set_live_generated_tokens(1234)
+    assert "1.2k generated" in badge.render().plain
+    badge.set_live_generated_tokens(None)
+    assert "generated" not in badge.render().plain
+
+
 def test_token_speed_shown_and_cleared():
     badge = ModelBadge()
     badge.update_config(
@@ -2519,6 +2539,81 @@ def test_reasoning_timer_stops_when_stream_errors(monkeypatch):
     asyncio.run(exercise())
 
 
+def test_reasoning_only_stream_updates_live_generated_counter(monkeypatch):
+    async def exercise():
+        async def reasoning_stream(
+            _conversation, usage_box=None, reasoning_box=None, finish_box=None, **_kwargs
+        ):
+            reasoning_box.append("r" * 400)
+            await asyncio.sleep(0.15)
+            yield "reply"
+
+        monkeypatch.setattr(tui, "stream_llm_call", reasoning_stream)
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            task = asyncio.create_task(app.run_agent_turn("hello"))
+            await asyncio.sleep(0.1)
+            assert app.query_one(ModelBadge)._live_generated_tokens >= 100
+            await task
+            await pilot.pause()
+
+    asyncio.run(exercise())
+
+
+def test_token_usage_persists_and_restores_with_chat(monkeypatch):
+    """Per-chat cumulative usage survives save/reload and a fresh launch."""
+
+    async def fake_stream(
+        _conversation, usage_box=None, reasoning_box=None, finish_box=None, **_kwargs
+    ):
+        usage_box["prompt_tokens"] = 100
+        usage_box["completion_tokens"] = 50
+        yield "reply"
+
+    async def exercise():
+        monkeypatch.setattr(tui, "stream_llm_call", fake_stream)
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            await app.run_agent_turn("hello")
+            await pilot.pause()
+
+            saved = load_chat(app._chat_id)
+            assert saved["token_usage"] == {
+                "input_tokens": 100,
+                "output_tokens": 50,
+            }
+
+            # Switching away and back keeps this chat's own totals.
+            assert app._load_chat_into_ui(app._chat_id) is True
+            await pilot.pause()
+            assert app._total_input_tokens == 100
+            assert app._total_output_tokens == 50
+
+        # A later launch resumes the latest chat with the saved totals.
+        resumed = AgentApp()
+        async with resumed.run_test() as pilot:
+            await pilot.pause()
+            assert resumed._total_input_tokens == 100
+            assert resumed._total_output_tokens == 50
+
+    asyncio.run(exercise())
+
+
+def test_load_chat_without_token_usage_defaults_to_zero():
+    """Chats saved before usage tracking load with zeroed totals."""
+    chat = create_chat()
+    try:
+        save_chat(
+            chat["id"],
+            [{"role": "system", "content": "s"}, {"role": "user", "content": "hi"}],
+            [{"role": "user", "content": "hi"}],
+        )
+        loaded = load_chat(chat["id"])
+        assert loaded["token_usage"] == {"input_tokens": 0, "output_tokens": 0}
+    finally:
+        delete_chat(chat["id"])
+
+
 def test_turn_updates_badge_tokens(monkeypatch):
     async def exercise():
         async def fake_stream(
@@ -2539,6 +2634,7 @@ def test_turn_updates_badge_tokens(monkeypatch):
 
             badge = app.query_one(ModelBadge)
             assert "tok" in badge.render().plain
+            assert "50 generated" in badge.render().plain
             assert app._total_input_tokens == 100
             assert app._total_output_tokens == 50
 

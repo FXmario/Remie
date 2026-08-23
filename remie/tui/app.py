@@ -207,6 +207,8 @@ class AgentApp(App):
             self._transcript = []
             self.sub_title = chat["name"]
         self._cached_conv_tokens = estimate_conversation_tokens(self.conversation)
+        if "token_usage" in chat:
+            self._restore_chat_token_usage(chat)
         self._rebuild_prompt_history()
         prompt.focus()
         self._prefetch_model_context()
@@ -268,7 +270,15 @@ class AgentApp(App):
 
     def _save_current_chat(self) -> None:
         if self._chat_id:
-            save_chat(self._chat_id, self.conversation, self._transcript)
+            save_chat(
+                self._chat_id,
+                self.conversation,
+                self._transcript,
+                token_usage={
+                    "input_tokens": self._total_input_tokens,
+                    "output_tokens": self._total_output_tokens,
+                },
+            )
 
     def on_unmount(self) -> None:
         """Persist the current chat so a later launch can resume it."""
@@ -479,14 +489,38 @@ class AgentApp(App):
         ] + tail
         self._cached_conv_tokens = estimate_conversation_tokens(self.conversation)
 
+    def _update_live_generation_badge(
+        self, state: dict[str, Any], force: bool = False
+    ) -> None:
+        """Update generated-token count and speed from O(1) stream counters.
+
+        Repaints are throttled to roughly one per timer tick so a fast stream
+        emitting hundreds of deltas per second does not relayout the badge row
+        on every chunk; pass force=True for the final, exact update.
+        """
+        now = time.monotonic()
+        if not force and now - state.get("last_badge_update", 0.0) < (
+            LIVE_REASONING_TICK
+        ):
+            return
+        state["last_badge_update"] = now
+        generated_tokens = estimate_tokens_from_counts(
+            state["content_chars"] + state["reasoning_chars"],
+            state["content_newlines"] + state["reasoning_newlines"],
+        )
+        badge: ModelBadge = state["badge"]
+        badge.set_live_generated_tokens(generated_tokens)
+        elapsed = now - state["started"]
+        if elapsed > 0:
+            badge.set_speed(generated_tokens / elapsed)
+
     def _drain_live_reasoning(self) -> None:
-        """Timer callback: render newly-arrived reasoning while the stream is
-        otherwise silent.
+        """Render and count newly-arrived reasoning while content is silent.
 
         Providers append reasoning deltas to reasoning_box without yielding,
         so during a long think the async-for body never runs and the inline
-        update path never fires. This drains the box every 100 ms and
-        re-renders the Reasoning panel so reasoning streams live.
+        update path never fires. This timer drains the box and updates both the
+        Reasoning panel and generated-token counter.
         """
         state = getattr(self, "_live_stream", None)
         if not state or not state.get("active"):
@@ -507,6 +541,9 @@ class AgentApp(App):
         # Reconstruct the full accumulated reasoning from what has been
         # consumed so far plus this batch.
         state["text"] += new_text
+        state["reasoning_chars"] += len(new_text)
+        state["reasoning_newlines"] += new_text.count("\n")
+        self._update_live_generation_badge(state)
         shown = state["text"]
         if self._stop_requested:
             return
@@ -565,6 +602,7 @@ class AgentApp(App):
                 finish_box: dict[str, Any] = {}
                 tool_calls_box: list[dict[str, str]] = []
                 badge = self.query_one(ModelBadge)
+                badge.set_live_generated_tokens(0)
                 stream_started = time.monotonic()
                 last_preview_update = stream_started
                 reasoning_text = ""
@@ -578,6 +616,13 @@ class AgentApp(App):
                     "consumed": 0,
                     "last_render": stream_started,
                     "text": "",
+                    "badge": badge,
+                    "started": stream_started,
+                    "content_chars": 0,
+                    "content_newlines": 0,
+                    "reasoning_chars": 0,
+                    "reasoning_newlines": 0,
+                    "last_badge_update": 0.0,
                     "active": True,
                 }
                 reasoning_timer = self.set_interval(
@@ -598,6 +643,11 @@ class AgentApp(App):
                     # badge does not re-scan the whole accumulation per update.
                     full_chars += len(delta)
                     full_newlines += delta.count("\n")
+                    self._live_stream["content_chars"] = full_chars
+                    self._live_stream["content_newlines"] = full_newlines
+                    # Throttled to ~1 repaint per timer tick so a fast stream
+                    # does not relayout the badge row on every delta.
+                    self._update_live_generation_badge(self._live_stream)
                     # A complete tool-call line only exists once its trailing
                     # newline has arrived, so only rescan at line boundaries
                     # instead of re-scanning the whole accumulating text on
@@ -627,8 +677,13 @@ class AgentApp(App):
                             reasoning_box[self._live_stream["consumed"]:]
                         )
                         self._live_stream["text"] += new_reasoning
+                        self._live_stream["reasoning_chars"] += len(new_reasoning)
+                        self._live_stream["reasoning_newlines"] += (
+                            new_reasoning.count("\n")
+                        )
                         self._live_stream["consumed"] = len(reasoning_box)
                         self._live_stream["last_render"] = now
+                        self._update_live_generation_badge(self._live_stream)
                     # The timer and this content-driven path share the same
                     # accumulator. Otherwise a timer-rendered prefix vanishes
                     # as soon as a content delta renders the next suffix.
@@ -651,12 +706,6 @@ class AgentApp(App):
                         shown = reasoning_text
                     else:
                         shown = ""
-                    elapsed = now - stream_started
-                    if elapsed > 0:
-                        badge.set_speed(
-                            estimate_tokens_from_counts(full_chars, full_newlines)
-                            / elapsed
-                        )
                     preview = _preview_window(full_text)
                     if shown:
                         preview_shown = _preview_window(shown)
@@ -675,12 +724,18 @@ class AgentApp(App):
                     log.write("[dim]Stopped by user[/]")
                     break
                 self._stop_live_stream_timer(reasoning_timer)
-                self.query_one(ModelBadge).set_speed(None)
+                badge.set_speed(None)
                 reasoning_text = "".join(reasoning_box) or extract_thinking(full_text)
                 input_tokens = usage_box.get("prompt_tokens") or self._cached_conv_tokens
                 output_tokens = usage_box.get("completion_tokens") or estimate_tokens(
                     full_text
                 )
+                # Replace the live estimate with the provider's exact count
+                # when available, and keep the final generated count visible.
+                badge.set_live_generated_tokens(output_tokens)
+                # Keep the throttle window consistent so a continuation
+                # iteration doesn't inherit a stale timestamp.
+                self._live_stream["last_badge_update"] = time.monotonic()
                 self._total_input_tokens += input_tokens
                 self._total_output_tokens += output_tokens
                 self.query_one(ModelBadge).set_tokens(
@@ -917,6 +972,7 @@ class AgentApp(App):
             )
         finally:
             self._stop_active_reasoning_timer()
+            self.query_one(ModelBadge).set_speed(None)
             self._agent_running = False
             if self._agent_task is current_task:
                 self._agent_task = None
@@ -925,6 +981,16 @@ class AgentApp(App):
             else:
                 self._set_status("ready")
 
+    def _restore_chat_token_usage(self, chat: dict[str, Any]) -> None:
+        """Load a chat's saved cumulative usage into the badge counters."""
+        usage = chat.get("token_usage") or {}
+        self._total_input_tokens = int(usage.get("input_tokens") or 0)
+        self._total_output_tokens = int(usage.get("output_tokens") or 0)
+        badge = self.query_one(ModelBadge)
+        badge.set_tokens(self._total_input_tokens, self._total_output_tokens)
+        # No generation is active for a freshly loaded chat.
+        badge.set_live_generated_tokens(None)
+
     def _reset_conversation_state(self) -> None:
         """Start an empty conversation for a fresh chat."""
         self.conversation = [{"role": "system", "content": get_full_system_prompt()}]
@@ -932,7 +998,10 @@ class AgentApp(App):
         self._cached_conv_tokens = estimate_conversation_tokens(self.conversation)
         self._total_input_tokens = 0
         self._total_output_tokens = 0
-        self.query_one(ModelBadge).set_tokens(0, 0)
+        badge = self.query_one(ModelBadge)
+        badge.set_tokens(0, 0)
+        # No generation is active in a fresh chat; drop any stale counter.
+        badge.set_live_generated_tokens(None)
         self._prompt_history = []
         self._history_index = None
         self._history_draft = ""
@@ -963,9 +1032,7 @@ class AgentApp(App):
         self._transcript = list(chat.get("transcript") or [])
         self._refresh_system_prompt()
         self._cached_conv_tokens = estimate_conversation_tokens(self.conversation)
-        self._total_input_tokens = 0
-        self._total_output_tokens = 0
-        self.query_one(ModelBadge).set_tokens(0, 0)
+        self._restore_chat_token_usage(chat)
         self._rebuild_prompt_history()
         self.sub_title = chat.get("name", "")
         log = self.query_one("#log", StreamingRichLog)

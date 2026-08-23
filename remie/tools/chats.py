@@ -151,12 +151,14 @@ def save_chat(
     chat_id: str,
     context_messages: list[dict[str, Any]],
     transcript: list[dict[str, Any]],
+    token_usage: dict[str, int] | None = None,
 ) -> dict[str, Any] | None:
     """Persist a chat's resumable context and visible transcript.
 
     A brand-new default-named chat with nothing beyond the system prompt is
     dropped from the index instead of being saved, so unused Ctrl+L chats do
-    not accumulate.
+    not accumulate. ``token_usage`` ({"input_tokens", "output_tokens"}) is the
+    per-chat cumulative LLM usage, restored when the chat is reopened.
     """
     chats = load_chat_index()
     if chat_id not in chats:
@@ -168,12 +170,14 @@ def save_chat(
             chats.pop(chat_id, None)
             save_chat_index(chats)
             return None
-    payload = {
+    payload: dict[str, Any] = {
         "version": CHAT_FILE_VERSION,
         "id": chat_id,
         "context_messages": context_messages,
         "transcript": transcript,
     }
+    if token_usage is not None:
+        payload["token_usage"] = token_usage
     _write_json_atomic(path, payload)
     chats[chat_id]["updated_at"] = _dt.datetime.now().isoformat(timespec="seconds")
     save_chat_index(chats)
@@ -201,6 +205,14 @@ def load_chat(chat_id: str) -> dict[str, Any] | None:
         return None
     chat["context_messages"] = context
     chat["transcript"] = transcript
+    usage = data.get("token_usage")
+    chat["token_usage"] = (
+        usage
+        if isinstance(usage, dict)
+        and isinstance(usage.get("input_tokens"), int)
+        and isinstance(usage.get("output_tokens"), int)
+        else {"input_tokens": 0, "output_tokens": 0}
+    )
     return chat
 
 
