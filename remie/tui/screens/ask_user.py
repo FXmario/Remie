@@ -5,6 +5,7 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, OptionList, Static
 
+from remie.tui.contracts import is_agent_app
 from remie.tui.helpers import _safe_stream_markdown
 
 
@@ -167,7 +168,7 @@ class AskUserScreen(ModalScreen):
 
     def action_cancel(self) -> None:
         app = self.app
-        if isinstance(app, AgentApp):
+        if is_agent_app(app):
             app.action_stop_agent()
         self.dismiss(None)
 
@@ -197,8 +198,3 @@ class AskUserScreen(ModalScreen):
         answer = self.query_one("#ask-input", Input).value.strip()
         if answer:
             self.dismiss(answer)
-
-
-from remie.tui import _agent_app_registry as _registry
-
-_registry.register_module(__name__)

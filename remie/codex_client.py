@@ -7,7 +7,6 @@ as Responses-API function definitions and the model returns ``function_call``
 output items that Remie executes and feeds back as ``function_call_output``.
 """
 
-import json
 import uuid
 from collections.abc import AsyncIterator, Callable
 from typing import Any
@@ -15,7 +14,7 @@ from typing import Any
 import httpx
 from openai import APIStatusError, AsyncOpenAI
 
-from remie.agent import LLMRequestError
+from remie.errors import LLMRequestError
 from remie.codex_auth import CodexAuth, ensure_valid_auth, refresh_auth
 from remie.model_names import prettify_model_name
 
@@ -105,9 +104,32 @@ def conversation_to_input(
     become input items with typed content parts; assistant ``tool_calls`` and
     role-``tool`` results become ``function_call`` / ``function_call_output``
     items.
+
+    Tool calls without a matching result (e.g. after an interrupt or crash)
+    are dropped instead of replayed: the backend rejects an unpaired
+    ``function_call`` with a 400.
     """
     instructions_parts: list[str] = []
     items: list[dict[str, Any]] = []
+    # Call ids that actually appear on an assistant message and have a result:
+    # only such pairs are safe to replay. A dangling function_call (interrupted
+    # before the tool ran) or an orphaned output (call dropped by compaction)
+    # is rejected by the backend with a 400.
+    called_ids = {
+        str(call.get("id") or "")
+        for message in conversation
+        for call in (
+            message.get("tool_calls") or []
+            if isinstance(message.get("tool_calls"), list)
+            else []
+        )
+        if isinstance(call, dict)
+    }
+    answered_call_ids = {
+        str(message.get("tool_call_id") or "")
+        for message in conversation
+        if message.get("role") == "tool"
+    } & called_ids
     for message in conversation:
         role = message.get("role")
         text, images = _text_and_images(message.get("content", ""))
@@ -116,7 +138,56 @@ def conversation_to_input(
                 instructions_parts.append(text)
             continue
         tool_calls = message.get("tool_calls")
+        reasoning_items = message.get("codex_reasoning")
         if role == "assistant" and isinstance(tool_calls, list) and tool_calls:
+            # Replay the encrypted reasoning items that preceded these tool
+            # calls. With store=false the backend is stateless: a function_call
+            # without its preceding reasoning item is rejected with a 400
+            # ("Item 'fc_…' of type 'function_call' was provided without its
+            # required 'rs_…' item").
+            surviving_calls: list[dict[str, Any]] = []
+            for call in tool_calls:
+                if not isinstance(call, dict):
+                    continue
+                call_id = str(call.get("id") or "")
+                if not call_id or call_id not in answered_call_ids:
+                    # Interrupted before the tool ran, or an unusable blank id:
+                    # replaying either shape is an instant 400.
+                    continue
+                surviving_calls.append(
+                    {
+                        "type": "function_call",
+                        "call_id": call_id,
+                        "name": str(call.get("name") or ""),
+                        "arguments": str(call.get("arguments") or "{}"),
+                    }
+                )
+            if not surviving_calls:
+                # Every call in this message went unanswered; skip the message
+                # entirely rather than replaying orphaned reasoning/text.
+                continue
+            if isinstance(reasoning_items, list):
+                for reasoning in reasoning_items:
+                    if not isinstance(reasoning, dict):
+                        continue
+                    encrypted = str(reasoning.get("encrypted_content") or "")
+                    item_id = str(reasoning.get("id") or "")
+                    if not encrypted or not item_id:
+                        continue
+                    # Replay a complete ResponseReasoningItemParam. In
+                    # particular, ``summary`` is required by the SDK/API even
+                    # when it is an empty list.
+                    entry: dict[str, Any] = {
+                        "type": "reasoning",
+                        "id": item_id,
+                        "summary": reasoning.get("summary") or [],
+                        "encrypted_content": encrypted,
+                    }
+                    if reasoning.get("content"):
+                        entry["content"] = reasoning["content"]
+                    if reasoning.get("status"):
+                        entry["status"] = reasoning["status"]
+                    items.append(entry)
             if text:
                 items.append(
                     {
@@ -125,23 +196,18 @@ def conversation_to_input(
                         "content": [{"type": "output_text", "text": text}],
                     }
                 )
-            for call in tool_calls:
-                if not isinstance(call, dict):
-                    continue
-                items.append(
-                    {
-                        "type": "function_call",
-                        "call_id": str(call.get("id") or ""),
-                        "name": str(call.get("name") or ""),
-                        "arguments": str(call.get("arguments") or "{}"),
-                    }
-                )
+            items.extend(surviving_calls)
             continue
         if role == "tool":
+            call_id = str(message.get("tool_call_id") or "")
+            if call_id not in answered_call_ids:
+                # Orphaned output (its call was interrupted/dropped): replaying
+                # a function_call_output with no matching function_call 400s.
+                continue
             items.append(
                 {
                     "type": "function_call_output",
-                    "call_id": str(message.get("tool_call_id") or ""),
+                    "call_id": call_id,
                     "output": text,
                 }
             )
@@ -240,7 +306,9 @@ def _extract_tool_calls(output_items: Any) -> list[dict[str, str]]:
         call_id = getattr(item, "call_id", None) or getattr(item, "id", "") or ""
         name = getattr(item, "name", "") or ""
         arguments = getattr(item, "arguments", None) or "{}"
-        calls.append({"id": str(call_id), "name": str(name), "arguments": str(arguments)})
+        calls.append(
+            {"id": str(call_id), "name": str(name), "arguments": str(arguments)}
+        )
     return calls
 
 
@@ -252,12 +320,64 @@ class _ToolCallCollector:
     ``response.output_item.done``; the final ``response.completed`` event may
     repeat the full output array (or be empty), so results are merged by
     ``call_id`` across all sources.
+
+    Reasoning items are captured too: with ``store: false`` the backend is
+    stateless, and GPT-5.x reasoning models emit a ``reasoning`` item before
+    each ``function_call``. The next request must replay that reasoning item
+    (with its encrypted content) or the backend rejects the reconstructed
+    input chain with a 400.
     """
 
     def __init__(self) -> None:
         self._by_index: dict[int, dict[str, str]] = {}
         self._collected: dict[str, dict[str, str]] = {}
         self._order: list[str] = []
+        self.reasoning_items: list[dict[str, Any]] = []
+        self._reasoning_by_id: dict[str, dict[str, Any]] = {}
+
+    def _record_reasoning(self, item: Any) -> None:
+        """Capture or merge one Responses-API reasoning output item.
+
+        ``output_item.added`` often carries only an id and empty fields; the
+        later ``output_item.done`` carries encrypted_content and summary. Keep
+        the original order but merge the later, complete representation into
+        the existing row. The input schema requires ``summary`` even when it is
+        empty, so preserve it explicitly.
+        """
+        item_id = str(getattr(item, "id", "") or "")
+        if not item_id:
+            return
+        dump = getattr(item, "model_dump", None)
+        raw = dump(mode="json") if callable(dump) else {}
+        if not isinstance(raw, dict):
+            raw = {}
+        incoming: dict[str, Any] = {
+            "type": "reasoning",
+            "id": item_id,
+            "summary": raw.get("summary", getattr(item, "summary", None)) or [],
+        }
+        encrypted = raw.get(
+            "encrypted_content", getattr(item, "encrypted_content", None)
+        )
+        if encrypted:
+            incoming["encrypted_content"] = str(encrypted)
+        content = raw.get("content", getattr(item, "content", None))
+        if content:
+            incoming["content"] = content
+        status = raw.get("status", getattr(item, "status", None))
+        if status:
+            incoming["status"] = status
+
+        existing = self._reasoning_by_id.get(item_id)
+        if existing is None:
+            self._reasoning_by_id[item_id] = incoming
+            self.reasoning_items.append(incoming)
+            return
+        for key, value in incoming.items():
+            if value not in (None, "", []):
+                existing[key] = value
+            elif key not in existing:
+                existing[key] = value
 
     def _record(self, call: dict[str, str]) -> None:
         call_id = call.get("id") or ""
@@ -278,13 +398,15 @@ class _ToolCallCollector:
 
     def on_item_added(self, event: Any) -> None:
         item = getattr(event, "item", None)
-        if getattr(item, "type", "") != "function_call":
+        item_type = getattr(item, "type", "")
+        if item_type == "reasoning":
+            self._record_reasoning(item)
+            return
+        if item_type != "function_call":
             return
         index = getattr(event, "output_index", None)
         entry = {
-            "id": str(
-                getattr(item, "call_id", None) or getattr(item, "id", "") or ""
-            ),
+            "id": str(getattr(item, "call_id", None) or getattr(item, "id", "") or ""),
             "name": str(getattr(item, "name", "") or ""),
             "arguments": str(getattr(item, "arguments", "") or ""),
         }
@@ -303,15 +425,17 @@ class _ToolCallCollector:
             target = next(reversed(self._by_index.values()))
         if target is None:
             target = {"id": "", "name": "", "arguments": ""}
-            new_index = (
-                max(self._by_index.keys()) + 1 if self._by_index else 0
-            )
+            new_index = max(self._by_index.keys()) + 1 if self._by_index else 0
             self._by_index[new_index] = target
         target["arguments"] += delta
 
     def on_item_done(self, event: Any) -> None:
         item = getattr(event, "item", None)
-        if getattr(item, "type", "") != "function_call":
+        item_type = getattr(item, "type", "")
+        if item_type == "reasoning":
+            self._record_reasoning(item)
+            return
+        if item_type != "function_call":
             return
         index = getattr(event, "output_index", None)
         if isinstance(index, int):
@@ -327,6 +451,9 @@ class _ToolCallCollector:
         )
 
     def on_completed(self, response: Any) -> None:
+        for item in getattr(response, "output", None) or []:
+            if getattr(item, "type", "") == "reasoning":
+                self._record_reasoning(item)
         for call in _extract_tool_calls(getattr(response, "output", None)):
             self._record(call)
         for entry in self._by_index.values():
@@ -334,11 +461,26 @@ class _ToolCallCollector:
         self._by_index.clear()
 
     def drain(self) -> list[dict[str, str]]:
-        calls = [dict(self._collected[key]) for key in self._order]
+        # Entries with neither id nor name are unusable: they cannot be matched
+        # to a function_call_output on replay (empty call_id -> 400) and carry
+        # no action for the TUI to execute.
+        calls = [
+            dict(self._collected[key])
+            for key in self._order
+            if self._collected[key].get("id") or self._collected[key].get("name")
+        ]
         for call in calls:
             if not call.get("arguments"):
                 call["arguments"] = "{}"
         return calls
+
+    def drain_reasoning_items(self) -> list[dict[str, Any]]:
+        """Complete encrypted reasoning items from this response, in order."""
+        return [
+            dict(item)
+            for item in self.reasoning_items
+            if item.get("id") and item.get("encrypted_content")
+        ]
 
 
 async def _stream_sdk_once(
@@ -348,6 +490,7 @@ async def _stream_sdk_once(
     reasoning_box: list[str] | None,
     finish_box: dict[str, Any] | None,
     tool_calls_box: list[dict[str, str]] | None,
+    reasoning_items_box: list[dict[str, str]] | None = None,
 ) -> AsyncIterator[str]:
     client = _create_sdk_client(auth.access_token, auth.account_id)
     try:
@@ -402,6 +545,10 @@ async def _stream_sdk_once(
             elif event_type == "error":
                 message = getattr(event, "message", None) or "Codex stream error"
                 raise LLMRequestError(502, str(message))
+    except APIStatusError as error:
+        # The backend can also fail mid-stream (e.g. a delayed 401); route it
+        # through the same friendly-error path so retries and user messages work.
+        _raise_llm_error(error)
     finally:
         close = getattr(stream, "close", None)
         if close is not None:
@@ -413,6 +560,8 @@ async def _stream_sdk_once(
                 pass
     if tool_calls_box is not None:
         tool_calls_box.extend(collector.drain())
+    if reasoning_items_box is not None:
+        reasoning_items_box.extend(collector.drain_reasoning_items())
     if finish_box is not None and not saw_completed:
         finish_box["stream_complete"] = bool(finish_box.get("finish_reason"))
 
@@ -426,12 +575,16 @@ async def stream_codex_call(
     reasoning_box: list[str] | None = None,
     finish_box: dict[str, Any] | None = None,
     tool_calls_box: list[dict[str, str]] | None = None,
+    reasoning_items_box: list[dict[str, str]] | None = None,
 ) -> AsyncIterator[str]:
     """Yield assistant text deltas from the ChatGPT-subscription backend.
 
     Native function calling: when ``tools`` is provided the model may return
     ``function_call`` output items, which are collected into ``tool_calls_box``
     (each ``{"id", "name", "arguments"}``) after ``response.completed``.
+    Encrypted reasoning items land in ``reasoning_items_box`` (each ``{"id",
+    "encrypted_content"}``) so the next turn can replay the full output-item
+    chain — required by the backend with ``store: false``.
     Refreshes expired tokens up front; retries once after a forced refresh
     when the backend answers 401 before anything has been streamed.
     """
@@ -440,7 +593,13 @@ async def stream_codex_call(
     yielded = False
     try:
         async for chunk in _stream_sdk_once(
-            auth, payload, usage_box, reasoning_box, finish_box, tool_calls_box
+            auth,
+            payload,
+            usage_box,
+            reasoning_box,
+            finish_box,
+            tool_calls_box,
+            reasoning_items_box,
         ):
             yielded = True
             yield chunk
@@ -449,8 +608,23 @@ async def stream_codex_call(
         if error.status_code != 401 or yielded or not auth.refresh_token:
             raise
     auth = await refresh_auth(auth)
+    # The failed attempt may have already appended partial results to the
+    # boxes; clear them so the retry does not duplicate tool calls or
+    # reasoning items under the same call ids (which the backend rejects).
+    if tool_calls_box is not None:
+        tool_calls_box.clear()
+    if reasoning_items_box is not None:
+        reasoning_items_box.clear()
+    if finish_box is not None:
+        finish_box.clear()
     async for chunk in _stream_sdk_once(
-        auth, payload, usage_box, reasoning_box, finish_box, tool_calls_box
+        auth,
+        payload,
+        usage_box,
+        reasoning_box,
+        finish_box,
+        tool_calls_box,
+        reasoning_items_box,
     ):
         yield chunk
 
@@ -481,7 +655,7 @@ async def fetch_codex_models() -> list[dict[str, Any]]:
             )
             response.raise_for_status()
             payload = response.json()
-    except (httpx.HTTPError, ValueError):
+    except httpx.HTTPError, ValueError:
         return []
     rows = payload.get("models") if isinstance(payload, dict) else None
     results: list[dict[str, Any]] = []

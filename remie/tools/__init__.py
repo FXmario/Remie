@@ -5,6 +5,8 @@ Every public name is re-exported here so existing imports
 (``from remie.tools import ...``) keep working unchanged.
 """
 
+# ruff: noqa: E402, F401
+
 import subprocess  # noqa: F401 -- re-exported; tests patch remie.tools.subprocess.run
 
 from remie.tools.common import _env_int
@@ -63,7 +65,7 @@ from remie.tools.files import (
     read_file_tool,
     tree_files_tool,
 )
-from remie.tools.memory import (
+from remie.storage.memories import (
     DEFAULT_MEMORY_NAME,
     MEMORY_INDEX_VERSION,
     MEMORY_NAME_MAX_CHARS,
@@ -80,10 +82,10 @@ from remie.tools.memory import (
     memory_dir,
     memory_file_path,
     memory_index_path,
-    memory_tool,
     rename_memory,
     set_active_memory_id,
 )
+from remie.tools.memory import memory_tool
 from remie.tools.registry import (
     TOOL_PARAMETERS,
     TOOL_REGISTRY,

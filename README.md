@@ -223,10 +223,20 @@ tool: read_file({"filename": "main.py"})
 
 ## Project layout
 
-- `main.py` — entry point; launches the TUI
-- `remie/agent.py` — LLM client, system prompt, tool registry, and parsing helpers
+For the complete request flow, provider/tool contracts, persistence model, and
+extension guide, see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+
+- `main.py` — development entry point; launches the TUI
+- `remie/agent.py` — backward-compatible facade and active connection runtime
+- `remie/config.py` — connection profiles and path-injected configuration storage
+- `remie/core/` — headless provider-independent agent loop, events, interrupted-call repair, and tool orchestration
+- `remie/providers/` — provider-neutral stream events, provider routing, and model catalogs
+- `remie/prompts.py` — system prompt, `AGENTS.md`, and durable-memory context construction
+- `remie/protocol.py` — parser for text-based tool calls used by compatible providers
+- `remie/tokens.py` — token estimation helpers
 - `remie/codex_auth.py` — ChatGPT OAuth (PKCE) sign-in, token storage in `~/.codex/auth.json`, and refresh
 - `remie/codex_client.py` — streaming client for the ChatGPT-subscription Codex Responses backend
 - `remie/openrouter_client.py` — httpx streaming client for OpenRouter with native function calling
-- `remie/tools/` — tool implementations, file/chat/memory storage, command safety, and the tool registry
-- `remie/tui/` — the Textual application, widgets, rendering helpers, theme detection, and modal screens
+- `remie/tools/` — model-callable tools, schemas, command safety, and the injected tool executor
+- `remie/storage/` — project-local chat and durable-memory persistence
+- `remie/tui/` — the Textual frontend, rendering, widgets, and modal screens

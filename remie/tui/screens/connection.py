@@ -16,20 +16,22 @@ from remie.agent import (
     OPENCODE_GO_BASE_URL,
     OPENCODE_GO_MODELS,
     ConnectionConfig,
-    configure_openai,
     fetch_codex_models,
+    fetch_opencode_go_models,
     fetch_openrouter_models,
     get_config,
     load_provider_configs,
     save_provider_configs,
+    set_active_connection,
     supports_reasoning_effort,
 )
 from remie.model_names import ModelInfo
+from remie.tui.contracts import is_agent_app
 from remie.tui.constants import REASONING_EFFORTS, PROVIDER_BASE_URLS
+from remie.tui.screens.connection_css import CONNECTION_CSS
+from remie.tui.screens.connection_services import ConnectionServices
 from remie.tui.helpers import _coerce_model_info, _model_option
 from remie.tui.widgets import ModelBadge
-
-import remie.tui as _tui_pkg
 
 
 class ConnectionScreen(ModalScreen):
@@ -37,8 +39,14 @@ class ConnectionScreen(ModalScreen):
 
     BINDINGS = [("escape", "dismiss", "Cancel")]
 
-    def __init__(self) -> None:
+    def __init__(self, services: ConnectionServices | None = None) -> None:
         super().__init__()
+        self._services = services or ConnectionServices(
+            fetch_opencode_models=fetch_opencode_go_models,
+            fetch_codex_models=fetch_codex_models,
+            fetch_openrouter_models=fetch_openrouter_models,
+            save_profiles=save_provider_configs,
+        )
         self._stashed_effort: str | None = None
         self._profiles = load_provider_configs()
         current = get_config()
@@ -54,112 +62,7 @@ class ConnectionScreen(ModalScreen):
         # when the queued message runs.
         self._select_tokens: dict[str, str | None] = {}
 
-    CSS = """
-    ConnectionScreen {
-        align: center middle;
-    }
-
-    #connection-dialog {
-        width: 68;
-        height: 30;
-        max-width: 94%;
-        max-height: 92%;
-        padding: 0;
-        border: round $primary;
-        background: $surface;
-    }
-
-    #connection-header {
-        height: 4;
-        padding-left: 2;
-        background: $primary;
-        color: $text;
-    }
-
-    #connection-heading {
-        width: 1fr;
-        height: 4;
-        padding-top: 1;
-    }
-
-    #connection-title {
-        height: 1;
-        text-style: bold;
-    }
-
-    #connection-subtitle {
-        height: 1;
-        color: $text-muted;
-    }
-
-    #connection-close {
-        width: 5;
-        min-width: 5;
-        height: 4;
-        margin: 0;
-        border: none;
-        background: $primary;
-        color: $text;
-    }
-
-    #connection-close:hover {
-        background: $error;
-    }
-
-    #connection-scroll {
-        height: 1fr;
-        padding: 0 2 1 2;
-        scrollbar-size: 1 1;
-    }
-
-    #connection-dialog .section-title {
-        width: 100%;
-        height: 2;
-        margin-top: 1;
-        padding-top: 1;
-        color: $accent;
-        text-style: bold;
-        border-bottom: solid $panel-lighten-1;
-    }
-
-    #connection-dialog .field-label {
-        height: 1;
-        margin-top: 1;
-        color: $text-muted;
-    }
-
-    #connection-dialog .row {
-        height: 3;
-        width: 100%;
-        align: center middle;
-    }
-
-    #connection-actions {
-        height: 4;
-        padding: 0 2;
-        align: right middle;
-        border-top: solid $panel-lighten-1;
-        background: $panel;
-    }
-
-    #connection-actions Button {
-        margin-left: 1;
-    }
-
-    #connection-dialog .filter-row {
-        height: 3;
-        width: 100%;
-    }
-
-    #connection-dialog .filter-row Select {
-        width: 1fr;
-        margin-right: 1;
-    }
-
-    #connection-dialog .filter-row Input {
-        width: 1fr;
-    }
-    """
+    CSS = CONNECTION_CSS
 
     def compose(self) -> ComposeResult:
         current = self._profiles[self._active_provider]
@@ -223,7 +126,9 @@ class ConnectionScreen(ModalScreen):
                 )
                 yield Horizontal(
                     Button(
-                        "Sign in with ChatGPT", variant="primary", id="codex-signin-button"
+                        "Sign in with ChatGPT",
+                        variant="primary",
+                        id="codex-signin-button",
                     ),
                     Button("Sign out", id="codex-signout-button"),
                     classes="row",
@@ -403,7 +308,9 @@ class ConnectionScreen(ModalScreen):
     def _codex_account_text(self) -> str:
         auth = codex_auth.load_auth()
         if auth is None:
-            return "Not signed in — your ChatGPT Plus/Pro plan signs in via the browser."
+            return (
+                "Not signed in — your ChatGPT Plus/Pro plan signs in via the browser."
+            )
         return f"Signed in: {codex_auth.account_summary(auth)}"
 
     def _update_codex_account_label(self) -> None:
@@ -432,7 +339,7 @@ class ConnectionScreen(ModalScreen):
         if not codex_auth.is_signed_in():
             return
         try:
-            models = await fetch_codex_models()
+            models = await self._services.fetch_codex_models()
         except Exception:
             return
         if not models or not self.is_running:
@@ -446,9 +353,7 @@ class ConnectionScreen(ModalScreen):
             options.insert(0, previously_selected)
         self._set_model_options(options)
         ids = [_coerce_model_info(model).id for model in options]
-        select.value = (
-            previously_selected if previously_selected in ids else ids[0]
-        )
+        select.value = previously_selected if previously_selected in ids else ids[0]
         self._update_codex_account_label()
 
     async def _run_codex_signin(self, button: Button) -> None:
@@ -537,9 +442,7 @@ class ConnectionScreen(ModalScreen):
         """Replace the bundled OpenRouter list with the live catalog (public
         endpoint, works before an API key is entered)."""
         try:
-            import remie.tui as _tui_pkg
-
-            models = await _tui_pkg.fetch_openrouter_models()
+            models = await self._services.fetch_openrouter_models()
         except Exception:
             return
         if not models or not self.is_running:
@@ -550,14 +453,10 @@ class ConnectionScreen(ModalScreen):
         if previously_selected and previously_selected in ids:
             options: "list[str | ModelInfo]" = models
         else:
-            options = (
-                [previously_selected] + models if previously_selected else models
-            )
+            options = [previously_selected] + models if previously_selected else models
             ids.insert(0, previously_selected)
         self._set_model_options(options)
-        select.value = (
-            previously_selected if previously_selected in ids else ids[0]
-        )
+        select.value = previously_selected if previously_selected in ids else ids[0]
         self._update_reasoning_fields()
 
     def _set_provider_fields(self, provider: object) -> None:
@@ -746,11 +645,13 @@ class ConnectionScreen(ModalScreen):
         elif event.button.id == "submit-button":
             self._connect()
 
-    async def _refresh_models(self, api_key: str, provider: str = "opencode-go") -> None:
+    async def _refresh_models(
+        self, api_key: str, provider: str = "opencode-go"
+    ) -> None:
         select = self.query_one("#model-select", Select)
         previously_selected = select.value
         select.loading = True
-        models: "list[str | ModelInfo]" = await _tui_pkg.fetch_opencode_go_models(
+        models: "list[str | ModelInfo]" = await self._services.fetch_opencode_models(
             api_key
         )
         select.loading = False
@@ -808,7 +709,7 @@ class ConnectionScreen(ModalScreen):
                 severity="error",
             )
             return
-        config = configure_openai(
+        config = set_active_connection(
             base_url,
             api_key,
             model,
@@ -816,12 +717,10 @@ class ConnectionScreen(ModalScreen):
             reasoning_effort=effort,
             verify_ssl=verify_ssl,
         )
-        import remie.tui as _tui_pkg
-
         self._profiles[str(provider)] = config
-        _tui_pkg.save_provider_configs(self._profiles, str(provider))
+        self._services.save_profiles(self._profiles, str(provider))
         app = self.app
-        if isinstance(app, AgentApp):
+        if is_agent_app(app):
             app.query_one(ModelBadge).update_config(config)
         self.dismiss()
         from remie.agent import get_model_info
@@ -843,8 +742,3 @@ class ConnectionScreen(ModalScreen):
             "openrouter": OPENROUTER_MODELS,
         }
         return fallbacks.get(str(provider), OPENCODE_GO_MODELS)[0]
-
-
-from remie.tui import _agent_app_registry as _registry
-
-_registry.register_module(__name__)

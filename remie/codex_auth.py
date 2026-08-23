@@ -79,7 +79,7 @@ def _decode_jwt_payload(token: str) -> dict[str, Any]:
         segment = token.split(".")[1]
         segment += "=" * (-len(segment) % 4)
         payload = json.loads(base64.urlsafe_b64decode(segment))
-    except (IndexError, ValueError, json.JSONDecodeError):
+    except IndexError, ValueError, json.JSONDecodeError:
         return {}
     return payload if isinstance(payload, dict) else {}
 
@@ -131,12 +131,14 @@ def load_auth() -> CodexAuth | None:
     """
     try:
         data = json.loads(auth_json_path().read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return None
     if not isinstance(data, dict):
         return None
     tokens = data.get("tokens") if isinstance(data.get("tokens"), dict) else {}
-    access = tokens.get("access_token") or data.get("access_token") or data.get("access")
+    access = (
+        tokens.get("access_token") or data.get("access_token") or data.get("access")
+    )
     if not isinstance(access, str) or not access:
         return None
     refresh = (
@@ -339,7 +341,7 @@ async def login(
             request_line = await reader.readline()
             try:
                 target = request_line.decode("latin-1").split(" ")[1]
-            except (IndexError, UnicodeDecodeError):
+            except IndexError, UnicodeDecodeError:
                 target = "/"
             while (await reader.readline()) not in (b"\r\n", b"\n", b""):
                 pass  # drain request headers
@@ -360,7 +362,9 @@ async def login(
                         code_future.set_result(code)
                     else:
                         code_future.set_exception(
-                            CodexAuthError("Sign-in callback had no authorization code.")
+                            CodexAuthError(
+                                "Sign-in callback had no authorization code."
+                            )
                         )
             body = _SUCCESS_HTML.encode()
             writer.write(
@@ -369,7 +373,7 @@ async def login(
                 b"Connection: close\r\n\r\n" + body
             )
             await writer.drain()
-        except (OSError, asyncio.CancelledError):
+        except OSError, asyncio.CancelledError:
             pass
         finally:
             try:
@@ -378,7 +382,9 @@ async def login(
                 pass
 
     try:
-        server = await asyncio.start_server(handle_callback, "127.0.0.1", CODEX_REDIRECT_PORT)
+        server = await asyncio.start_server(
+            handle_callback, "127.0.0.1", CODEX_REDIRECT_PORT
+        )
     except OSError as error:
         raise CodexAuthError(
             f"Port {CODEX_REDIRECT_PORT} is already in use; is another sign-in "
@@ -386,12 +392,11 @@ async def login(
         ) from error
 
     url = build_authorize_url(state, challenge)
-    browser_opened = False
     try:
         try:
-            browser_opened = await asyncio.to_thread(webbrowser.open, url)
+            await asyncio.to_thread(webbrowser.open, url)
         except Exception:
-            browser_opened = False
+            pass
         if on_login_url is not None:
             on_login_url(url)
         try:

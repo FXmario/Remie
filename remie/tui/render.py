@@ -1,12 +1,14 @@
 """Rendering of tool results, diffs, and syntax-highlighted output."""
 
 import json
+from typing import Any
 
 from rich.console import Group, RenderableType
 from rich.markup import escape
 from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.text import Text
+
 
 class _PlainWrite:
     """Wrap a rich renderable so RichLog can still extract plain text for
@@ -16,7 +18,7 @@ class _PlainWrite:
         self.plain = plain
         self._renderable = renderable
 
-    def __rich_console__(self, console, options) -> Any:
+    def __rich_console__(self, console, options):
         yield from console.render(self._renderable, options)
 
 
@@ -30,9 +32,7 @@ def _render_diff(diff: str, code_theme: str = "ansi_dark") -> Panel:
     )
 
 
-def _make_syntax(
-    code: str, language: str, code_theme: str
-) -> RenderableType:
+def _make_syntax(code: str, language: str, code_theme: str) -> RenderableType:
     """Highlight code with Pygments; fall back to escaped text on any error."""
     try:
         syntax = Syntax(code, language, theme=code_theme, word_wrap=False)
@@ -51,7 +51,7 @@ def _guess_lexer_name(filename: str) -> str | None:
         from pygments.util import ClassNotFound
 
         return get_lexer_for_filename(filename, "").name
-    except (ClassNotFound, TypeError, ValueError, OSError):
+    except ClassNotFound, TypeError, ValueError, OSError:
         return None
 
 
@@ -75,7 +75,7 @@ def _command_output_lexer(output: str) -> str | None:
         try:
             json.loads(stripped)
             return "json"
-        except (ValueError, TypeError, json.JSONDecodeError):
+        except ValueError, TypeError, json.JSONDecodeError:
             pass
     if sample.startswith(("--- ", "+++ ", "@@ ")) or "\n--- " in sample:
         return "diff"
@@ -126,9 +126,7 @@ def _format_tool_result(name: str, result: dict[str, Any]) -> str:
     return json.dumps(result, default=str)
 
 
-def _truncate_body(
-    text: str, limit: int = TOOL_RESULT_MAX_CHARS
-) -> tuple[str, bool]:
+def _truncate_body(text: str, limit: int = TOOL_RESULT_MAX_CHARS) -> tuple[str, bool]:
     """Truncate a body to `limit` chars; return (text, was_truncated)."""
     if len(text) <= limit:
         return text, False
@@ -145,9 +143,7 @@ def _plain_tool_panel(name: str, text: str) -> Panel:
     )
 
 
-def _render_read_file_result(
-    result: dict[str, Any], code_theme: str
-) -> Panel:
+def _render_read_file_result(result: dict[str, Any], code_theme: str) -> Panel:
     """Render a read_file result: a summary line plus the file content,
     syntax-highlighted by extension when a lexer can be guessed."""
     content = result.get("content", "")
@@ -186,9 +182,7 @@ def _render_run_command_result(
         body_text, truncated = _truncate_body(output)
         if truncated:
             summary += " \u00b7 (result truncated)"
-        body = _PlainWrite(
-            body_text, _make_syntax(body_text, lexer, code_theme)
-        )
+        body = _PlainWrite(body_text, _make_syntax(body_text, lexer, code_theme))
         return Panel(
             Group(Text(summary, style="bold"), Text(), body),
             title="Tool result · run_command",
@@ -219,5 +213,3 @@ def _render_tool_result(
         return None
     body_text, _ = _truncate_body(text)
     return _plain_tool_panel(name, body_text)
-
-

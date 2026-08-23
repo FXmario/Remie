@@ -13,7 +13,7 @@ from typing import Any
 
 import httpx
 
-from remie.agent import LLMRequestError
+from remie.errors import LLMRequestError
 from remie.model_names import VENDORS, prettify_model_id
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
@@ -197,10 +197,7 @@ def _error_message(status_code: int, body: str) -> str:
             detail = error
         detail = detail or str(parsed.get("message") or "")
     if status_code == 401:
-        return (
-            "OpenRouter rejected the API key. Check it under "
-            "Ctrl+P → OpenRouter."
-        )
+        return "OpenRouter rejected the API key. Check it under Ctrl+P → OpenRouter."
     if status_code == 402:
         return (
             "Your OpenRouter account is out of credits. Top up at "
@@ -230,7 +227,9 @@ class _ToolCallAssembler:
                 continue
             index = fragment.get("index")
             index = index if isinstance(index, int) else len(self.calls)
-            entry = self.calls.setdefault(index, {"id": "", "name": "", "arguments": ""})
+            entry = self.calls.setdefault(
+                index, {"id": "", "name": "", "arguments": ""}
+            )
             call_id = fragment.get("id")
             if isinstance(call_id, str) and call_id and not entry["id"]:
                 entry["id"] = call_id
@@ -308,7 +307,9 @@ async def _stream_once(
                 error = chunk.get("error")
                 if error:
                     message = (
-                        error.get("message", "") if isinstance(error, dict) else str(error)
+                        error.get("message", "")
+                        if isinstance(error, dict)
+                        else str(error)
                     )
                     raise LLMRequestError(502, message or "OpenRouter stream error")
                 usage = chunk.get("usage")
@@ -389,7 +390,7 @@ async def fetch_openrouter_models() -> list[dict[str, Any]]:
             response = await client.get(OPENROUTER_MODELS_URL, timeout=10)
             response.raise_for_status()
             payload = response.json()
-    except (httpx.HTTPError, ValueError):
+    except httpx.HTTPError, ValueError:
         return []
     rows = payload.get("data") if isinstance(payload, dict) else None
     results: list[dict[str, Any]] = []
@@ -415,10 +416,11 @@ async def fetch_openrouter_models() -> list[dict[str, Any]]:
         free = False
         if isinstance(pricing, dict):
             try:
-                free = float(pricing.get("prompt") or 0) == 0 and float(
-                    pricing.get("completion") or 0
-                ) == 0
-            except (TypeError, ValueError):
+                free = (
+                    float(pricing.get("prompt") or 0) == 0
+                    and float(pricing.get("completion") or 0) == 0
+                )
+            except TypeError, ValueError:
                 free = False
         results.append(
             {

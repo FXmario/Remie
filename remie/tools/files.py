@@ -8,15 +8,6 @@ from typing import Any
 
 from remie.tools.common import resolve_abs_path
 
-def resolve_abs_path(path_str: str) -> Path:
-    """
-    file.py -> /Users/home/username/project/file.py
-    """
-    path = Path(path_str).expanduser()
-    if not path.is_absolute():
-        path = (Path.cwd() / path).resolve()
-    return path
-
 
 def read_file_tool(filename: str) -> dict[str, Any]:
     """
@@ -200,5 +191,3 @@ def edit_file_tool(path: str, old_str: str, new_str: str) -> dict[str, Any]:
         "action": "edited",
         "diff": _make_diff(original, edited, str(full_path)),
     }
-
-

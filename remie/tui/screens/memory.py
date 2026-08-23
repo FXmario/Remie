@@ -5,6 +5,7 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, Select
 
+from remie.tui.contracts import is_agent_app
 from remie.tools import (
     delete_memory,
     ensure_general_memory,
@@ -13,6 +14,7 @@ from remie.tools import (
     list_memories,
     set_active_memory_id,
 )
+
 
 class MemoryScreen(ModalScreen):
     """Modal to view and switch between named agent memories."""
@@ -107,7 +109,7 @@ class MemoryScreen(ModalScreen):
             if not get_active_memory_id():
                 set_active_memory_id(memory["id"])
             app = self.app
-            if isinstance(app, AgentApp):
+            if is_agent_app(app):
                 app._refresh_system_prompt()
         self._refresh_memories()
         # Pass the active memory as the initial value so the Select's own
@@ -178,7 +180,7 @@ class MemoryScreen(ModalScreen):
             return
         set_active_memory_id(memory_id)
         app = self.app
-        if isinstance(app, AgentApp):
+        if is_agent_app(app):
             app._refresh_system_prompt()
             app.notify(f"Active memory: {memory['name']}", title="Memory")
         self.dismiss()
@@ -203,7 +205,7 @@ class MemoryScreen(ModalScreen):
             ]:
                 memory_select.value = active
         app = self.app
-        if isinstance(app, AgentApp):
+        if is_agent_app(app):
             app._refresh_system_prompt()
         self.notify(f"Deleted memory '{memory['name']}'", title="Memory")
 
@@ -214,9 +216,7 @@ class MemoryScreen(ModalScreen):
         # active memory; anything else is a genuine user switch.
         if event.value == self._programmatic_value:
             return
-        self._programmatic_value = (
-            event.value if isinstance(event.value, str) else None
-        )
+        self._programmatic_value = event.value if isinstance(event.value, str) else None
         if event.value == get_active_memory_id():
             return
         self._switch(str(event.value))
@@ -227,8 +227,3 @@ class MemoryScreen(ModalScreen):
             return
         if event.button.id == "memory-delete":
             await self._delete_current()
-
-
-from remie.tui import _agent_app_registry as _registry
-
-_registry.register_module(__name__)

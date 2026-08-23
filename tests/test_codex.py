@@ -567,6 +567,12 @@ def test_conversation_to_input_maps_native_tool_messages():
                 {"id": "c2", "name": "read_file", "arguments": "{}"}
             ],
         },
+        {
+            "role": "tool",
+            "content": '{"content": "..."}',
+            "tool_call_id": "c2",
+            "name": "read_file",
+        },
     ]
     instructions, items = codex_client.conversation_to_input(conversation)
     assert instructions == "sys"
@@ -589,6 +595,109 @@ def test_conversation_to_input_maps_native_tool_messages():
         "content": [{"type": "output_text", "text": "Here is your file."}],
     }
     assert items[4]["type"] == "function_call"
+    assert items[5]["type"] == "function_call_output"
+
+
+def test_conversation_to_input_drops_dangling_tool_calls():
+    """Interrupted turns (call without result) are not replayed: the backend
+    rejects an unpaired function_call with a 400."""
+    conversation = [
+        {"role": "user", "content": "list the files"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"id": "c1", "name": "list_files", "arguments": '{"path": "."}'}
+            ],
+        },
+        # No role=="tool" result for c1: the turn was interrupted here.
+    ]
+    instructions, items = codex_client.conversation_to_input(conversation)
+    assert items == [
+        {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "list the files"}],
+        }
+    ]
+
+
+def test_conversation_to_input_drops_orphaned_tool_outputs():
+    """A result whose call was dropped (e.g. by compaction) is not replayed."""
+    conversation = [
+        {"role": "user", "content": "go"},
+        {
+            "role": "tool",
+            "content": '{"files": []}',
+            "tool_call_id": "ghost-call",
+            "name": "list_files",
+        },
+    ]
+    _, items = codex_client.conversation_to_input(conversation)
+    assert items == [
+        {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "go"}],
+        }
+    ]
+
+
+def test_conversation_to_input_replays_encrypted_reasoning_before_calls():
+    """Reasoning items stored on the assistant message are replayed before
+    their function_call: with store=false the backend 400s without them."""
+    conversation = [
+        {"role": "user", "content": "list the files"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"id": "c1", "name": "list_files", "arguments": '{"path": "."}'}
+            ],
+            "codex_reasoning": [
+                {"id": "rs_1", "encrypted_content": "enc-blob"},
+                {"id": "rs_empty", "encrypted_content": ""},  # dropped: no blob
+                "not-a-dict",
+            ],
+        },
+        {
+            "role": "tool",
+            "content": "{}",
+            "tool_call_id": "c1",
+            "name": "list_files",
+        },
+    ]
+    _, items = codex_client.conversation_to_input(conversation)
+    assert items[0]["type"] == "message"
+    assert items[1] == {
+        "type": "reasoning",
+        "id": "rs_1",
+        "summary": [],
+        "encrypted_content": "enc-blob",
+    }
+    assert items[2] == {
+        "type": "function_call",
+        "call_id": "c1",
+        "name": "list_files",
+        "arguments": '{"path": "."}',
+    }
+    assert items[3]["type"] == "function_call_output"
+
+
+def test_conversation_to_input_skips_message_when_all_calls_dangling():
+    """Reasoning/text of a fully-unanswered assistant message is skipped too,
+    so interrupted reasoning blobs are not replayed against nothing."""
+    conversation = [
+        {"role": "user", "content": "go"},
+        {
+            "role": "assistant",
+            "content": "partial text",
+            "tool_calls": [{"id": "c1", "name": "list_files", "arguments": "{}"}],
+            "codex_reasoning": [{"id": "rs_1", "encrypted_content": "enc"}],
+        },
+    ]
+    _, items = codex_client.conversation_to_input(conversation)
+    assert [item["type"] for item in items] == ["message"]
 
 
 def test_stream_codex_call_parses_sdk_events_and_tool_calls(monkeypatch):
@@ -733,6 +842,130 @@ def test_stream_codex_call_retries_once_after_refresh_on_401(monkeypatch):
     second = dict(client.requests[1])
     first.pop("prompt_cache_key"), second.pop("prompt_cache_key")
     assert first == second
+
+
+def test_stream_codex_call_retry_clears_boxes_from_failed_attempt(monkeypatch):
+    """A 401 that arrives after partial item events must not leave the failed
+    attempt's tool calls/reasoning in the boxes (duplicates -> 400 on replay)."""
+    signed_in_auth(monkeypatch, refresh_token="stale")
+
+    async def fake_refresh(current):
+        return codex_auth.CodexAuth(
+            make_access_token(exp_offset=9999), "fresh", make_id_token()
+        )
+
+    monkeypatch.setattr(codex_client, "refresh_auth", fake_refresh)
+    install_sdk(
+        monkeypatch,
+        FakeCodexSDK(
+            [
+                [
+                    make_event(
+                        "response.output_item.added",
+                        output_index=0,
+                        item=SimpleNamespace(
+                            type="function_call",
+                            call_id="call_stale",
+                            name="list_files",
+                            arguments="",
+                        ),
+                    ),
+                    api_status_error(401, "expired mid-items"),
+                ],
+                [
+                    make_event(
+                        "response.output_item.added",
+                        output_index=0,
+                        item=SimpleNamespace(
+                            type="function_call",
+                            call_id="call_fresh",
+                            name="list_files",
+                            arguments="{}",
+                        ),
+                    ),
+                    completed_event(),
+                ],
+            ]
+        ),
+    )
+    tool_calls_box: list = []
+    reasoning_items_box: list = []
+    chunks = collect(
+        [{"role": "user", "content": "hi"}],
+        tool_calls_box=tool_calls_box,
+        reasoning_items_box=reasoning_items_box,
+    )
+    assert chunks == []
+    assert tool_calls_box == [
+        {"id": "call_fresh", "name": "list_files", "arguments": "{}"}
+    ]
+
+
+def test_collector_captures_encrypted_reasoning_items(monkeypatch):
+    signed_in_auth(monkeypatch)
+    install_sdk(
+        monkeypatch,
+        FakeCodexSDK(
+            [
+                [
+                    make_event(
+                        "response.output_item.added",
+                        output_index=0,
+                        # The added event is intentionally incomplete; the
+                        # collector must merge fields from item.done below.
+                        item=SimpleNamespace(
+                            type="reasoning",
+                            id="rs_1",
+                            encrypted_content=None,
+                            summary=[],
+                        ),
+                    ),
+                    make_event(
+                        "response.reasoning_summary_text.delta",
+                        delta="thinking out loud",
+                    ),
+                    make_event(
+                        "response.output_item.done",
+                        output_index=0,
+                        item=SimpleNamespace(
+                            type="reasoning",
+                            id="rs_1",
+                            encrypted_content="blob-1",
+                        ),
+                    ),
+                    completed_event(output=[]),
+                ]
+            ]
+        ),
+    )
+    reasoning_items_box: list = []
+    reasoning_box: list = []
+    collect([], reasoning_box=reasoning_box, reasoning_items_box=reasoning_items_box)
+    # The same item arriving via added + done is captured once.
+    assert reasoning_items_box == [
+        {
+            "type": "reasoning",
+            "id": "rs_1",
+            "summary": [],
+            "encrypted_content": "blob-1",
+        }
+    ]
+    # The visible reasoning text still streams as before.
+    assert reasoning_box == ["thinking out loud"]
+
+
+def test_collector_drops_anonymous_tool_calls():
+    collector = codex_client._ToolCallCollector()
+    collector._record({"id": "", "name": "", "arguments": '{"x": 1}'})
+    assert collector.drain() == []
+
+
+def test_collector_drain_keeps_named_call_with_empty_id():
+    collector = codex_client._ToolCallCollector()
+    collector._record({"id": "", "name": "list_files", "arguments": ""})
+    assert collector.drain() == [
+        {"id": "", "name": "list_files", "arguments": "{}"}
+    ]
 
 
 def test_stream_codex_call_does_not_retry_after_yielding(monkeypatch):

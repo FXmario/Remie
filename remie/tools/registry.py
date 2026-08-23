@@ -4,14 +4,6 @@ import inspect
 from typing import Any
 
 from remie.tools.ask_user import ask_user_tool
-from remie.tools.chats import (
-    create_chat,
-    delete_chat,
-    find_chat_by_id,
-    list_chats,
-    load_chat,
-    rename_chat,
-)
 from remie.tools.commands import run_command_tool
 from remie.tools.files import (
     edit_file_tool,
@@ -82,21 +74,33 @@ TOOL_PARAMETERS = {
     "list_files": {
         "type": "object",
         "properties": {
-            "path": {"type": "string", "description": "Directory to list. Defaults to '.'."}
+            "path": {
+                "type": "string",
+                "description": "Directory to list. Defaults to '.'.",
+            }
         },
     },
     "glob_files": {
         "type": "object",
         "properties": {
-            "pattern": {"type": "string", "description": "Glob pattern such as '**/*.py'."},
-            "path": {"type": "string", "description": "Directory to search. Defaults to '.'."}
+            "pattern": {
+                "type": "string",
+                "description": "Glob pattern such as '**/*.py'.",
+            },
+            "path": {
+                "type": "string",
+                "description": "Directory to search. Defaults to '.'.",
+            },
         },
         "required": ["pattern"],
     },
     "tree_files": {
         "type": "object",
         "properties": {
-            "path": {"type": "string", "description": "Root directory. Defaults to '.'."},
+            "path": {
+                "type": "string",
+                "description": "Root directory. Defaults to '.'.",
+            },
             "max_depth": {
                 "type": "integer",
                 "description": "Maximum depth of the tree. Defaults to 3.",
@@ -119,7 +123,10 @@ TOOL_PARAMETERS = {
         "type": "object",
         "properties": {
             "command": {"type": "string", "description": "Shell command to run."},
-            "cwd": {"type": "string", "description": "Working directory. Defaults to '.'."}
+            "cwd": {
+                "type": "string",
+                "description": "Working directory. Defaults to '.'.",
+            },
         },
         "required": ["command"],
     },
@@ -145,14 +152,20 @@ TOOL_PARAMETERS = {
             },
             "text": {"type": "string", "description": "Note text (action 'add' only)."},
             "id": {"type": "string", "description": "Memory uuid; wins over name."},
-            "name": {"type": "string", "description": "Memory name to target or create."},
+            "name": {
+                "type": "string",
+                "description": "Memory name to target or create.",
+            },
         },
         "required": ["action"],
     },
     "web_fetch": {
         "type": "object",
         "properties": {
-            "url": {"type": "string", "description": "Absolute http:// or https:// URL to fetch."},
+            "url": {
+                "type": "string",
+                "description": "Absolute http:// or https:// URL to fetch.",
+            },
             "method": {
                 "type": "string",
                 "enum": ["GET", "POST", "PUT", "DELETE", "HEAD"],

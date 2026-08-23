@@ -10,6 +10,7 @@ from typing import Any, ClassVar
 
 import httpx
 from PIL import Image as PILImage
+from rich.console import RenderableType
 from rich.markup import escape
 from rich.panel import Panel
 from textual import work
@@ -18,40 +19,40 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
 from textual.keys import format_key
 from textual.screen import Screen
-from textual.widgets import Footer, Header, RichLog
+from textual.widgets import Footer, Header
 
 from remie.agent import (
-    LLMRequestError,
-    UnsupportedModelError,
+    fetch_opencode_go_models,
+    generate_chat_title,
+    get_config,
+    get_connection_error_message,
+    get_model_context_limit,
+    load_status_animation_enabled,
+    save_status_animation_enabled,
+    stream_llm_call,
+    summarize_messages,
+)
+from remie.core.runner import AgentRunner
+from remie.errors import LLMRequestError, UnsupportedModelError
+from remie.prompts import build_system_prompt
+from remie.protocol import extract_thinking, strip_protocol_lines
+from remie.rendering import render_assistant_panel, render_user_message
+from remie.tokens import (
     estimate_conversation_tokens,
     estimate_message_tokens,
     estimate_tokens,
-    estimate_tokens_from_counts,
-    extract_thinking,
-    extract_tool_invocations,
-    get_config,
-    get_connection_error_message,
-    get_full_system_prompt,
-    get_model_context_limit,
-    load_status_animation_enabled,
-    render_assistant_panel,
-    render_user_message,
-    save_status_animation_enabled,
-    strip_protocol_lines,
-    summarize_messages,
 )
-from remie.tools import (
+from remie.storage.chats import (
     DEFAULT_CHAT_NAME,
-    MEMORY_NAME_MAX_CHARS,
     create_chat,
-    ensure_active_memory,
     find_chat_by_id,
-    get_tool_summary,
-    load_chat,
     load_latest_chat,
     rename_chat,
-    save_chat,
 )
+from remie.storage.memories import MEMORY_NAME_MAX_CHARS, ensure_active_memory
+from remie.tools.executor import ToolExecutor, execute_tool_call
+from remie.tools.registry import get_tool_summary
+from remie.tui.chat_session import ChatSessionMixin
 from remie.tui.constants import (
     COMPACTION_CONTEXT_RATIO,
     COMPACTION_KEEP_MESSAGES,
@@ -63,19 +64,20 @@ from remie.tui.constants import (
 )
 from remie.tui.css import CSS
 from remie.tui.helpers import (
+    _detect_terminal_background,
     _fallback_memory_name,
     _has_tool_call,
     _preview_window,
     _safe_reasoning_markdown,
     _safe_stream_markdown,
     _should_update_stream,
-    _stream_update_interval,
 )
 from remie.tui.render import _render_diff, _render_tool_result
 from remie.tui.screens.ask_user import AskUserScreen
 from remie.tui.screens.chats import ChatScreen
 from remie.tui.screens.connection import ConnectionScreen
 from remie.tui.screens.memory import MemoryScreen
+from remie.tui.streaming import StreamingPresentationMixin
 from remie.tui.widgets import (
     InputRow,
     ModelBadge,
@@ -86,9 +88,6 @@ from remie.tui.widgets import (
     ThinkingIndicator,
 )
 
-# Names resolved through the package namespace at call time so tests can
-# monkeypatch them on ``remie.tui`` (mirrors the old single-module globals).
-import remie.tui as _tui_pkg
 
 class AgentScreen(Screen):
     """Default screen. Overrides ctrl+c copy to confirm the selection copy."""
@@ -101,12 +100,13 @@ class AgentScreen(Screen):
         self.app.notify("Copied to clipboard", title="Selection")
 
 
-class AgentApp(App):
+class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
     """Textual TUI for the Remie coding assistant."""
 
     TITLE = "Remie"
     CSS = CSS
     ENABLE_COMMAND_PALETTE = False
+    IS_REMIE_AGENT_APP = True
     BINDINGS: ClassVar[list[BindingType]] = [
         ("ctrl+c,super+c", "copy_or_quit", "Copy/Quit"),
         ("ctrl+l", "new_chat", "New chat"),
@@ -136,7 +136,7 @@ class AgentApp(App):
         # unavailable (non-interactive terminals, unsupported emulators), in
         # which case dark mode is the safe default. Textual's full palettes
         # visibly theme the entire UI rather than only ANSI accents.
-        self._system_theme = _tui_pkg._detect_terminal_background() or "dark"
+        self._system_theme = _detect_terminal_background() or "dark"
         self._theme_mode = "system"
         # ANSI themes inherit the terminal's background, preserving terminal
         # transparency. Explicit light/dark overrides use opaque full palettes.
@@ -160,6 +160,11 @@ class AgentApp(App):
             "yes",
             "on",
         }
+        self._tool_executor = ToolExecutor(
+            ask_user=self._ask_user_for_tool,
+            run=execute_tool_call,
+        )
+        self._agent_runner = AgentRunner(self._tool_executor)
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -188,6 +193,9 @@ class AgentApp(App):
             self._chat_id = chat["id"]
             self.conversation = list(chat.get("context_messages") or [])
             self._transcript = list(chat.get("transcript") or [])
+            # A chat saved by an older version (or mid-crash) may contain
+            # unanswered tool calls; heal them before anything is replayed.
+            self._close_dangling_tool_calls()
             self._refresh_system_prompt()
             self.sub_title = chat.get("name", "")
             log = self.query_one("#log", StreamingRichLog)
@@ -199,7 +207,7 @@ class AgentApp(App):
             self.conversation = [
                 {
                     "role": "system",
-                    "content": get_full_system_prompt(
+                    "content": build_system_prompt(
                         native_tools=self._native_tool_calling()
                     ),
                 }
@@ -233,9 +241,7 @@ class AgentApp(App):
         keep the conversation token cache in sync."""
         new_system = {
             "role": "system",
-            "content": get_full_system_prompt(
-                native_tools=self._native_tool_calling()
-            ),
+            "content": build_system_prompt(native_tools=self._native_tool_calling()),
         }
         if self.conversation and self.conversation[0]["role"] == "system":
             self._cached_conv_tokens += estimate_message_tokens(
@@ -246,93 +252,40 @@ class AgentApp(App):
             self.conversation.insert(0, new_system)
             self._cached_conv_tokens += estimate_message_tokens(new_system)
 
-    async def _name_current_chat(
-        self, user_content: str | list, assistant_content: str
-    ) -> None:
-        """Name a still-default chat after its first completed task."""
+    async def _update_current_chat_title(self, user_content: str | list) -> None:
+        """Adapt an automatically managed title after a completed agent turn.
+
+        The title model sees recent completed conversation plus the current
+        title and is instructed to retain it unless the chat's central topic
+        changed. A manual rename permanently opts the chat out.
+        """
         if not self._chat_id:
             return
         chat = find_chat_by_id(self._chat_id)
-        if chat is None or not chat["name"].startswith(DEFAULT_CHAT_NAME):
+        if chat is None or chat.get("title_source") == "manual":
             return
-        title = await _tui_pkg.generate_chat_title(
+        current_name = str(chat.get("name") or DEFAULT_CHAT_NAME)
+        recent_messages = self._transcript[-20:]
+        title = await generate_chat_title(
             [
-                {"role": "user", "content": user_content},
-                {"role": "assistant", "content": assistant_content},
+                {
+                    "role": "system",
+                    "content": f"Current chat title: {current_name}",
+                },
+                *recent_messages,
             ]
         )
-        name = title[:MEMORY_NAME_MAX_CHARS].rstrip() or _fallback_memory_name(
-            user_content
-        )
-        renamed = rename_chat(self._chat_id, name)
+        if title:
+            name = title[:MEMORY_NAME_MAX_CHARS].rstrip()
+        elif current_name.startswith(DEFAULT_CHAT_NAME):
+            name = _fallback_memory_name(user_content)
+        else:
+            return
+        if not name or name.casefold() == current_name.casefold():
+            return
+        renamed = rename_chat(self._chat_id, name, title_source="auto")
         if renamed is not None:
             self.sub_title = renamed["name"]
-
-    def _save_current_chat(self) -> None:
-        if self._chat_id:
-            save_chat(
-                self._chat_id,
-                self.conversation,
-                self._transcript,
-                token_usage={
-                    "input_tokens": self._total_input_tokens,
-                    "output_tokens": self._total_output_tokens,
-                },
-            )
-
-    def on_unmount(self) -> None:
-        """Persist the current chat so a later launch can resume it."""
-        try:
-            self._save_current_chat()
-        except Exception:
-            pass
-
-    def _replay_transcript(self) -> None:
-        """Replay a loaded chat's visible history into the log."""
-        log = self.query_one("#log", StreamingRichLog)
-        for message in self._transcript:
-            role = message.get("role")
-            content = message.get("content")
-            if role == "tool":
-                log.write("[dim]· tool result[/]")
-                continue
-            if role == "user":
-                if isinstance(content, str):
-                    if content.startswith("tool_result("):
-                        log.write("[dim]· tool result[/]")
-                        continue
-                    log.write(render_user_message(content))
-                elif isinstance(content, list):
-                    text = " ".join(
-                        part.get("text", "")
-                        for part in content
-                        if isinstance(part, dict) and isinstance(part.get("text"), str)
-                    ).strip()
-                    has_image = any(
-                        isinstance(part, dict) and part.get("type") == "image_url"
-                        for part in content
-                    )
-                    if text:
-                        log.write(render_user_message(text))
-                    if has_image:
-                        log.write("[dim]📷 image attached[/]")
-                log.write("")
-            elif role == "assistant":
-                text = strip_protocol_lines(str(content or "")).strip()
-                if text:
-                    log.write(render_assistant_panel(text, self._code_theme()))
-                    log.write("")
-
-    def _rebuild_prompt_history(self) -> None:
-        """Seed prompt recall from the loaded transcript's user messages."""
-        history: list[str] = []
-        for message in self._transcript:
-            if message.get("role") != "user":
-                continue
-            content = message.get("content")
-            if isinstance(content, str) and not content.startswith("tool_result("):
-                history.append(content)
-        self._prompt_history = history[-PROMPT_HISTORY_LIMIT:]
 
     @work(exclusive=False)
     async def _prefetch_model_context(self) -> None:
@@ -342,7 +295,7 @@ class AgentApp(App):
         if config.provider != "opencode-go" or not config.api_key:
             return
         try:
-            await _tui_pkg.fetch_opencode_go_models(config.api_key)
+            await fetch_opencode_go_models(config.api_key)
         except Exception:
             pass
 
@@ -484,89 +437,14 @@ class AgentApp(App):
             "nearly full. Continue based on the most recent messages below.)"
         )
         tail = self.conversation[1:][-COMPACTION_KEEP_MESSAGES:]
-        self.conversation = self.conversation[:1] + [
-            {"role": "system", "content": note}
-        ] + tail
+        self.conversation = (
+            self.conversation[:1] + [{"role": "system", "content": note}] + tail
+        )
         self._cached_conv_tokens = estimate_conversation_tokens(self.conversation)
 
-    def _update_live_generation_badge(
-        self, state: dict[str, Any], force: bool = False
-    ) -> None:
-        """Update generated-token count and speed from O(1) stream counters.
-
-        Repaints are throttled to roughly one per timer tick so a fast stream
-        emitting hundreds of deltas per second does not relayout the badge row
-        on every chunk; pass force=True for the final, exact update.
-        """
-        now = time.monotonic()
-        if not force and now - state.get("last_badge_update", 0.0) < (
-            LIVE_REASONING_TICK
-        ):
-            return
-        state["last_badge_update"] = now
-        generated_tokens = estimate_tokens_from_counts(
-            state["content_chars"] + state["reasoning_chars"],
-            state["content_newlines"] + state["reasoning_newlines"],
-        )
-        badge: ModelBadge = state["badge"]
-        badge.set_live_generated_tokens(generated_tokens)
-        elapsed = now - state["started"]
-        if elapsed > 0:
-            badge.set_speed(generated_tokens / elapsed)
-
-    def _drain_live_reasoning(self) -> None:
-        """Render and count newly-arrived reasoning while content is silent.
-
-        Providers append reasoning deltas to reasoning_box without yielding,
-        so during a long think the async-for body never runs and the inline
-        update path never fires. This timer drains the box and updates both the
-        Reasoning panel and generated-token counter.
-        """
-        state = getattr(self, "_live_stream", None)
-        if not state or not state.get("active"):
-            return
-        box: list[str] = state["reasoning_box"]
-        consumed: int = state["consumed"]
-        if len(box) <= consumed:
-            return
-        now = time.monotonic()
-        if now - state["last_render"] < _stream_update_interval(
-            len(state["text"]) or 1
-        ):
-            return
-        state["last_render"] = now
-        new_text = "".join(box[consumed:])
-        state["consumed"] = len(box)
-        log = state["log"]
-        # Reconstruct the full accumulated reasoning from what has been
-        # consumed so far plus this batch.
-        state["text"] += new_text
-        state["reasoning_chars"] += len(new_text)
-        state["reasoning_newlines"] += new_text.count("\n")
-        self._update_live_generation_badge(state)
-        shown = state["text"]
-        if self._stop_requested:
-            return
-        log.update_stream(
-            _safe_reasoning_markdown(_preview_window(shown), self._code_theme()),
-            title="Reasoning",
-            border_style="dim",
-        )
-
-    def _stop_live_stream_timer(self, timer) -> None:
-        """Stop the live-reasoning timer and mark its state inactive."""
-        timer.stop()
-        if getattr(self, "_live_reasoning_timer", None) is timer:
-            self._live_reasoning_timer = None
-        state = getattr(self, "_live_stream", None)
-        if state:
-            state["active"] = False
-
-    def _stop_active_reasoning_timer(self) -> None:
-        """Clean up a timer when a stream exits through an exception/cancel."""
-        timer = getattr(self, "_live_reasoning_timer", None)
-        if timer is not None:
-            self._stop_live_stream_timer(timer)
+    async def _ask_user_for_tool(self, question: str, options: list[str]) -> str | None:
+        """Textual implementation of the core tool executor's user callback."""
+        return await self.push_screen_wait(AskUserScreen(question, options))
 
     async def run_agent_turn(self, user_content: str | list) -> None:
         log = self.query_one("#log", StreamingRichLog)
@@ -575,6 +453,9 @@ class AgentApp(App):
         self._agent_task = current_task
         try:
             self._agent_running = True
+            # Heal any tool calls left unanswered by a previous interrupt or
+            # crash before they are replayed to the backend.
+            self._close_dangling_tool_calls()
             # Keep the system prompt in sync with the active provider (text
             # protocol vs native function calling) before every turn.
             self._refresh_system_prompt()
@@ -601,6 +482,7 @@ class AgentApp(App):
                 reasoning_box: list[str] = []
                 finish_box: dict[str, Any] = {}
                 tool_calls_box: list[dict[str, str]] = []
+                codex_reasoning_items: list[dict[str, str]] = []
                 badge = self.query_one(ModelBadge)
                 badge.set_live_generated_tokens(0)
                 stream_started = time.monotonic()
@@ -629,12 +511,15 @@ class AgentApp(App):
                     LIVE_REASONING_TICK, self._drain_live_reasoning
                 )
                 self._live_reasoning_timer = reasoning_timer
-                async for delta in _tui_pkg.stream_llm_call(
+                async for delta in stream_llm_call(
                     self.conversation,
                     usage_box,
                     reasoning_box,
                     finish_box,
                     tool_calls_box=tool_calls_box,
+                    reasoning_items_box=(
+                        codex_reasoning_items if native_tool_calling else None
+                    ),
                 ):
                     if self._stop_requested:
                         break
@@ -674,12 +559,12 @@ class AgentApp(App):
                     # drained yet (shared counter avoids double rendering).
                     if len(reasoning_box) > self._live_stream["consumed"]:
                         new_reasoning = "".join(
-                            reasoning_box[self._live_stream["consumed"]:]
+                            reasoning_box[self._live_stream["consumed"] :]
                         )
                         self._live_stream["text"] += new_reasoning
                         self._live_stream["reasoning_chars"] += len(new_reasoning)
-                        self._live_stream["reasoning_newlines"] += (
-                            new_reasoning.count("\n")
+                        self._live_stream["reasoning_newlines"] += new_reasoning.count(
+                            "\n"
                         )
                         self._live_stream["consumed"] = len(reasoning_box)
                         self._live_stream["last_render"] = now
@@ -726,7 +611,9 @@ class AgentApp(App):
                 self._stop_live_stream_timer(reasoning_timer)
                 badge.set_speed(None)
                 reasoning_text = "".join(reasoning_box) or extract_thinking(full_text)
-                input_tokens = usage_box.get("prompt_tokens") or self._cached_conv_tokens
+                input_tokens = (
+                    usage_box.get("prompt_tokens") or self._cached_conv_tokens
+                )
                 output_tokens = usage_box.get("completion_tokens") or estimate_tokens(
                     full_text
                 )
@@ -741,34 +628,14 @@ class AgentApp(App):
                 self.query_one(ModelBadge).set_tokens(
                     self._total_input_tokens, self._total_output_tokens
                 )
-                # Native function calls (Codex provider) arrive as structured
-                # items; other providers parse the text protocol.
-                pending_calls: list[dict[str, Any]] = []
-                if native_tool_calling:
-                    for call in tool_calls_box:
-                        try:
-                            args = json.loads(call.get("arguments") or "{}")
-                        except json.JSONDecodeError:
-                            args = {}
-                        if not isinstance(args, dict):
-                            args = {}
-                        pending_calls.append(
-                            {
-                                "id": call.get("id") or "",
-                                "name": call.get("name") or "",
-                                "args": args,
-                            }
-                        )
-                    tool_invocations = [
-                        (call["name"], call["args"]) for call in pending_calls
-                    ]
-                else:
-                    tool_invocations = extract_tool_invocations(full_text)
-                    pending_calls = [
-                        {"id": None, "name": name, "args": args}
-                        for name, args in tool_invocations
-                    ]
-                content = strip_protocol_lines(full_text).strip()
+                prepared = self._agent_runner.prepare_response(
+                    full_text,
+                    native_tool_calling=native_tool_calling,
+                    native_calls=tool_calls_box,
+                )
+                pending_calls = prepared.tool_calls
+                tool_invocations = prepared.tool_invocations
+                content = prepared.content
                 if not tool_invocations and not content:
                     # The model produced no usable output (e.g. only reasoning,
                     # or the stream ended prematurely). Don't silently mark the
@@ -776,12 +643,8 @@ class AgentApp(App):
                     if empty_retries < MAX_EMPTY_RESPONSE_RETRIES:
                         empty_retries += 1
                         log.replace_stream()
-                        log.write(
-                            "[dim]Agent produced no output — retrying…[/]"
-                        )
-                        self._push_message(
-                            "assistant", reasoning_text or "(no output)"
-                        )
+                        log.write("[dim]Agent produced no output — retrying…[/]")
+                        self._push_message("assistant", reasoning_text or "(no output)")
                         continue
                     log.replace_stream()
                     if reasoning_text:
@@ -806,9 +669,7 @@ class AgentApp(App):
                     partial = strip_protocol_lines(full_text).strip()
                     if partial:
                         log.replace_stream(
-                            _tui_pkg.render_assistant_panel(
-                                partial, self._code_theme()
-                            )
+                            render_assistant_panel(partial, self._code_theme())
                         )
                     else:
                         log.replace_stream()
@@ -830,12 +691,12 @@ class AgentApp(App):
                         )
                     if content:
                         renderables.append(
-                            _tui_pkg.render_assistant_panel(content, self._code_theme())
+                            render_assistant_panel(content, self._code_theme())
                         )
                     log.replace_stream(*renderables)
                     self._push_message("assistant", full_text)
                     completed = True
-                    await self._name_current_chat(user_content, full_text)
+                    await self._update_current_chat_title(user_content)
                     self._set_status("done")
                     return
                 replacements: list[RenderableType] = []
@@ -858,54 +719,32 @@ class AgentApp(App):
                         )
                     else:
                         tool_line = (
-                            "[bold cyan]Agent "
-                            f"{escape(get_tool_summary(name))}[/]"
+                            f"[bold cyan]Agent {escape(get_tool_summary(name))}[/]"
                         )
                     replacements.append(tool_line)
                 log.replace_stream(*replacements)
                 if native_tool_calling:
-                    self._push_message(
-                        "assistant",
-                        full_text,
-                        extra={
-                            "tool_calls": [
-                                {
-                                    "id": call["id"],
-                                    "name": call["name"],
-                                    "arguments": json.dumps(call["args"]),
-                                }
-                                for call in pending_calls
-                            ]
-                        },
+                    extra = self._agent_runner.assistant_metadata(
+                        prepared, codex_reasoning_items
                     )
+                    self._push_message("assistant", full_text, extra=extra)
                 else:
                     self._push_message("assistant", full_text)
                 for call in pending_calls:
-                    name = call["name"]
-                    args = call["args"]
+                    name = call.name
+                    args = call.args
                     if self._stop_requested:
                         log.write("[dim]Stopped by user[/]")
                         break
                     if name == "ask_user":
-                        question = str(args.get("question", ""))
-                        options = args.get("options") or []
                         log.write(
-                            f"[bold cyan]Agent asking you:[/] {escape(question)}"
+                            "[bold cyan]Agent asking you:[/] "
+                            f"{escape(str(args.get('question', '')))}"
                         )
-                        answer = await self.push_screen_wait(
-                            AskUserScreen(question, options)
-                        )
-                        if answer is None:
-                            result = {"answer": None, "cancelled": True}
-                        else:
-                            result = {"answer": answer}
-                    else:
-                        result = await asyncio.to_thread(
-                            _tui_pkg.run_tool, name, args
-                        )
+                    result = await self._agent_runner.execute_tool(call)
                     result_json = json.dumps(result, default=str)
                     if isinstance(result, dict) and result.get("diff"):
-                        log.write(_tui_pkg._render_diff(result["diff"]))
+                        log.write(_render_diff(result["diff"]))
                     if isinstance(result, dict) and result.get("blocked"):
                         log.write(
                             "[bold red]Blocked command:[/] "
@@ -913,7 +752,7 @@ class AgentApp(App):
                             f"\u2014 {escape(str(result.get('reason', 'unsafe command')))}"
                         )
                     if isinstance(result, dict):
-                        result_renderable = _tui_pkg._render_tool_result(
+                        result_renderable = _render_tool_result(
                             name, result, self._code_theme()
                         )
                         if result_renderable is not None:
@@ -922,11 +761,13 @@ class AgentApp(App):
                         log.write(
                             f"[bold magenta]tool_result:[/] {escape(result_json)}"
                         )
-                    if name == "memory" and isinstance(result, dict) and (
-                        result.get("action") in {"add", "clear"}
+                    if (
+                        name == "memory"
+                        and isinstance(result, dict)
+                        and (result.get("action") in {"add", "clear"})
                     ):
                         self._refresh_system_prompt()
-                    call_id = call.get("id")
+                    call_id = call.id
                     if call_id:
                         # Codex native tool calling: results replay as
                         # function_call_output items.
@@ -954,7 +795,10 @@ class AgentApp(App):
         except LLMRequestError as error:
             log.replace_stream()
             message = str(error)
-            if "context" in message.lower() or "maximum context length" in message.lower():
+            if (
+                "context" in message.lower()
+                or "maximum context length" in message.lower()
+            ):
                 self.notify(
                     "The conversation exceeded the model's context window. "
                     "Start a new chat (Ctrl+L).",
@@ -981,65 +825,6 @@ class AgentApp(App):
             else:
                 self._set_status("ready")
 
-    def _restore_chat_token_usage(self, chat: dict[str, Any]) -> None:
-        """Load a chat's saved cumulative usage into the badge counters."""
-        usage = chat.get("token_usage") or {}
-        self._total_input_tokens = int(usage.get("input_tokens") or 0)
-        self._total_output_tokens = int(usage.get("output_tokens") or 0)
-        badge = self.query_one(ModelBadge)
-        badge.set_tokens(self._total_input_tokens, self._total_output_tokens)
-        # No generation is active for a freshly loaded chat.
-        badge.set_live_generated_tokens(None)
-
-    def _reset_conversation_state(self) -> None:
-        """Start an empty conversation for a fresh chat."""
-        self.conversation = [{"role": "system", "content": get_full_system_prompt()}]
-        self._transcript = []
-        self._cached_conv_tokens = estimate_conversation_tokens(self.conversation)
-        self._total_input_tokens = 0
-        self._total_output_tokens = 0
-        badge = self.query_one(ModelBadge)
-        badge.set_tokens(0, 0)
-        # No generation is active in a fresh chat; drop any stale counter.
-        badge.set_live_generated_tokens(None)
-        self._prompt_history = []
-        self._history_index = None
-        self._history_draft = ""
-
-    def action_new_chat(self) -> None:
-        """Start a new chat; the previous one stays in the chat history."""
-        if self._agent_running:
-            return
-        self._save_current_chat()
-        self.query_one("#log", RichLog).clear()
-        chat = create_chat()
-        self._chat_id = chat["id"]
-        self.sub_title = chat["name"]
-        self._reset_conversation_state()
-
-    def _load_chat_into_ui(self, chat_id: str) -> bool:
-        """Switch to another saved chat, keeping the current one on disk."""
-        if self._agent_running:
-            return False
-        chat = load_chat(chat_id)
-        if chat is None:
-            self.notify("Could not load that chat", severity="warning")
-            return False
-        self._save_current_chat()
-        self.query_one("#log", RichLog).clear()
-        self._chat_id = chat["id"]
-        self.conversation = list(chat.get("context_messages") or [])
-        self._transcript = list(chat.get("transcript") or [])
-        self._refresh_system_prompt()
-        self._cached_conv_tokens = estimate_conversation_tokens(self.conversation)
-        self._restore_chat_token_usage(chat)
-        self._rebuild_prompt_history()
-        self.sub_title = chat.get("name", "")
-        log = self.query_one("#log", StreamingRichLog)
-        log.write("[dim]Switched to chat:[/] " + escape(chat.get("name", "")))
-        self._replay_transcript()
-        return True
-
     def action_copy_or_quit(self) -> None:
         """Copy selected text, or quit when nothing is selected."""
         selected = self.screen.get_selected_text()
@@ -1051,13 +836,9 @@ class AgentApp(App):
 
     def action_toggle_theme(self) -> None:
         modes = ("system", "light", "dark")
-        self._theme_mode = modes[
-            (modes.index(self._theme_mode) + 1) % len(modes)
-        ]
+        self._theme_mode = modes[(modes.index(self._theme_mode) + 1) % len(modes)]
         resolved = (
-            self._system_theme
-            if self._theme_mode == "system"
-            else self._theme_mode
+            self._system_theme if self._theme_mode == "system" else self._theme_mode
         )
         self.theme = (
             f"ansi-{resolved}"
@@ -1098,10 +879,10 @@ class AgentApp(App):
         await self.push_screen(ChatScreen())
 
 
-def run_tui() -> None:
-    app = AgentApp()
-    app.run()
-
-
 def main() -> None:
-    run_tui()
+    """Launch the terminal application."""
+    AgentApp().run()
+
+
+# Public compatibility alias used by main.py and older integrations.
+run_tui = main

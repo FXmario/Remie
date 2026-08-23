@@ -21,6 +21,7 @@ from remie.tui.constants import (
 from remie.model_names import ModelInfo, prettify_model_id
 from remie.tools import MEMORY_NAME_MAX_CHARS
 
+
 def _detect_terminal_background() -> str | None:
     """
     Query the terminal background color via OSC 11 and return 'light' or 'dark'.
@@ -43,7 +44,7 @@ def _detect_terminal_background() -> str | None:
         if ready:
             try:
                 data = os.read(sys.stdin.fileno(), 1024)
-            except (OSError, ValueError):
+            except OSError, ValueError:
                 break
             if not data:
                 break
@@ -126,14 +127,11 @@ def _stream_update_interval(text_len: int) -> float:
     )
     return max(
         floor,
-        min(text_len, STREAM_PREVIEW_MAX_CHARS)
-        / STREAM_UPDATE_CHARS_PER_SECOND,
+        min(text_len, STREAM_PREVIEW_MAX_CHARS) / STREAM_UPDATE_CHARS_PER_SECOND,
     )
 
 
-def _should_update_stream(
-    accumulated_len: int, last_update: float, now: float
-) -> bool:
+def _should_update_stream(accumulated_len: int, last_update: float, now: float) -> bool:
     """Whether the streaming preview should re-render now (throttled)."""
     return now - last_update >= _stream_update_interval(accumulated_len)
 
@@ -198,5 +196,3 @@ def _fallback_memory_name(task: str | list) -> str:
         return "general"
     cut = text[:MEMORY_NAME_MAX_CHARS]
     return (cut.rsplit(" ", 1)[0] if " " in cut else cut).rstrip()
-
-

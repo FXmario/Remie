@@ -6,15 +6,16 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, OptionList, RichLog
 from textual.widgets.option_list import Option
 
-from remie.agent import estimate_conversation_tokens
-from remie.tools import (
+from remie.tokens import estimate_conversation_tokens
+from remie.storage.chats import (
     DEFAULT_CHAT_NAME,
     create_chat,
     delete_chat,
     list_chats,
-    load_chat,
     load_latest_chat,
 )
+from remie.tui.contracts import is_agent_app
+
 
 class ChatScreen(ModalScreen):
     """Modal to switch between, create, or delete saved chats."""
@@ -60,8 +61,6 @@ class ChatScreen(ModalScreen):
 
     def compose(self) -> ComposeResult:
         self._refresh_chats()
-        app = self.app
-        current_id = app._chat_id if isinstance(app, AgentApp) else None
         with Vertical(id="chat-dialog"):
             yield Label("Chats", id="dialog-title")
             yield Input(
@@ -90,7 +89,7 @@ class ChatScreen(ModalScreen):
         """Narrow the chat list to chats whose name matches the query."""
         chat_list = self.query_one("#chat-list", OptionList)
         app = self.app
-        current_id = app._chat_id if isinstance(app, AgentApp) else None
+        current_id = app._chat_id if is_agent_app(app) else None
         q = query.strip().lower()
         if q:
             visible = [
@@ -118,7 +117,7 @@ class ChatScreen(ModalScreen):
     def on_mount(self) -> None:
         chat_list = self.query_one("#chat-list", OptionList)
         app = self.app
-        current_id = app._chat_id if isinstance(app, AgentApp) else None
+        current_id = app._chat_id if is_agent_app(app) else None
         if self._chats:
             highlight = current_id or self._chats[0]["id"]
             index = chat_list.get_option_index(highlight)
@@ -139,10 +138,10 @@ class ChatScreen(ModalScreen):
             self.notify("Pick a chat to switch to", severity="warning")
             return
         app = self.app
-        if isinstance(app, AgentApp) and app._chat_id == chat_id:
+        if is_agent_app(app) and app._chat_id == chat_id:
             self.dismiss()
             return
-        if isinstance(app, AgentApp) and app._load_chat_into_ui(chat_id):
+        if is_agent_app(app) and app._load_chat_into_ui(chat_id):
             app.notify("Chat loaded", title="Chats")
         self.dismiss()
 
@@ -153,7 +152,7 @@ class ChatScreen(ModalScreen):
 
     def _new_chat(self) -> None:
         app = self.app
-        if isinstance(app, AgentApp):
+        if is_agent_app(app):
             app.action_new_chat()
             app.notify("Started a new chat", title="Chats")
         self.dismiss()
@@ -173,7 +172,7 @@ class ChatScreen(ModalScreen):
             self.notify("Unknown chat", severity="warning")
             self._disarm_delete()
             return
-        if isinstance(app, AgentApp):
+        if is_agent_app(app):
             if app._chat_id == chat_id:
                 latest = load_latest_chat()
                 app.query_one("#log", RichLog).clear()
@@ -211,8 +210,3 @@ class ChatScreen(ModalScreen):
             self._switch(self._selected_id())
         elif button_id == "chat-delete":
             self._delete_current()
-
-
-from remie.tui import _agent_app_registry as _registry
-
-_registry.register_module(__name__)

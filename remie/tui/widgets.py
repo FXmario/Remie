@@ -1,6 +1,6 @@
 """Reusable widgets for the Remie TUI."""
 
-import os
+# import os
 from pathlib import Path
 
 from PIL import Image as PILImage
@@ -23,11 +23,11 @@ from remie.agent import (
     get_config,
     get_model_info,
 )
-from remie.agent import strip_protocol_lines
-from remie.tui.helpers import _format_tokens, _is_tmux
-from remie.tui import _agent_app_registry as _registry
 
-_registry.register_module(__name__)
+# from remie.agent import strip_protocol_lines
+from remie.tui.contracts import is_agent_app
+from remie.tui.helpers import _format_tokens, _is_tmux
+
 
 class StreamingRichLog(RichLog):
     """A RichLog that can stream text in place at the bottom of the log."""
@@ -46,7 +46,7 @@ class StreamingRichLog(RichLog):
 
     def update_stream(
         self,
-        content: str | RenderableType,
+        content: str,
         *,
         title: str = "Assistant",
         border_style: str = "yellow",
@@ -159,7 +159,7 @@ class StatusIndicator(Vertical):
                 self._frames[status] = ([], [])
         return self._frames[status]
 
-    def compose(self) -> ComposeResult:
+    def compose(self):
         frames, _ = self._ensure_loaded(self._state)
         if frames:
             yield TerminalImage(frames[0], id="status-gif")
@@ -187,7 +187,9 @@ class StatusIndicator(Vertical):
             return
         self._frame_index = (self._frame_index + 1) % len(frames)
         try:
-            self.query_one("#status-gif", TerminalImage).image = frames[self._frame_index]
+            self.query_one("#status-gif", TerminalImage).image = frames[
+                self._frame_index
+            ]
         except NoMatches:
             # The initial GIF was unavailable, so compose did not create an
             # image widget. Status changes should remain harmless.
@@ -324,7 +326,7 @@ class ModelBadge(Label):
 
     async def on_click(self) -> None:
         app = self.app
-        if isinstance(app, AgentApp):
+        if is_agent_app(app):
             await app.action_open_connection()
 
 
@@ -369,7 +371,7 @@ class PromptTextArea(TextArea):
     def _maybe_history_navigate(self, key: str) -> bool:
         """Navigate prompt history when at a line boundary, like a shell."""
         app = self.app
-        if not isinstance(app, AgentApp):
+        if not is_agent_app(app):
             return False
         at_boundary = (
             self.cursor_at_first_line if key == "up" else self.cursor_at_last_line
@@ -400,14 +402,14 @@ class PromptTextArea(TextArea):
         if not isinstance(grabbed, PILImage.Image):
             return False
         app = self.app
-        if isinstance(app, AgentApp):
+        if is_agent_app(app):
             app.set_pending_image(grabbed)
             app.notify("Image attached — press Enter to send", title="Clipboard")
         return True
 
 
 class InputRow(Horizontal):
-    def compose(self) -> ComposeResult:
+    def compose(self):
         yield StatusIndicator()
         yield PromptBox()
 
@@ -415,7 +417,7 @@ class InputRow(Horizontal):
 class ModelRow(Horizontal):
     """Top-right row holding the TMUX spinner next to the model badge."""
 
-    def compose(self) -> ComposeResult:
+    def compose(self):
         yield ThinkingIndicator()
         yield ModelBadge()
 
@@ -424,6 +426,6 @@ class PromptBox(Vertical):
     def __init__(self) -> None:
         super().__init__(id="prompt-box")
 
-    def compose(self) -> ComposeResult:
+    def compose(self):
         yield ModelRow(id="model-row")
         yield PromptTextArea()

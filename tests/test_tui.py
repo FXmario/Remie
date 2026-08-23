@@ -12,6 +12,8 @@ from textual.widgets import Button, Input, Label, OptionList, Select
 from textual.widgets import Switch
 
 import remie.tui as tui
+import remie.tui.app as tui_app
+import remie.tui.screens.connection as connection_screen
 from remie.agent import (
     LLMRequestError,
     ConnectionConfig,
@@ -76,7 +78,7 @@ def _no_network_on_mount(monkeypatch):
     async def _noop_fetch(api_key):
         return ["kimi-k3"]
 
-    monkeypatch.setattr(tui, "fetch_opencode_go_models", _noop_fetch)
+    monkeypatch.setattr(tui_app, "fetch_opencode_go_models", _noop_fetch)
 
 
 def test_preview_window_short_text_unchanged():
@@ -314,18 +316,18 @@ def test_ctrl_g_toggles_and_persists_status_animation(monkeypatch, tmp_path):
 
 
 def test_startup_theme_matches_terminal_background(monkeypatch):
-    monkeypatch.setattr(tui, "_detect_terminal_background", lambda: "light")
+    monkeypatch.setattr(tui_app, "_detect_terminal_background", lambda: "light")
     assert AgentApp().theme == "ansi-light"
 
-    monkeypatch.setattr(tui, "_detect_terminal_background", lambda: "dark")
+    monkeypatch.setattr(tui_app, "_detect_terminal_background", lambda: "dark")
     assert AgentApp().theme == "ansi-dark"
 
-    monkeypatch.setattr(tui, "_detect_terminal_background", lambda: None)
+    monkeypatch.setattr(tui_app, "_detect_terminal_background", lambda: None)
     assert AgentApp().theme == "ansi-dark"
 
 
 def test_ctrl_t_toggles_full_light_and_dark_themes(monkeypatch):
-    monkeypatch.setattr(tui, "_detect_terminal_background", lambda: "dark")
+    monkeypatch.setattr(tui_app, "_detect_terminal_background", lambda: "dark")
 
     async def exercise():
         app = AgentApp()
@@ -416,7 +418,7 @@ def test_push_message_updates_conversation_token_cache(monkeypatch):
             if False:
                 yield ""
 
-        monkeypatch.setattr(tui, "stream_llm_call", fake_stream)
+        monkeypatch.setattr(tui_app, "stream_llm_call", fake_stream)
 
         app = AgentApp()
         async with app.run_test() as pilot:
@@ -448,7 +450,7 @@ def test_conversation_too_large_uses_cached_tokens(monkeypatch):
             if False:
                 yield ""
 
-        monkeypatch.setattr(tui, "stream_llm_call", fake_stream)
+        monkeypatch.setattr(tui_app, "stream_llm_call", fake_stream)
 
         app = AgentApp()
         async with app.run_test() as pilot:
@@ -475,7 +477,7 @@ def test_compaction_recomputes_token_cache(monkeypatch):
             if False:
                 yield ""
 
-        monkeypatch.setattr(tui, "stream_llm_call", fake_stream)
+        monkeypatch.setattr(tui_app, "stream_llm_call", fake_stream)
 
         app = AgentApp()
         async with app.run_test() as pilot:
@@ -515,7 +517,7 @@ def test_connection_error_shows_toast_and_keeps_app_running(monkeypatch):
             raise httpx.ConnectError("connection refused")
             yield ""
 
-        monkeypatch.setattr(tui, "stream_llm_call", failed_stream)
+        monkeypatch.setattr(tui_app, "stream_llm_call", failed_stream)
 
         app = AgentApp()
         notifications = []
@@ -538,7 +540,7 @@ def test_connection_error_shows_toast_and_keeps_app_running(monkeypatch):
 
 def test_open_connection_ignored_while_agent_running(monkeypatch):
     async def exercise():
-        monkeypatch.setattr(tui, "stream_llm_call", _empty_stream)
+        monkeypatch.setattr(tui_app, "stream_llm_call", _empty_stream)
 
         app = AgentApp()
         async with app.run_test() as pilot:
@@ -570,7 +572,7 @@ def test_escape_stops_running_agent(monkeypatch):
                 yield "chunk"
                 await asyncio.sleep(0)
 
-        monkeypatch.setattr(tui, "stream_llm_call", endless_stream)
+        monkeypatch.setattr(tui_app, "stream_llm_call", endless_stream)
 
         app = AgentApp()
         async with app.run_test() as pilot:
@@ -597,7 +599,7 @@ def test_escape_key_stops_stalled_agent(monkeypatch):
             await stalled.wait()
             yield "never"
 
-        monkeypatch.setattr(tui, "stream_llm_call", stalled_stream)
+        monkeypatch.setattr(tui_app, "stream_llm_call", stalled_stream)
 
         app = AgentApp()
         async with app.run_test() as pilot:
@@ -633,7 +635,7 @@ def test_messages_are_queued_and_processed_in_order(monkeypatch):
         async def fake_stream(_conversation, usage_box=None, reasoning_box=None, finish_box=None, **_kwargs):
             yield "reply"
 
-        monkeypatch.setattr(tui, "stream_llm_call", fake_stream)
+        monkeypatch.setattr(tui_app, "stream_llm_call", fake_stream)
 
         app = AgentApp()
         async with app.run_test() as pilot:
@@ -660,7 +662,7 @@ def test_stop_drains_pending_messages(monkeypatch):
                 yield "chunk"
                 await asyncio.sleep(0)
 
-        monkeypatch.setattr(tui, "stream_llm_call", endless_stream)
+        monkeypatch.setattr(tui_app, "stream_llm_call", endless_stream)
 
         app = AgentApp()
         async with app.run_test() as pilot:
@@ -695,7 +697,7 @@ def test_blocked_command_shows_blocked_log_line(monkeypatch):
             else:
                 yield "done"
 
-        monkeypatch.setattr(tui, "stream_llm_call", tool_stream)
+        monkeypatch.setattr(tui_app, "stream_llm_call", tool_stream)
 
         app = AgentApp()
         async with app.run_test() as pilot:
@@ -734,10 +736,10 @@ def test_edit_tool_writes_diff_panel_to_log(monkeypatch, tmp_path):
             else:
                 yield "done"
 
-        monkeypatch.setattr(tui, "stream_llm_call", tool_stream)
+        monkeypatch.setattr(tui_app, "stream_llm_call", tool_stream)
         rendered = []
         monkeypatch.setattr(
-            tui, "_render_diff", lambda diff: rendered.append(diff) or Panel("")
+            tui_app, "_render_diff", lambda diff: rendered.append(diff) or Panel("")
         )
 
         app = AgentApp()
@@ -769,7 +771,7 @@ def test_truncated_response_continues_automatically(monkeypatch):
             else:
                 yield "off here, now complete."
 
-        monkeypatch.setattr(tui, "stream_llm_call", truncating_stream)
+        monkeypatch.setattr(tui_app, "stream_llm_call", truncating_stream)
 
         app = AgentApp()
         async with app.run_test() as pilot:
@@ -812,7 +814,7 @@ def test_truncated_tool_call_continues_before_executing(monkeypatch, tmp_path):
             else:
                 yield "done"
 
-        monkeypatch.setattr(tui, "stream_llm_call", truncating_stream)
+        monkeypatch.setattr(tui_app, "stream_llm_call", truncating_stream)
 
         app = AgentApp()
         async with app.run_test() as pilot:
@@ -839,7 +841,7 @@ def test_truncation_continuation_limit(monkeypatch):
             finish_box["truncated"] = True
             yield "x"
 
-        monkeypatch.setattr(tui, "stream_llm_call", always_truncating)
+        monkeypatch.setattr(tui_app, "stream_llm_call", always_truncating)
 
         app = AgentApp()
         async with app.run_test() as pilot:
@@ -944,7 +946,7 @@ def test_ask_user_tool_feeds_answer_back(monkeypatch):
             else:
                 yield "done"
 
-        monkeypatch.setattr(tui, "stream_llm_call", tool_stream)
+        monkeypatch.setattr(tui_app, "stream_llm_call", tool_stream)
 
         app = AgentApp()
         async with app.run_test() as pilot:
@@ -980,7 +982,7 @@ def test_ask_user_cancel_marks_cancelled(monkeypatch):
             else:
                 yield "done"
 
-        monkeypatch.setattr(tui, "stream_llm_call", tool_stream)
+        monkeypatch.setattr(tui_app, "stream_llm_call", tool_stream)
 
         app = AgentApp()
         async with app.run_test() as pilot:
@@ -1077,10 +1079,10 @@ def test_tool_results_rendered_in_turn(monkeypatch, tmp_path):
             else:
                 yield "done"
 
-        monkeypatch.setattr(tui, "stream_llm_call", tool_stream)
+        monkeypatch.setattr(tui_app, "stream_llm_call", tool_stream)
         rendered = []
         monkeypatch.setattr(
-            tui,
+            tui_app,
             "_render_tool_result",
             lambda name, result, code_theme="ansi_dark": rendered.append(
                 (name, result)
@@ -1144,7 +1146,7 @@ def test_conversation_compaction_keeps_system_and_recent(monkeypatch):
             if False:
                 yield ""
 
-        monkeypatch.setattr(tui, "stream_llm_call", fake_stream)
+        monkeypatch.setattr(tui_app, "stream_llm_call", fake_stream)
 
         app = AgentApp()
         app._prompt_history = []
@@ -1273,7 +1275,7 @@ def test_action_new_chat_keeps_previous_chat(monkeypatch):
             if False:
                 yield ""
 
-        monkeypatch.setattr(tui, "stream_llm_call", fake_stream)
+        monkeypatch.setattr(tui_app, "stream_llm_call", fake_stream)
 
         app = AgentApp()
         async with app.run_test() as pilot:
@@ -1297,7 +1299,7 @@ def test_chat_saved_after_turn(monkeypatch):
         async def fake_stream(_conversation, usage_box=None, reasoning_box=None, finish_box=None, **_kwargs):
             yield "final reply"
 
-        monkeypatch.setattr(tui, "stream_llm_call", fake_stream)
+        monkeypatch.setattr(tui_app, "stream_llm_call", fake_stream)
 
         app = AgentApp()
         async with app.run_test() as pilot:
@@ -1331,7 +1333,7 @@ def test_memory_tool_add_refreshes_system_prompt(monkeypatch):
             else:
                 yield "done"
 
-        monkeypatch.setattr(tui, "stream_llm_call", tool_stream)
+        monkeypatch.setattr(tui_app, "stream_llm_call", tool_stream)
 
         app = AgentApp()
         async with app.run_test() as pilot:
@@ -1356,7 +1358,7 @@ def test_memory_add_without_name_uses_active_memory(monkeypatch):
             else:
                 yield "done"
 
-        monkeypatch.setattr(tui, "stream_llm_call", tool_stream)
+        monkeypatch.setattr(tui_app, "stream_llm_call", tool_stream)
 
         app = AgentApp()
         async with app.run_test() as pilot:
@@ -1397,7 +1399,7 @@ def test_named_memory_add_is_not_renamed(monkeypatch):
             else:
                 yield "done"
 
-        monkeypatch.setattr(tui, "stream_llm_call", tool_stream)
+        monkeypatch.setattr(tui_app, "stream_llm_call", tool_stream)
 
         app = AgentApp()
         async with app.run_test() as pilot:
@@ -1546,7 +1548,7 @@ def test_memory_picker_blocked_while_agent_running(monkeypatch):
                 yield "chunk"
                 await asyncio.sleep(0)
 
-        monkeypatch.setattr(tui, "stream_llm_call", endless_stream)
+        monkeypatch.setattr(tui_app, "stream_llm_call", endless_stream)
 
         app = AgentApp()
         async with app.run_test() as pilot:
@@ -1745,7 +1747,7 @@ def test_context_full_error_notifies_clearly(monkeypatch):
             )
             yield ""
 
-        monkeypatch.setattr(tui, "stream_llm_call", failing_stream)
+        monkeypatch.setattr(tui_app, "stream_llm_call", failing_stream)
         notifications = []
 
         app = AgentApp()
@@ -1766,7 +1768,7 @@ def test_prompt_enter_submits_and_ctrl_j_inserts_newline(monkeypatch):
             if False:
                 yield ""
 
-        monkeypatch.setattr(tui, "stream_llm_call", fake_stream)
+        monkeypatch.setattr(tui_app, "stream_llm_call", fake_stream)
 
         app = AgentApp()
         async with app.run_test() as pilot:
@@ -1795,7 +1797,7 @@ def test_prompt_shift_enter_inserts_newline(monkeypatch):
             if False:
                 yield ""
 
-        monkeypatch.setattr(tui, "stream_llm_call", fake_stream)
+        monkeypatch.setattr(tui_app, "stream_llm_call", fake_stream)
 
         app = AgentApp()
         async with app.run_test() as pilot:
@@ -1815,7 +1817,7 @@ def test_prompt_history_up_and_down(monkeypatch):
             if False:
                 yield ""
 
-        monkeypatch.setattr(tui, "stream_llm_call", fake_stream)
+        monkeypatch.setattr(tui_app, "stream_llm_call", fake_stream)
 
         app = AgentApp()
         async with app.run_test() as pilot:
@@ -1854,7 +1856,7 @@ def test_prompt_history_down_past_end_restores_draft(monkeypatch):
             if False:
                 yield ""
 
-        monkeypatch.setattr(tui, "stream_llm_call", fake_stream)
+        monkeypatch.setattr(tui_app, "stream_llm_call", fake_stream)
 
         app = AgentApp()
         async with app.run_test() as pilot:
@@ -1885,7 +1887,7 @@ def test_prompt_history_skips_consecutive_duplicates(monkeypatch):
             if False:
                 yield ""
 
-        monkeypatch.setattr(tui, "stream_llm_call", fake_stream)
+        monkeypatch.setattr(tui_app, "stream_llm_call", fake_stream)
 
         app = AgentApp()
         async with app.run_test() as pilot:
@@ -1952,7 +1954,7 @@ def test_image_attachment_builds_multimodal_message(monkeypatch):
             if False:
                 yield ""
 
-        monkeypatch.setattr(tui, "stream_llm_call", fake_stream)
+        monkeypatch.setattr(tui_app, "stream_llm_call", fake_stream)
 
         app = AgentApp()
         image = Image.new("RGB", (8, 8), "red")
@@ -2063,7 +2065,7 @@ def test_reasoning_effort_fades_for_unsupported_model(monkeypatch):
         async def fake_fetch(api_key):
             return ["minimax-m3", "glm-5.2"]
 
-        monkeypatch.setattr(tui, "fetch_opencode_go_models", fake_fetch)
+        monkeypatch.setattr(connection_screen, "fetch_opencode_go_models", fake_fetch)
         previous = get_config()
         configure_openai(
             OPENCODE_GO_BASE_URL,
@@ -2106,7 +2108,7 @@ def test_reasoning_effort_restores_on_switch_back(monkeypatch):
         async def fake_fetch(api_key):
             return ["minimax-m3", "glm-5.2"]
 
-        monkeypatch.setattr(tui, "fetch_opencode_go_models", fake_fetch)
+        monkeypatch.setattr(connection_screen, "fetch_opencode_go_models", fake_fetch)
         previous = get_config()
         configure_openai(
             OPENCODE_GO_BASE_URL,
@@ -2187,7 +2189,7 @@ def test_connect_clamps_effort_for_unsupported_model(monkeypatch):
         async def fake_fetch(api_key):
             return ["grok-4.5", "glm-5.2"]
 
-        monkeypatch.setattr(tui, "fetch_opencode_go_models", fake_fetch)
+        monkeypatch.setattr(connection_screen, "fetch_opencode_go_models", fake_fetch)
         previous = get_config()
         configure_openai(
             OPENCODE_GO_BASE_URL,
@@ -2198,7 +2200,7 @@ def test_connect_clamps_effort_for_unsupported_model(monkeypatch):
         )
         saved = []
         monkeypatch.setattr(
-            tui,
+            connection_screen,
             "save_provider_configs",
             lambda profiles, active: saved.append(profiles[active]),
         )
@@ -2239,7 +2241,7 @@ def test_connection_screen_restores_provider_and_effort(monkeypatch):
             return ["kimi-k3"]
 
         # The app prefetches the live model list on mount; keep it offline.
-        monkeypatch.setattr(tui, "fetch_opencode_go_models", fake_fetch)
+        monkeypatch.setattr(connection_screen, "fetch_opencode_go_models", fake_fetch)
 
         previous = get_config()
         configure_openai(
@@ -2279,7 +2281,7 @@ def test_connection_screen_preserves_saved_model_not_in_bundled_list(monkeypatch
         async def fake_fetch(api_key):
             return ["kimi-k3", "live-only-model"]
 
-        monkeypatch.setattr(tui, "fetch_opencode_go_models", fake_fetch)
+        monkeypatch.setattr(connection_screen, "fetch_opencode_go_models", fake_fetch)
 
         previous = get_config()
         # Empty API key so no live refresh fires; the picker must still show
@@ -2323,7 +2325,7 @@ def test_connection_screen_refresh_keeps_selected_live_model(monkeypatch):
         async def fake_fetch(api_key):
             return ["kimi-k3", "live-only-model"]
 
-        monkeypatch.setattr(tui, "fetch_opencode_go_models", fake_fetch)
+        monkeypatch.setattr(connection_screen, "fetch_opencode_go_models", fake_fetch)
 
         previous = get_config()
         configure_openai(
@@ -2373,7 +2375,7 @@ def test_startup_prefetch_populates_context_cache(monkeypatch):
             fetched.append(api_key)
             return ["kimi-k3"]
 
-        monkeypatch.setattr(tui, "fetch_opencode_go_models", fake_fetch)
+        monkeypatch.setattr(tui_app, "fetch_opencode_go_models", fake_fetch)
         monkeypatch.setattr(agent, "_opencode_go_model_context", {"kimi-k3": 256_000})
 
         previous = get_config()
@@ -2415,7 +2417,7 @@ def test_startup_prefetch_skips_local_provider(monkeypatch):
             fetched.append(api_key)
             return ["kimi-k3"]
 
-        monkeypatch.setattr(tui, "fetch_opencode_go_models", fake_fetch)
+        monkeypatch.setattr(tui_app, "fetch_opencode_go_models", fake_fetch)
 
         previous = get_config()
         configure_openai(
@@ -2491,7 +2493,7 @@ def test_connection_screen_preserves_each_provider_form(monkeypatch):
         async def fake_fetch(api_key):
             return ["gpt-test"]
 
-        monkeypatch.setattr(tui, "fetch_opencode_go_models", fake_fetch)
+        monkeypatch.setattr(connection_screen, "fetch_opencode_go_models", fake_fetch)
         previous = get_config()
         configure_openai(
             "http://localhost:7070/v1",
@@ -2552,7 +2554,7 @@ def test_reasoning_stream_keeps_timer_rendered_prefix(monkeypatch):
             reasoning_box.append("content suffix")
             yield "reply"
 
-        monkeypatch.setattr(tui, "stream_llm_call", fake_stream)
+        monkeypatch.setattr(tui_app, "stream_llm_call", fake_stream)
         app = AgentApp()
         async with app.run_test() as pilot:
             await app.run_agent_turn("hello")
@@ -2591,7 +2593,7 @@ def test_reasoning_stream_coalesces_same_tick_renders(monkeypatch):
                 yield "a"
                 await asyncio.sleep(0.005)
 
-        monkeypatch.setattr(tui, "stream_llm_call", fake_stream)
+        monkeypatch.setattr(tui_app, "stream_llm_call", fake_stream)
         monkeypatch.setattr(StreamingRichLog, "update_stream", counting_update)
         app = AgentApp()
         async with app.run_test() as pilot:
@@ -2617,7 +2619,7 @@ def test_reasoning_timer_stops_when_stream_errors(monkeypatch):
             raise RuntimeError("stream failed")
             yield
 
-        monkeypatch.setattr(tui, "stream_llm_call", failing_stream)
+        monkeypatch.setattr(tui_app, "stream_llm_call", failing_stream)
         app = AgentApp()
         async with app.run_test() as pilot:
             await app.run_agent_turn("hello")
@@ -2637,7 +2639,7 @@ def test_reasoning_only_stream_updates_live_generated_counter(monkeypatch):
             await asyncio.sleep(0.15)
             yield "reply"
 
-        monkeypatch.setattr(tui, "stream_llm_call", reasoning_stream)
+        monkeypatch.setattr(tui_app, "stream_llm_call", reasoning_stream)
         app = AgentApp()
         async with app.run_test() as pilot:
             task = asyncio.create_task(app.run_agent_turn("hello"))
@@ -2660,7 +2662,7 @@ def test_token_usage_persists_and_restores_with_chat(monkeypatch):
         yield "reply"
 
     async def exercise():
-        monkeypatch.setattr(tui, "stream_llm_call", fake_stream)
+        monkeypatch.setattr(tui_app, "stream_llm_call", fake_stream)
         app = AgentApp()
         async with app.run_test() as pilot:
             await app.run_agent_turn("hello")
@@ -2714,7 +2716,7 @@ def test_turn_updates_badge_tokens(monkeypatch):
             usage_box["completion_tokens"] = 50
             yield "reply"
 
-        monkeypatch.setattr(tui, "stream_llm_call", fake_stream)
+        monkeypatch.setattr(tui_app, "stream_llm_call", fake_stream)
 
         app = AgentApp()
         async with app.run_test() as pilot:
@@ -2743,7 +2745,7 @@ def test_empty_response_is_retried_and_completes(monkeypatch):
                 return
             yield "reply"
 
-        monkeypatch.setattr(tui, "stream_llm_call", empty_then_reply)
+        monkeypatch.setattr(tui_app, "stream_llm_call", empty_then_reply)
 
         app = AgentApp()
         async with app.run_test() as pilot:
@@ -2770,7 +2772,7 @@ def test_empty_response_gives_up_with_notice(monkeypatch):
             return
             yield
 
-        monkeypatch.setattr(tui, "stream_llm_call", always_empty)
+        monkeypatch.setattr(tui_app, "stream_llm_call", always_empty)
 
         app = AgentApp()
         async with app.run_test() as pilot:
@@ -2800,7 +2802,7 @@ def test_empty_response_stops_when_user_stops(monkeypatch):
             return
             yield
 
-        monkeypatch.setattr(tui, "stream_llm_call", slow_empty)
+        monkeypatch.setattr(tui_app, "stream_llm_call", slow_empty)
 
         app = AgentApp()
         async with app.run_test() as pilot:
@@ -2928,10 +2930,10 @@ def test_final_answer_strips_protocol_lines(monkeypatch):
             yield "\n"
             yield "Here is the answer."
 
-        monkeypatch.setattr(tui, "stream_llm_call", fake_stream)
+        monkeypatch.setattr(tui_app, "stream_llm_call", fake_stream)
         captured = {}
         monkeypatch.setattr(
-            tui,
+            tui_app,
             "render_assistant_panel",
             lambda text, code_theme="ansi_dark": captured.update(text=text)
             or Panel(""),
@@ -3147,20 +3149,20 @@ def test_codex_native_tool_calls_execute_and_replay(monkeypatch):
                 finish_box["finish_reason"] = "stop"
                 yield "All done."
 
-        monkeypatch.setattr(tui, "stream_llm_call", scripted_stream)
+        monkeypatch.setattr(tui_app, "stream_llm_call", scripted_stream)
         # Title generation runs through agent.stream_llm_call directly; keep
         # the Codex-provider test offline.
         async def fake_title(_messages):
             return "a finished task"
 
-        monkeypatch.setattr(tui, "generate_chat_title", fake_title)
+        monkeypatch.setattr(tui_app, "generate_chat_title", fake_title)
         tool_calls_seen = []
 
         def fake_run_tool(name, args):
             tool_calls_seen.append((name, args))
             return {"path": ".", "files": [{"filename": "main.py", "type": "file"}]}
 
-        monkeypatch.setattr(tui, "run_tool", fake_run_tool)
+        monkeypatch.setattr(tui_app, "execute_tool_call", fake_run_tool)
 
         async def exercise():
             app = AgentApp()
@@ -3261,7 +3263,7 @@ def test_connection_screen_openrouter_live_model_list(monkeypatch):
     async def fake_fetch():
         return ["vendor/model-a", "vendor/model-b"]
 
-    monkeypatch.setattr(tui, "fetch_openrouter_models", fake_fetch)
+    monkeypatch.setattr(connection_screen, "fetch_openrouter_models", fake_fetch)
     previous = get_config()
     _agent.configure_openai("http://localhost:7070/v1", "k", "m", provider="local")
     try:
@@ -3325,7 +3327,7 @@ def test_connection_screen_model_search_filters_live_list(monkeypatch):
             ),
         ]
 
-    monkeypatch.setattr(tui, "fetch_openrouter_models", fake_fetch)
+    monkeypatch.setattr(connection_screen, "fetch_openrouter_models", fake_fetch)
     previous = get_config()
     _agent.configure_openai("http://localhost:7070/v1", "k", "m", provider="local")
     try:
@@ -3440,5 +3442,161 @@ def test_memory_picker_search_filters(monkeypatch):
             await pilot.pause()
             names = [name for name, _ in memory_select._options]
             assert "general" in names
+
+    asyncio.run(exercise())
+
+
+def test_adaptive_title_updates_after_completed_turn(monkeypatch):
+    """A completed turn re-titles an auto-managed chat and records it as auto."""
+    async def reply_stream(_c, usage_box=None, reasoning_box=None, finish_box=None, **_kw):
+        yield "reply"
+
+    monkeypatch.setattr(tui_app, "stream_llm_call", reply_stream)
+
+    async def fake_title(messages):
+        return "Fix Login Redirect Bug"
+
+    monkeypatch.setattr(tui_app, "generate_chat_title", fake_title)
+
+    async def exercise():
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            await app.run_agent_turn("please fix the login bug")
+            await pilot.pause()
+
+            chat = find_chat_by_id(app._chat_id)
+            assert chat is not None
+            assert chat["name"] == "Fix Login Redirect Bug"
+            assert chat["title_source"] == "auto"
+            assert app.sub_title == "Fix Login Redirect Bug"
+
+    asyncio.run(exercise())
+
+
+def test_adaptive_title_sees_transcript_and_current_name(monkeypatch):
+    """The title prompt includes recent transcript plus the current title."""
+    async def reply_stream(_c, usage_box=None, reasoning_box=None, finish_box=None, **_kw):
+        yield "reply"
+
+    monkeypatch.setattr(tui_app, "stream_llm_call", reply_stream)
+
+    captured = {}
+
+    async def fake_title(messages):
+        captured["messages"] = messages
+        return "whatever"
+
+    monkeypatch.setattr(tui_app, "generate_chat_title", fake_title)
+
+    async def exercise():
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            await app.run_agent_turn("discuss caching strategy")
+            await pilot.pause()
+
+        roles = [m["role"] for m in captured["messages"]]
+        assert roles[0] == "system"
+        assert "Current chat title:" in captured["messages"][0]["content"]
+        contents = json.dumps(
+            [
+                m.get("content")
+                for m in captured["messages"][1:]
+                if m["role"] == "user"
+            ],
+            default=str,
+        )
+        assert "discuss caching strategy" in contents
+
+    asyncio.run(exercise())
+
+
+def test_manual_rename_blocks_adaptive_retitle(monkeypatch):
+    """Once a person renames a chat, Remie never retitles it again."""
+    from remie.tools import rename_chat
+
+    async def reply_stream(_c, usage_box=None, reasoning_box=None, finish_box=None, **_kw):
+        yield "reply"
+
+    monkeypatch.setattr(tui_app, "stream_llm_call", reply_stream)
+
+    async def unexpected_title(_messages):
+        raise AssertionError("title generation should be skipped")
+
+    monkeypatch.setattr(tui_app, "generate_chat_title", unexpected_title)
+
+    async def exercise():
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            renamed = rename_chat(app._chat_id, "My custom name")
+            assert renamed is not None
+            await app.run_agent_turn("fix the parser bug")
+            await pilot.pause()
+
+            chat = find_chat_by_id(app._chat_id)
+            assert chat is not None
+            assert chat["name"] == "My custom name"
+            assert chat["title_source"] == "manual"
+
+    asyncio.run(exercise())
+
+
+def test_adaptive_title_keeps_unchanged_topic_stable(monkeypatch):
+    """Returning the current title performs no rewrite at all."""
+    async def reply_stream(_c, usage_box=None, reasoning_box=None, finish_box=None, **_kw):
+        yield "reply"
+
+    monkeypatch.setattr(tui_app, "stream_llm_call", reply_stream)
+
+    async def exercise():
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            from remie.tools import rename_chat
+
+            rename_chat(app._chat_id, "Discuss Caching", title_source="auto")
+
+            calls = {"n": 0}
+
+            async def same_title(_messages):
+                calls["n"] += 1
+                return "Discuss Caching"
+
+            monkeypatch.setattr(tui_app, "generate_chat_title", same_title)
+            await app.run_agent_turn("more about caches")
+            await pilot.pause()
+
+            assert calls["n"] == 1
+            chats = load_chat_index()
+            entry = chats[app._chat_id]
+            assert entry["updated_at"] == chats[app._chat_id]["updated_at"]
+            assert entry["name"] == "Discuss Caching"
+
+    asyncio.run(exercise())
+
+
+def test_adaptive_title_falls_back_when_generation_fails(monkeypatch):
+    """An empty generated title keeps the previous auto title instead of
+    clobbering it with a fallback derived only from the last prompt."""
+    async def reply_stream(_c, usage_box=None, reasoning_box=None, finish_box=None, **_kw):
+        yield "reply"
+
+    monkeypatch.setattr(tui_app, "stream_llm_call", reply_stream)
+
+    async def empty_title(_messages):
+        return ""
+
+    monkeypatch.setattr(tui_app, "generate_chat_title", empty_title)
+
+    async def exercise():
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            from remie.tools import rename_chat
+
+            rename_chat(app._chat_id, "Refactor Auth Flow", title_source="auto")
+            await app.run_agent_turn("now what about retries?")
+            await pilot.pause()
+
+            chat = find_chat_by_id(app._chat_id)
+            assert chat is not None
+            assert chat["name"] == "Refactor Auth Flow"
 
     asyncio.run(exercise())
