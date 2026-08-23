@@ -204,6 +204,12 @@ class StatusIndicator(Vertical):
             self._timer = None
         frames, _ = self._ensure_loaded(self._state)
         self.display = enabled and bool(frames)
+        if self.is_attached:
+            # Sixel pixels are drawn outside Textual's normal cell buffer.
+            # Force the surrounding row to repaint when hiding/showing so tmux
+            # clears stale image pixels instead of leaving a fragment behind.
+            self.parent.refresh(layout=True)
+            self.screen.refresh(layout=True)
         if self.display and self.is_attached and not _is_tmux():
             self._schedule_next_frame()
 

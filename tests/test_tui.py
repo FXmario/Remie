@@ -368,6 +368,7 @@ def test_ctrl_g_toggles_static_status_image_in_tmux(monkeypatch, tmp_path):
             indicator = app.query_one(StatusIndicator)
             assert indicator.display is True
             assert indicator._timer is None
+            assert indicator.query_one("#status-gif")
 
             await pilot.press("ctrl+g")
             await pilot.pause()
