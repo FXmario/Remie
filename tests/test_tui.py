@@ -8,6 +8,7 @@ from rich.console import Group
 from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.text import Text
+from textual import events
 from textual.widgets import Button, Input, Label, OptionList, Select
 from textual.widgets import Switch
 
@@ -1098,6 +1099,100 @@ def test_tool_results_rendered_in_turn(monkeypatch, tmp_path):
             assert len(rendered) == 1
             assert rendered[0][0] == "read_file"
             assert rendered[0][1]["content"] == "hello"
+
+    asyncio.run(exercise())
+
+
+def test_mouse_release_copies_screen_selection_immediately(monkeypatch):
+    async def exercise():
+        app = AgentApp()
+        copied = []
+        notifications = []
+        monkeypatch.setattr(app, "copy_to_clipboard", copied.append)
+        monkeypatch.setattr(
+            app, "notify", lambda *args, **kwargs: notifications.append(kwargs)
+        )
+
+        async with app.run_test() as pilot:
+            log = app.query_one("#log")
+            log.write(Panel("before How it works after"))
+            await pilot.pause()
+            line_y, line = next(
+                (line_y, strip.text)
+                for line_y, strip in enumerate(log.lines)
+                if "How it works" in strip.text
+            )
+            phrase_x = line.index("How it works")
+            start = (log.gutter.left + phrase_x, log.gutter.top + line_y)
+            end = (start[0] + len("How it works") - 1, start[1])
+            await pilot.mouse_down(log, offset=start)
+            await pilot.hover(log, offset=end)
+            await pilot.pause()
+
+            selected_style = app.screen.get_component_rich_style(
+                "screen--selection"
+            )
+            rendered_line = log.render_line(line_y - int(log.scroll_y))
+            highlighted = next(
+                segment for segment in rendered_line if segment.text == "How it works"
+            )
+            assert highlighted.style.bgcolor == selected_style.bgcolor
+            assert highlighted.style.color == selected_style.color
+            assert copied == []
+
+            await pilot.mouse_up(log, offset=end)
+            await pilot.pause()
+
+            assert copied == ["How it works"]
+            assert notifications[-1].get("title") == "Selection"
+            assert app.screen.selections == {}
+            # A later mouse-up that reports the same stale selection (for
+            # example, over the scrollbar) must not copy it a second time.
+            app.screen.post_message(events.TextSelected())
+            await pilot.pause()
+            assert copied == ["How it works"]
+
+    asyncio.run(exercise())
+
+
+def test_mouse_release_without_selection_does_not_copy(monkeypatch):
+    async def exercise():
+        app = AgentApp()
+        copied = []
+        notifications = []
+        monkeypatch.setattr(app, "copy_to_clipboard", copied.append)
+        monkeypatch.setattr(
+            app, "notify", lambda *args, **kwargs: notifications.append(kwargs)
+        )
+
+        async with app.run_test() as pilot:
+            app.screen.post_message(events.TextSelected())
+            await pilot.pause()
+            assert copied == []
+            assert notifications == []
+
+    asyncio.run(exercise())
+
+
+def test_mouse_release_copies_prompt_selection(monkeypatch):
+    async def exercise():
+        app = AgentApp()
+        copied = []
+        monkeypatch.setattr(app, "copy_to_clipboard", copied.append)
+        monkeypatch.setattr(app, "notify", lambda *args, **kwargs: None)
+
+        async with app.run_test(size=(100, 30)) as pilot:
+            prompt = app.query_one("#prompt", PromptTextArea)
+            prompt.load_text("copy this")
+            await pilot.pause()
+            await pilot.mouse_down(prompt, offset=(1, 1))
+            await pilot.hover(prompt, offset=(6, 1))
+            await pilot.mouse_up(prompt, offset=(6, 1))
+            await pilot.pause()
+
+            assert prompt.selected_text == ""
+            assert prompt.selection.start == prompt.selection.end
+            assert copied == ["copy"]
 
     asyncio.run(exercise())
 

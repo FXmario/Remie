@@ -41,6 +41,50 @@ class StreamingRichLog(RichLog):
         text = "\n".join(strip.text for strip in self.lines)
         return selection.extract(text), "\n"
 
+    def render_line(self, y: int) -> Strip:
+        """Render a line with source offsets required for precise selection."""
+        scroll_x, scroll_y = self.scroll_offset
+        content_y = scroll_y + y
+        line = self._render_line(
+            content_y, scroll_x, self.scrollable_content_region.width
+        )
+        strip = line.apply_style(self.rich_style)
+        selection = self.text_selection
+        if (
+            selection is not None
+            and (span := selection.get_span(content_y)) is not None
+        ):
+            start, end = span
+            visible_start = max(0, min(strip.cell_length, start - scroll_x))
+            visible_end = (
+                strip.cell_length
+                if end == -1
+                else max(0, min(strip.cell_length, end - scroll_x))
+            )
+            if visible_start < visible_end:
+                selection_style = self.screen.get_component_rich_style(
+                    "screen--selection"
+                )
+                selected = strip.crop(visible_start, visible_end)
+                # Selection must be a post-style so it wins over Rich markup
+                # (panels and syntax spans often set explicit foreground and
+                # background colors of their own).
+                highlighted = Strip(
+                    Segment.apply_style(selected, post_style=selection_style),
+                    selected.cell_length,
+                )
+                strip = Strip.join(
+                    (
+                        strip.crop(0, visible_start),
+                        highlighted,
+                        strip.crop(visible_end),
+                    )
+                )
+        # RichLog doesn't attach Textual's source-offset metadata to rendered
+        # segments. Without it, a drag inside the log is interpreted as a
+        # whole-widget selection and get_selected_text() returns the transcript.
+        return strip.apply_offsets(scroll_x, content_y)
+
     def begin_stream(self) -> None:
         self._stream_start = len(self.lines)
 
@@ -338,6 +382,14 @@ class PromptSubmitted(Message):
         self.text = text
 
 
+class PromptSelectionCompleted(Message):
+    """Posted after a mouse selection is completed in the prompt editor."""
+
+    def __init__(self, text: str) -> None:
+        super().__init__()
+        self.text = text
+
+
 class PromptTextArea(TextArea):
     """Multiline prompt: Enter submits, Shift+Enter / Ctrl+J insert newlines."""
 
@@ -349,6 +401,13 @@ class PromptTextArea(TextArea):
             show_line_numbers=False,
             **kwargs,
         )
+
+    def on_mouse_up(self) -> None:
+        """Report and then visually clear a completed prompt selection."""
+        if selected_text := self.selected_text:
+            selection_end = self.selection.end
+            self.post_message(PromptSelectionCompleted(selected_text))
+            self.move_cursor(selection_end, select=False)
 
     async def on_key(self, event) -> None:
         if event.key == "enter":

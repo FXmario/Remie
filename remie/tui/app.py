@@ -13,7 +13,7 @@ from PIL import Image as PILImage
 from rich.console import RenderableType
 from rich.markup import escape
 from rich.panel import Panel
-from textual import work
+from textual import events, work
 from textual.actions import SkipAction
 from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
@@ -81,6 +81,7 @@ from remie.tui.streaming import StreamingPresentationMixin
 from remie.tui.widgets import (
     InputRow,
     ModelBadge,
+    PromptSelectionCompleted,
     PromptSubmitted,
     PromptTextArea,
     StatusIndicator,
@@ -89,15 +90,42 @@ from remie.tui.widgets import (
 )
 
 
-class AgentScreen(Screen):
-    """Default screen. Overrides ctrl+c copy to confirm the selection copy."""
+class CopyableFooter(Footer):
+    """Footer whose rendered key labels participate in screen selections."""
 
-    def action_copy_text(self) -> None:
-        selection = self.get_selected_text()
-        if selection is None:
-            raise SkipAction()
+    ALLOW_SELECT = True
+
+    def on_mount(self) -> None:
+        # FooterKey disables selection by default so clicks can invoke bindings.
+        # Selection is still safe: Textual only emits a click when the pointer
+        # is released at the press location, while a drag completes selection.
+        for child in self.query("*"):
+            child.ALLOW_SELECT = True
+
+
+class AgentScreen(Screen):
+    """Default screen with copy-on-release text selection."""
+
+    def copy_selection(self, selection: str | None) -> bool:
+        """Copy a non-empty selection and report whether anything was copied."""
+        if selection is None or selection == "":
+            return False
         self.app.copy_to_clipboard(selection)
         self.app.notify("Copied to clipboard", title="Selection")
+        return True
+
+    def on_text_selected(self, _event: events.TextSelected) -> None:
+        """Copy screen-level text and remove its highlight after release."""
+        if self.copy_selection(self.get_selected_text()):
+            self.clear_selection()
+
+    def on_prompt_selection_completed(self, event: PromptSelectionCompleted) -> None:
+        """Copy selections made by TextArea, which owns its selection state."""
+        self.copy_selection(event.text)
+
+    def action_copy_text(self) -> None:
+        if not self.copy_selection(self.get_selected_text()):
+            raise SkipAction()
 
 
 class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
@@ -170,7 +198,7 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
         yield Header()
         yield StreamingRichLog(id="log", markup=True, wrap=True)
         yield InputRow(id="input-row")
-        yield Footer()
+        yield CopyableFooter()
 
     def _code_theme(self) -> str:
         theme = self.available_themes.get(self.theme)
@@ -828,6 +856,10 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
     def action_copy_or_quit(self) -> None:
         """Copy selected text, or quit when nothing is selected."""
         selected = self.screen.get_selected_text()
+        if isinstance(self.screen, AgentScreen) and self.screen.copy_selection(
+            selected
+        ):
+            return
         if selected:
             self.copy_to_clipboard(selected)
             self.notify("Copied to clipboard", title="Selection")
