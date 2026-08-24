@@ -13,3 +13,6 @@ env/
 
 # Remie agent memory / session data
 .remie/
+
+# Standalone Zig rewrite repository
+/zig/
