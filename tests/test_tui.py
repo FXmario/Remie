@@ -539,6 +539,14 @@ def test_connection_error_shows_toast_and_keeps_app_running(monkeypatch):
     asyncio.run(exercise())
 
 
+def test_picker_shortcuts_are_removed_from_bindings():
+    keys = {
+        binding[0] if isinstance(binding, tuple) else binding.key
+        for binding in AgentApp.BINDINGS
+    }
+    assert keys.isdisjoint({"ctrl+p", "ctrl+r", "ctrl+o"})
+
+
 def test_open_connection_ignored_while_agent_running(monkeypatch):
     async def exercise():
         monkeypatch.setattr(tui_app, "stream_llm_call", _empty_stream)
@@ -557,7 +565,7 @@ def test_open_connection_opens_modal_when_idle():
     async def exercise():
         app = AgentApp()
         async with app.run_test() as pilot:
-            await pilot.press("ctrl+p")
+            await app.action_open_connection()
             await pilot.pause()
             assert len(app.screen_stack) == 2
             assert app.screen.query_one("#submit-button")
@@ -1509,11 +1517,11 @@ def test_named_memory_add_is_not_renamed(monkeypatch):
     asyncio.run(exercise())
 
 
-def test_ctrl_m_opens_memory_picker(monkeypatch):
+def test_open_memory_action_opens_picker(monkeypatch):
     async def exercise():
         app = AgentApp()
         async with app.run_test() as pilot:
-            await pilot.press("ctrl+o")
+            await app.action_open_memory()
             await pilot.pause()
             assert len(app.screen_stack) == 2
             assert isinstance(app.screen, MemoryScreen)
@@ -1537,7 +1545,7 @@ def test_memory_picker_switch_updates_active(monkeypatch):
 
         app = AgentApp()
         async with app.run_test() as pilot:
-            await pilot.press("ctrl+o")
+            await app.action_open_memory()
             await pilot.pause()
             screen = app.screen
             assert isinstance(screen, MemoryScreen)
@@ -1555,7 +1563,7 @@ def test_memory_picker_selects_active_memory(monkeypatch):
     async def exercise():
         app = AgentApp()
         async with app.run_test() as pilot:
-            await pilot.press("ctrl+o")
+            await app.action_open_memory()
             await pilot.pause()
             screen = app.screen
             assert isinstance(screen, MemoryScreen)
@@ -1573,7 +1581,7 @@ def test_memory_picker_switch_to_existing_memory(monkeypatch):
 
         app = AgentApp()
         async with app.run_test() as pilot:
-            await pilot.press("ctrl+o")
+            await app.action_open_memory()
             await pilot.pause()
             screen = app.screen
             assert isinstance(screen, MemoryScreen)
@@ -1595,7 +1603,7 @@ def test_memory_picker_deletes_memory(monkeypatch):
         async with app.run_test() as pilot:
             set_active_memory_id(design["id"])
             app._refresh_system_prompt()
-            await pilot.press("ctrl+o")
+            await app.action_open_memory()
             await pilot.pause()
             screen = app.screen
             assert isinstance(screen, MemoryScreen)
@@ -1620,7 +1628,7 @@ def test_memory_picker_delete_is_immediate(monkeypatch):
 
         app = AgentApp()
         async with app.run_test() as pilot:
-            await pilot.press("ctrl+o")
+            await app.action_open_memory()
             await pilot.pause()
             screen = app.screen
             assert isinstance(screen, MemoryScreen)
@@ -1655,11 +1663,11 @@ def test_memory_picker_blocked_while_agent_running(monkeypatch):
     asyncio.run(exercise())
 
 
-def test_ctrl_r_opens_chat_picker(monkeypatch):
+def test_open_chats_action_opens_picker(monkeypatch):
     async def exercise():
         app = AgentApp()
         async with app.run_test() as pilot:
-            await pilot.press("ctrl+r")
+            await app.action_open_chats()
             await pilot.pause()
             assert len(app.screen_stack) == 2
             assert isinstance(app.screen, ChatScreen)
@@ -1717,7 +1725,7 @@ def test_chat_picker_switch_loads_chat(monkeypatch):
         async with app.run_test() as pilot:
             # Latest chat resumes on launch.
             assert app._chat_id == second["id"]
-            await pilot.press("ctrl+r")
+            await app.action_open_chats()
             await pilot.pause()
             screen = app.screen
             assert isinstance(screen, ChatScreen)
@@ -1741,7 +1749,7 @@ def test_chat_picker_new_starts_fresh_chat(monkeypatch):
             original_id = app._chat_id
             app.conversation.append({"role": "user", "content": "hi"})
             app._transcript.append({"role": "user", "content": "hi"})
-            await pilot.press("ctrl+r")
+            await app.action_open_chats()
             await pilot.pause()
             screen = app.screen
             assert isinstance(screen, ChatScreen)
@@ -1762,7 +1770,7 @@ def test_chat_picker_delete_requires_confirmation(monkeypatch):
 
         app = AgentApp()
         async with app.run_test() as pilot:
-            await pilot.press("ctrl+r")
+            await app.action_open_chats()
             await pilot.pause()
             screen = app.screen
             assert isinstance(screen, ChatScreen)
@@ -1815,7 +1823,7 @@ def test_deleting_active_chat_loads_next_latest(monkeypatch):
         async with app.run_test() as pilot:
             # The newest chat resumes on launch.
             assert app._chat_id == newer["id"]
-            await pilot.press("ctrl+r")
+            await app.action_open_chats()
             await pilot.pause()
             screen = app.screen
             assert isinstance(screen, ChatScreen)
@@ -2145,7 +2153,7 @@ def test_connection_screen_has_submit_and_cancel_only():
     async def exercise():
         app = AgentApp()
         async with app.run_test() as pilot:
-            await pilot.press("ctrl+p")
+            await app.action_open_connection()
             await pilot.pause()
             screen = app.screen
             assert screen.query_one("#submit-button")
@@ -2172,7 +2180,7 @@ def test_reasoning_effort_fades_for_unsupported_model(monkeypatch):
         try:
             app = AgentApp()
             async with app.run_test() as pilot:
-                await pilot.press("ctrl+p")
+                await app.action_open_connection()
                 await pilot.pause()
                 screen = app.screen
                 assert isinstance(screen, ConnectionScreen)
@@ -2215,7 +2223,7 @@ def test_reasoning_effort_restores_on_switch_back(monkeypatch):
         try:
             app = AgentApp()
             async with app.run_test() as pilot:
-                await pilot.press("ctrl+p")
+                await app.action_open_connection()
                 await pilot.pause()
                 screen = app.screen
                 assert isinstance(screen, ConnectionScreen)
@@ -2255,7 +2263,7 @@ def test_local_keeps_reasoning_effort_enabled(monkeypatch):
         try:
             app = AgentApp()
             async with app.run_test() as pilot:
-                await pilot.press("ctrl+p")
+                await app.action_open_connection()
                 await pilot.pause()
                 screen = app.screen
                 assert isinstance(screen, ConnectionScreen)
@@ -2302,7 +2310,7 @@ def test_connect_clamps_effort_for_unsupported_model(monkeypatch):
         try:
             app = AgentApp()
             async with app.run_test() as pilot:
-                await pilot.press("ctrl+p")
+                await app.action_open_connection()
                 await pilot.pause()
                 screen = app.screen
                 assert isinstance(screen, ConnectionScreen)
@@ -2349,7 +2357,7 @@ def test_connection_screen_restores_provider_and_effort(monkeypatch):
         try:
             app = AgentApp()
             async with app.run_test() as pilot:
-                await pilot.press("ctrl+p")
+                await app.action_open_connection()
                 await pilot.pause()
                 screen = app.screen
                 provider_select = screen.query_one("#provider-select", Select)
@@ -2391,7 +2399,7 @@ def test_connection_screen_preserves_saved_model_not_in_bundled_list(monkeypatch
         try:
             app = AgentApp()
             async with app.run_test() as pilot:
-                await pilot.press("ctrl+p")
+                await app.action_open_connection()
                 await pilot.pause()
                 screen = app.screen
                 provider_select = screen.query_one("#provider-select", Select)
@@ -2433,7 +2441,7 @@ def test_connection_screen_refresh_keeps_selected_live_model(monkeypatch):
         try:
             app = AgentApp()
             async with app.run_test() as pilot:
-                await pilot.press("ctrl+p")
+                await app.action_open_connection()
                 await pilot.pause()
                 screen = app.screen
                 provider_select = screen.query_one("#provider-select", Select)
@@ -2553,7 +2561,7 @@ def test_connection_screen_shows_local_url_field():
         try:
             app = AgentApp()
             async with app.run_test() as pilot:
-                await pilot.press("ctrl+p")
+                await app.action_open_connection()
                 await pilot.pause()
                 screen = app.screen
                 provider_select = screen.query_one("#provider-select", Select)
@@ -2602,7 +2610,7 @@ def test_connection_screen_preserves_each_provider_form(monkeypatch):
         try:
             app = AgentApp()
             async with app.run_test() as pilot:
-                await pilot.press("ctrl+p")
+                await app.action_open_connection()
                 await pilot.pause()
                 screen = app.screen
                 local_input = screen.query_one("#local-model-input", Input)
@@ -3062,7 +3070,7 @@ def test_connection_screen_shows_codex_sign_in_when_selected(monkeypatch, tmp_pa
     async def exercise():
         app = AgentApp()
         async with app.run_test() as pilot:
-            await pilot.press("ctrl+p")
+            await app.action_open_connection()
             await pilot.pause()
             screen = app.screen
             assert isinstance(screen, ConnectionScreen)
@@ -3114,7 +3122,7 @@ def test_connection_screen_codex_connect_requires_sign_in(monkeypatch, tmp_path)
     async def exercise():
         app = AgentApp()
         async with app.run_test() as pilot:
-            await pilot.press("ctrl+p")
+            await app.action_open_connection()
             await pilot.pause()
             screen = app.screen
             assert isinstance(screen, ConnectionScreen)
@@ -3178,7 +3186,7 @@ def test_connection_screen_codex_connects_when_signed_in(monkeypatch, tmp_path):
         async def exercise():
             app = AgentApp()
             async with app.run_test() as pilot:
-                await pilot.press("ctrl+p")
+                await app.action_open_connection()
                 await pilot.pause()
                 screen = app.screen
                 assert isinstance(screen, ConnectionScreen)
@@ -3368,7 +3376,7 @@ def test_connection_screen_openrouter_live_model_list(monkeypatch):
         async def exercise():
             app = AgentApp()
             async with app.run_test() as pilot:
-                await pilot.press("ctrl+p")
+                await app.action_open_connection()
                 await pilot.pause()
                 screen = app.screen
                 assert isinstance(screen, ConnectionScreen)
@@ -3432,7 +3440,7 @@ def test_connection_screen_model_search_filters_live_list(monkeypatch):
         async def exercise():
             app = AgentApp()
             async with app.run_test() as pilot:
-                await pilot.press("ctrl+p")
+                await app.action_open_connection()
                 await pilot.pause()
                 screen = app.screen
                 assert isinstance(screen, ConnectionScreen)
@@ -3491,7 +3499,7 @@ def test_chat_picker_search_filters(monkeypatch):
         app = AgentApp()
         async with app.run_test() as pilot:
             app._load_chat_into_ui(alpha["id"])
-            await pilot.press("ctrl+r")
+            await app.action_open_chats()
             await pilot.pause()
             screen = app.screen
             assert isinstance(screen, ChatScreen)
@@ -3519,7 +3527,7 @@ def test_memory_picker_search_filters(monkeypatch):
 
         app = AgentApp()
         async with app.run_test() as pilot:
-            await pilot.press("ctrl+o")
+            await app.action_open_memory()
             await pilot.pause()
             screen = app.screen
             assert isinstance(screen, MemoryScreen)
