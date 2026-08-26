@@ -11,11 +11,13 @@ from rich.panel import Panel
 from rich.segment import Segment
 from textual.strip import Strip
 from rich.text import Text
+from textual import events
 from textual.containers import Horizontal, Vertical
 from textual.css.query import NoMatches
 from textual.geometry import Size
 from textual.message import Message
-from textual.widgets import Label, RichLog, TextArea
+from textual.widgets import Label, OptionList, RichLog, TextArea
+from textual.widgets.option_list import Option
 from textual_image.widget import SixelImage as TerminalImage
 
 from remie.agent import (
@@ -27,6 +29,11 @@ from remie.agent import (
 # from remie.agent import strip_protocol_lines
 from remie.tui.contracts import is_agent_app
 from remie.tui.helpers import _format_tokens, _is_tmux
+from remie.tui.slash_commands import (
+    SlashCommand,
+    resolve_slash_command,
+    slash_command_matches,
+)
 
 
 class StreamingRichLog(RichLog):
@@ -390,6 +397,115 @@ class PromptSelectionCompleted(Message):
         self.text = text
 
 
+class SlashCommandChosen(Message):
+    """Posted when a slash command is chosen from the completion popup."""
+
+    def __init__(self, command: SlashCommand) -> None:
+        super().__init__()
+        self.command = command
+
+
+class SlashCommandPopup(OptionList):
+    """Filtered command completions displayed immediately above the prompt."""
+
+    def __init__(self) -> None:
+        super().__init__(id="slash-command-popup")
+        self.display = False
+        self._commands: tuple[SlashCommand, ...] = ()
+        self._auto_pending: str | None = None
+
+    @staticmethod
+    def _option(command: SlashCommand) -> Option:
+        label = Text(command.trigger, style="bold")
+        label.append(f"  {command.description}", style="dim")
+        return Option(label, id=command.name)
+
+    def _set_open(self, open_: bool) -> None:
+        self.display = open_
+        input_row = self.parent.parent if self.parent is not None else None
+        if input_row is not None:
+            input_row.set_class(open_, "slash-open")
+            try:
+                status = input_row.query_one("#status", StatusIndicator)
+            except NoMatches:
+                pass
+            else:
+                # Match the popup's intrinsic height so Remie stays aligned
+                # with the bottom prompt instead of the top of the expanded row.
+                popup_height = min(len(self._commands) + 2, 6) if open_ else 0
+                status.styles.margin = (popup_height, 0, 0, 0)
+
+    def close(self) -> None:
+        """Hide the popup and return the input row to its compact height."""
+        self._auto_pending = None
+        self._set_open(False)
+
+    def _auto_choose(self, command: SlashCommand) -> None:
+        """Run a command only if the prompt still contains that exact trigger."""
+        if self._auto_pending != command.name:
+            return
+        try:
+            prompt = self.screen.query_one("#prompt", TextArea)
+        except NoMatches:
+            return
+        current = resolve_slash_command(prompt.text)
+        if current != command:
+            self._auto_pending = None
+            return
+        self._auto_pending = None
+        self.close()
+        self.post_message(SlashCommandChosen(command))
+
+    def update_for(self, text: str) -> bool:
+        """Filter completions and auto-run a fully typed command."""
+        self._commands = slash_command_matches(text)
+        self.set_options([self._option(command) for command in self._commands])
+        self._set_open(bool(self._commands))
+        self.highlighted = 0 if self._commands else None
+        exact = resolve_slash_command(text)
+        if exact is not None and self._auto_pending != exact.name:
+            self._auto_pending = exact.name
+            self.call_later(self._auto_choose, exact)
+        elif exact is None:
+            self._auto_pending = None
+        return self.display
+
+    @property
+    def highlighted_command(self) -> SlashCommand | None:
+        index = self.highlighted
+        if index is None or not 0 <= index < len(self._commands):
+            return None
+        return self._commands[index]
+
+    def choose_highlighted(self) -> bool:
+        command = self.highlighted_command
+        if command is None:
+            return False
+        self.close()
+        self.post_message(SlashCommandChosen(command))
+        return True
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        if event.option_list is not self:
+            return
+        event.stop()
+        command = next(
+            (command for command in self._commands if command.name == event.option_id),
+            None,
+        )
+        if command is not None:
+            self.close()
+            self.post_message(SlashCommandChosen(command))
+
+    def _on_mouse_move(self, event: events.MouseMove) -> None:
+        """Make the keyboard selection follow the option under the pointer."""
+        super()._on_mouse_move(event)
+        hovered = event.style.meta.get("option")
+        if isinstance(hovered, int) and 0 <= hovered < len(self._commands):
+            if not self.options[hovered].disabled:
+                self.highlighted = hovered
+
+
 class PromptTextArea(TextArea):
     """Multiline prompt: Enter submits, Shift+Enter / Ctrl+J insert newlines."""
 
@@ -409,7 +525,40 @@ class PromptTextArea(TextArea):
             self.post_message(PromptSelectionCompleted(selected_text))
             self.move_cursor(selection_end, select=False)
 
+    def _slash_popup(self) -> SlashCommandPopup | None:
+        try:
+            return self.screen.query_one("#slash-command-popup", SlashCommandPopup)
+        except NoMatches:
+            return None
+
     async def on_key(self, event) -> None:
+        popup = self._slash_popup()
+        if popup is not None and popup.display:
+            if event.key == "escape":
+                event.stop()
+                event.prevent_default()
+                popup.close()
+                return
+            if event.key in {"up", "down"}:
+                event.stop()
+                event.prevent_default()
+                if event.key == "up":
+                    popup.action_cursor_up()
+                else:
+                    popup.action_cursor_down()
+                return
+            if event.key == "tab":
+                event.stop()
+                event.prevent_default()
+                command = popup.highlighted_command
+                if command is not None:
+                    self.load_text(command.trigger)
+                    self.move_cursor(self.document.end, center=False)
+                return
+            if event.key == "enter" and popup.choose_highlighted():
+                event.stop()
+                event.prevent_default()
+                return
         if event.key == "enter":
             event.stop()
             event.prevent_default()
@@ -487,4 +636,20 @@ class PromptBox(Vertical):
 
     def compose(self):
         yield ModelRow(id="model-row")
+        yield SlashCommandPopup()
         yield PromptTextArea()
+
+    def on_text_area_changed(self, event: TextArea.Changed) -> None:
+        if event.text_area.id != "prompt":
+            return
+        self.query_one(SlashCommandPopup).update_for(event.text_area.text)
+
+    def on_slash_command_chosen(self, event: SlashCommandChosen) -> None:
+        event.stop()
+        prompt = self.query_one(PromptTextArea)
+        prompt.load_text("")
+        prompt.focus()
+        app = self.app
+        dispatch = getattr(app, "_dispatch_slash_command", None)
+        if is_agent_app(app) and callable(dispatch):
+            dispatch(event.command.name)

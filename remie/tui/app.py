@@ -77,6 +77,8 @@ from remie.tui.screens.ask_user import AskUserScreen
 from remie.tui.screens.chats import ChatScreen
 from remie.tui.screens.connection import ConnectionScreen
 from remie.tui.screens.memory import MemoryScreen
+from remie.tui.screens.models import ModelScreen
+from remie.tui.slash_commands import is_slash_command_token, resolve_slash_command
 from remie.tui.streaming import StreamingPresentationMixin
 from remie.tui.widgets import (
     InputRow,
@@ -374,6 +376,17 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
         user_input = event.text.strip()
         if not user_input:
             return
+        command = resolve_slash_command(user_input)
+        if command is not None:
+            self._dispatch_slash_command(command.name)
+            return
+        if is_slash_command_token(user_input):
+            self.notify(
+                f"Unknown command: {user_input}",
+                title="Slash commands",
+                severity="warning",
+            )
+            return
         if user_input.lower() in {"exit", "quit", "keluar"}:
             self.exit()
             return
@@ -394,6 +407,25 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
         self._input_queue.put_nowait(content)
         if not self._agent_running:
             _ = self.message_worker()
+
+    def _dispatch_slash_command(self, name: str) -> None:
+        """Open a local command screen without adding a conversation turn."""
+        if self._agent_running:
+            self.notify(
+                "Slash commands are unavailable while the agent is working.",
+                title="Agent busy",
+                severity="warning",
+            )
+            return
+        screens = {
+            "memories": MemoryScreen,
+            "chats": ChatScreen,
+            "connect": ConnectionScreen,
+            "models": ModelScreen,
+        }
+        screen_type = screens.get(name)
+        if screen_type is not None:
+            self.push_screen(screen_type())
 
     @work(exclusive=True)
     async def message_worker(self) -> None:
@@ -909,6 +941,12 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
         if self._agent_running:
             return
         await self.push_screen(ChatScreen())
+
+    async def action_open_models(self) -> None:
+        """Open the model picker. Ignored while the agent is busy."""
+        if self._agent_running:
+            return
+        await self.push_screen(ModelScreen())
 
 
 def main() -> None:

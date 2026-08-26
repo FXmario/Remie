@@ -114,6 +114,8 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "ChatScreen": ("remie.tui.screens", "ChatScreen"),
     "ConnectionScreen": ("remie.tui.screens", "ConnectionScreen"),
     "MemoryScreen": ("remie.tui.screens", "MemoryScreen"),
+    "ModelScreen": ("remie.tui.screens", "ModelScreen"),
+    "SlashCommandPopup": ("remie.tui.widgets", "SlashCommandPopup"),
 }
 
 __all__ = sorted(_EXPORTS)

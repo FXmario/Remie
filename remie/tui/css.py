@@ -30,6 +30,34 @@ Screen {
     width: 1fr;
 }
 
+#input-row.slash-open {
+    height: auto;
+}
+
+#input-row.slash-open #prompt-box {
+    height: auto;
+}
+
+#slash-command-popup {
+    width: 100%;
+    height: auto;
+    max-height: 6;
+    padding: 0;
+    border: round $primary;
+    background: $surface;
+    display: none;
+}
+
+#slash-command-popup > .option-list--option {
+    padding: 0 1;
+}
+
+#slash-command-popup > .option-list--option-highlighted {
+    color: $text;
+    background: $primary 35%;
+    text-style: bold;
+}
+
 #input-row {
     height: 5;
     width: 100%;
