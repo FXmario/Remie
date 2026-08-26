@@ -10,7 +10,7 @@ from rich.syntax import Syntax
 from rich.text import Text
 from textual import events
 from textual.widgets import Button, Input, Label, OptionList, Select
-from textual.widgets import Switch
+from textual.widgets import RadioButton, RadioSet
 
 import remie.tui as tui
 import remie.tui.app as tui_app
@@ -2570,7 +2570,9 @@ def test_connection_screen_shows_local_url_field():
                 assert screen.query_one("#local-model-input").display is True
                 assert screen.query_one("#local-model-input").value == "local-model"
                 assert screen.query_one("#verify-ssl-label").display is True
-                assert screen.query_one("#verify-ssl-switch", Switch).display is True
+                assert screen.query_one("#verify-ssl-radio", RadioSet).display is True
+                assert screen.query_one("#verify-ssl-true", RadioButton).value is False
+                assert screen.query_one("#verify-ssl-false", RadioButton).value is True
         finally:
             configure_openai(
                 previous.base_url,

@@ -6,7 +6,7 @@ from rich.text import Text
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Button, Input, Label, Select, Switch
+from textual.widgets import Button, Input, Label, RadioButton, RadioSet, Select
 
 from remie import codex_auth
 from remie.agent import (
@@ -191,10 +191,14 @@ class ConnectionScreen(ModalScreen):
                     id="verify-ssl-label",
                     classes="field-label",
                 )
-                yield Switch(
-                    value=current.verify_ssl,
-                    id="verify-ssl-switch",
-                    animate=False,
+                yield RadioSet(
+                    RadioButton(
+                        "True", value=current.verify_ssl, id="verify-ssl-true"
+                    ),
+                    RadioButton(
+                        "False", value=not current.verify_ssl, id="verify-ssl-false"
+                    ),
+                    id="verify-ssl-radio",
                 )
             with Horizontal(id="connection-actions"):
                 yield Button("Cancel", id="cancel-button")
@@ -486,10 +490,10 @@ class ConnectionScreen(ModalScreen):
         reasoning_select.display = has_provider
         reasoning_label.display = has_provider
         verify_label = self.query_one("#verify-ssl-label", Label)
-        verify_switch = self.query_one("#verify-ssl-switch", Switch)
+        verify_radio = self.query_one("#verify-ssl-radio", RadioSet)
         verify_label.display = is_local
-        verify_switch.display = is_local
-        verify_switch.disabled = not is_local
+        verify_radio.display = is_local
+        verify_radio.disabled = not is_local
         account_label = self.query_one("#codex-account-label", Label)
         signin_button = self.query_one("#codex-signin-button", Button)
         signout_button = self.query_one("#codex-signout-button", Button)
@@ -535,6 +539,15 @@ class ConnectionScreen(ModalScreen):
             return
         self._connect()
 
+    def _verify_ssl_value(self) -> bool:
+        """Return the boolean selected by the local SSL radio buttons."""
+        return self.query_one("#verify-ssl-true", RadioButton).value
+
+    def _set_verify_ssl_value(self, value: bool) -> None:
+        """Select the radio button corresponding to an SSL preference."""
+        button_id = "verify-ssl-true" if value else "verify-ssl-false"
+        self.query_one(f"#{button_id}", RadioButton).value = True
+
     def _capture_profile(self) -> None:
         """Keep edits made to the current provider before switching away."""
         provider = self._active_provider
@@ -554,7 +567,7 @@ class ConnectionScreen(ModalScreen):
             model,
             provider,
             effort,
-            self.query_one("#verify-ssl-switch", Switch).value
+            self._verify_ssl_value()
             if provider == "local"
             else True,
         )
@@ -566,7 +579,7 @@ class ConnectionScreen(ModalScreen):
         self.query_one("#local-model-input", Input).value = profile.model
         reasoning = self.query_one("#reasoning-effort-select", Select)
         reasoning.value = profile.reasoning_effort
-        self.query_one("#verify-ssl-switch", Switch).value = profile.verify_ssl
+        self._set_verify_ssl_value(profile.verify_ssl)
 
     def _update_reasoning_fields(self, selected_model: str | None = None) -> None:
         """Enable or fade the reasoning-effort picker for the selected model.
@@ -693,7 +706,7 @@ class ConnectionScreen(ModalScreen):
                 self.notify("Enter the local model name", severity="error")
                 return
         verify_ssl = (
-            self.query_one("#verify-ssl-switch", Switch).value
+            self._verify_ssl_value()
             if provider == "local"
             else True
         )

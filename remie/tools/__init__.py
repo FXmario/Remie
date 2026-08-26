@@ -13,7 +13,7 @@ from remie.tools.common import _env_int
 
 # Recomputed on importlib.reload so tests can override REMIE_COMMAND_TIMEOUT
 # via the environment and reload the package (mirrors the old module behavior).
-RUN_COMMAND_TIMEOUT = _env_int("REMIE_COMMAND_TIMEOUT", 30)
+RUN_COMMAND_TIMEOUT = _env_int("REMIE_COMMAND_TIMEOUT", 180)
 
 from remie.tools.ask_user import ask_user_tool
 from remie.tools.chats import (

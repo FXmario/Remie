@@ -329,7 +329,7 @@ class TestRunCommandTool:
             "remie.tools.subprocess.run", fake_run, raising=False
         )
         result = run_command_tool("sleep 60")
-        assert "[command timed out after 30s]" in result["stderr"]
+        assert "[command timed out after 180s]" in result["stderr"]
         assert "Do not retry the exact same command unchanged" in result["stderr"]
 
     def test_timeout_override_via_env(self, monkeypatch):
@@ -362,7 +362,7 @@ class TestRunCommandTool:
         monkeypatch.setenv("REMIE_COMMAND_TIMEOUT", "not-a-number")
         reloaded = importlib.reload(tools)
         try:
-            assert reloaded.RUN_COMMAND_TIMEOUT == 30
+            assert reloaded.RUN_COMMAND_TIMEOUT == 180
         finally:
             importlib.reload(tools)
 

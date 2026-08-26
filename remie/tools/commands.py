@@ -17,7 +17,7 @@ def _env_int(name: str, default: int) -> int:
 
 #: Maximum seconds a shell command may run before it is killed. Configurable via
 #: REMIE_COMMAND_TIMEOUT (e.g. long-running test suites).
-RUN_COMMAND_TIMEOUT = _env_int("REMIE_COMMAND_TIMEOUT", 30)
+RUN_COMMAND_TIMEOUT = _env_int("REMIE_COMMAND_TIMEOUT", 180)
 RUN_COMMAND_MAX_OUTPUT = 30_000
 TIMED_OUT_EXIT_CODE = 124
 
