@@ -49,6 +49,7 @@ _EXPORTS: dict[str, tuple[str, str]] = {
             "PROMPT_HISTORY_LIMIT",
             "PROVIDER_BASE_URLS",
             "REASONING_EFFORTS",
+            "STATUS_ANIMATION_MAX_FPS",
             "STREAM_PREVIEW_MAX_CHARS",
             "STREAM_RENDER_COALESCE_WINDOW",
             "STREAM_UPDATE_CHARS_PER_SECOND",

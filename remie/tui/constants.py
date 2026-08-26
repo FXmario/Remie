@@ -18,6 +18,7 @@ MAX_EMPTY_RESPONSE_RETRIES = int(
 )
 COMPACTION_CONTEXT_RATIO = 0.8
 COMPACTION_KEEP_MESSAGES = 10
+STATUS_ANIMATION_MAX_FPS = 30
 
 # The streaming preview re-renders the accumulated Markdown, which is
 # expensive (parse + Pygments + layout). Two mitigations keep the UI

@@ -27,6 +27,7 @@ from remie.agent import (
 )
 
 # from remie.agent import strip_protocol_lines
+from remie.tui.constants import STATUS_ANIMATION_MAX_FPS
 from remie.tui.contracts import is_agent_app
 from remie.tui.helpers import _format_tokens, _is_tmux
 from remie.tui.slash_commands import (
@@ -174,7 +175,12 @@ def _load_status_gif(name: str) -> tuple[list[PILImage.Image], list[float]]:
             durations = []
             for frame in ImageSequence.Iterator(image):
                 frames.append(frame.convert("RGBA").copy())
-                durations.append(max(0.1, frame.info.get("duration", 100) / 1000))
+                durations.append(
+                    max(
+                        1 / STATUS_ANIMATION_MAX_FPS,
+                        frame.info.get("duration", 100) / 1000,
+                    )
+                )
     except Exception:
         # Any decode failure (corrupt file, PIL limits, unexpected errors)
         # degrades to "no animation" instead of preventing the TUI launch.

@@ -184,6 +184,7 @@ def test_status_gifs_load_with_frame_timing():
     assert len(frames) == len(durations)
     assert all(frame.mode == "RGBA" for frame in frames)
     assert all(duration > 0 for duration in durations)
+    assert all(duration >= 1 / tui.STATUS_ANIMATION_MAX_FPS for duration in durations)
 
 
 def test_status_indicator_starts_ready():
