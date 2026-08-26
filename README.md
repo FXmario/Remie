@@ -21,8 +21,9 @@ profile to the shared Remie configuration file.
 - Async agent loop — the UI stays responsive while the LLM responds and tools run
 - Tools: `read_file`, `list_files`, `glob_files`, `tree_files`, `edit_file`, `run_command`, `ask_user`, `memory`, `web_fetch`, `web_search`
 - **Web access via curl** — `web_fetch` fetches any http(s) URL (custom method, headers, body; HTML is reduced to readable text, other types returned raw, or saved to disk with `save_to`), and `web_search` searches DuckDuckGo's HTML endpoint with automatic Bing fallback when DuckDuckGo is unreachable — both no API key needed. Responses are size-capped and truncated before they reach the context window; timeout configurable with `REMIE_WEB_TIMEOUT`
-- **Agent memory (durable notes)** — the agent can append durable facts, decisions, user preferences, and open tasks to the active memory with the `memory` tool; press `Ctrl+O` to switch to or delete an older memory. The active memory is remembered across launches and injected into the system prompt. When a long task nears the context window, dropped messages are summarized into a compact note instead of being silently truncated.
-- **Chat history** — every conversation is saved as a named chat under `.remie/chats/`. Launching Remie resumes the most recently used chat automatically; `Ctrl+R` opens a chat picker to switch to an older chat, start a new one, or delete one. A chat is auto-titled after its first completed task; `Ctrl+L` starts a new chat while keeping the previous one. Existing `.remie/session.json` files from older versions are imported as a chat on first launch.
+- **Agent memory (durable notes)** — the agent can append durable facts, decisions, user preferences, and open tasks to the active memory with the `memory` tool; `/memories` opens the picker to switch to or delete an older memory. The active memory is remembered across launches and injected into the system prompt. When a long task nears the context window, dropped messages are summarized into a compact note instead of being silently truncated.
+- **Chat history** — every conversation is saved as a named chat under `.remie/chats/`. Launching Remie resumes the most recently used chat automatically; `/chats` opens a picker to switch to an older chat, start a new one, or delete one. A chat is auto-titled after its first completed task; `Ctrl+L` starts a new chat while keeping the previous one. Existing `.remie/session.json` files from older versions are imported as a chat on first launch.
+- **Slash commands** — type `/` to open an anchored command menu for `/memories`, `/chats`, `/connect`, and `/models`. The first match is highlighted automatically; use Up/Down, Tab, Enter, hover, or click to choose. A completely typed command runs immediately and is handled locally rather than sent to the model.
 - **Codex (ChatGPT Plus/Pro)** — sign in with a ChatGPT subscription via the native OAuth flow and use Codex models (gpt-5.6-sol/terra/luna, gpt-5.5, …) without an API key, the Codex CLI, or npm
 - **OpenRouter** — connect with an OpenRouter API key to any model in their catalog; native function calling over plain httpx streaming
 - **Command safety** — `run_command` blocks destructive commands before they execute (`rm -rf /`, `rm -rf ~`, disk formatting/partitioning, shutdown/reboot, `chmod -R`/`chown -R` on `/` or `~`, fork bombs, `curl | sh`, `dd` to raw block devices, ...) and shows a `Blocked command` line in the log with the reason
@@ -87,8 +88,8 @@ subscription service for open coding models. It uses the OpenAI-compatible
 endpoint `https://opencode.ai/zen/go/v1` (chat completions), so it works with
 the same client.
 
-Open the connection picker with `Ctrl+P` or by clicking the model name next to
-the input. From there you can:
+Open the connection picker with `/connect` (an optional trailing slash is
+accepted) or by clicking the model badge next to the input. From there you can:
 
 - Choose **Local (llama.cpp)** to use your environment-configured server
 - Choose **OpenCode Go**, paste your API key (from [opencode.ai/auth](https://opencode.ai/auth)), and pick a model — the model list is fetched live, falling back to a bundled list
@@ -102,9 +103,10 @@ name.
 **Model names are prettified everywhere**: raw ids like `z-ai/glm-5.3` render
 as "GLM 5.3" with a dimmed vendor label, catalogs that ship display metadata
 (OpenRouter, Codex) use it directly, `:free` ids get a green **Free** badge,
-and the stored value stays the raw id. Every dropdown — provider, model,
-reasoning effort, chats (`Ctrl+R`), memories (`Ctrl+O`) — has a filter box;
-type to narrow by name or id.
+and the stored value stays the raw id. Provider, model, reasoning-effort,
+chat (`/chats`), and memory (`/memories`) pickers include filtering; type to
+narrow by name or id. Use `/models` for a dedicated model-only picker that
+preserves the active provider and connection settings.
 
 Remie remembers each provider's last-used values. Reopening the connection picker
 preselects the active provider, and switching providers restores that provider's
@@ -127,7 +129,7 @@ The active connection (provider, base URL, API key, model, and reasoning effort)
 
 Remie can also run on a ChatGPT subscription through the same backend the Codex
 CLI uses — no API key, no Node.js, no `codex` install. Open the connection
-picker with `Ctrl+P`, choose **Codex (ChatGPT Plus/Pro)**, and press **Sign in
+picker with `/connect`, choose **Codex (ChatGPT Plus/Pro)**, and press **Sign in
 with ChatGPT**:
 
 - Remie opens your browser at `auth.openai.com` (PKCE flow) and receives the
@@ -155,7 +157,7 @@ so the browser must reach the machine running Remie (use
 
 ### OpenRouter
 
-Pick **OpenRouter** in the connection picker (`Ctrl+P`), paste an API key from
+Pick **OpenRouter** in the connection picker (`/connect`), paste an API key from
 [openrouter.ai/keys](https://openrouter.ai/keys), and choose a model. The model
 dropdown loads OpenRouter's live catalog (public endpoint — it works before a
 key is entered) with each model's real context window driving context
@@ -183,8 +185,9 @@ uv run main.py
 ```
 
 Press `Ctrl+G` to show or hide the status image beside the prompt. Outside
-tmux it is animated; inside tmux it uses a static frame. The preference is
-saved in Remie's configuration and restored on the next launch.
+tmux it is animated at no more than 30 FPS; inside tmux it uses a static frame.
+The preference is saved in Remie's configuration and restored on the next
+launch.
 
 Remie starts in **System** theme mode. This uses ANSI colors so the terminal's
 background and transparency remain visible. Outside tmux, Remie queries the
@@ -195,15 +198,29 @@ opaque Textual palettes.
 
 Type a message at the bottom input and press Enter. The agent will reason (`Thinking:`), call tools when needed, show the results, and reply — with the response streaming in as it is generated.
 
+### Slash commands
+
+Type `/` in an empty prompt to show the command menu. The menu remains attached
+to the prompt, highlights the first match, and can be navigated with Up/Down.
+Tab completes the highlighted command, Enter runs it, mouse hover moves the
+highlight, and clicking runs the selected command. Typing a complete command
+runs it immediately. Slash commands are local UI actions: they are not added to
+chat history or sent to the model.
+
+| Command | Action |
+| ------- | ------ |
+| `/memories` | Open the memory picker |
+| `/chats` | Open the saved-chat picker |
+| `/connect` | Open provider and connection settings (`/connect/` also works) |
+| `/models` | Open the dedicated model picker for the active provider |
+
 ### Keybindings
 
 | Key       | Action      |
 | --------- | ----------- |
 | `Ctrl+C`  | Copy selected text, or quit if nothing is selected |
 | `Ctrl+L`  | Start a new chat (the previous one is kept in history) |
-| `Ctrl+P`  | Open connection/model picker |
-| `Ctrl+O`  | Open memory picker (switch/delete active memory) |
-| `Ctrl+R`  | Open chat picker (switch/new/delete saved chats) |
+| `Ctrl+G`  | Show or hide the status image |
 | `Ctrl+T`  | Cycle System → Light → Dark themes |
 | `Esc`     | Stop the agent while it is running |
 | `Enter`   | Send the message |
