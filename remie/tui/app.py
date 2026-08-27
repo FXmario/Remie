@@ -78,6 +78,7 @@ from remie.tui.screens.chats import ChatScreen
 from remie.tui.screens.connection import ConnectionScreen
 from remie.tui.screens.memory import MemoryScreen
 from remie.tui.screens.models import ModelScreen
+from remie.tui.screens.open import OpenScreen
 from remie.tui.slash_commands import is_slash_command_token, resolve_slash_command
 from remie.tui.streaming import StreamingPresentationMixin
 from remie.tui.widgets import (
@@ -140,6 +141,7 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
     BINDINGS: ClassVar[list[BindingType]] = [
         ("ctrl+c,super+c", "copy_or_quit", "Copy/Quit"),
         ("ctrl+l", "new_chat", "New chat"),
+        ("ctrl+p", "open_management", "Open"),
         ("ctrl+g", "toggle_status_image", "Toggle status image"),
         ("ctrl+t", "toggle_theme", "Toggle theme"),
         ("escape", "stop_agent", "Stop agent"),
@@ -920,6 +922,12 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
             self._input_queue.put_nowait(None)
             if self._agent_task is not None:
                 self._agent_task.cancel()
+
+    async def action_open_management(self) -> None:
+        """Open Chats, Memories, Providers, and Models in one tabbed modal."""
+        if self._agent_running:
+            return
+        await self.push_screen(OpenScreen())
 
     async def action_open_connection(self) -> None:
         """Open the connection/model picker. Ignored while the agent is busy."""

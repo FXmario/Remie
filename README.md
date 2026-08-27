@@ -34,7 +34,8 @@ profile to the shared Remie configuration file.
 - Prompt history — `Up`/`Down` arrows recall previous prompts, like a shell
 - Paste images from the clipboard with `Ctrl+V` and send them to vision-capable models
 - Thinking step before every tool call; tool calls are announced as `Agent calling <tool>`, kept in the conversation history
-- Tool results are shown as readable `Tool result` panels in the log after each call — file contents (`read_file`) are syntax-highlighted by file extension, and `run_command` output is smart-highlighted when it looks like JSON, a unified diff, or a Python traceback (raw JSON still available with `REMIE_DEBUG=1`)
+- Tool results are shown as readable `Tool result` panels in the log after each call — JSON results are pretty-printed and syntax-highlighted, file contents (`read_file`) are highlighted by extension, and `run_command` output is smart-highlighted when it looks like JSON, a unified diff, or a Python traceback (raw JSON still available with `REMIE_DEBUG=1`)
+- **Unified management screen** — press `Ctrl+P` to open the existing Chats, Memories, Providers, and Models interfaces together as tabs; the standalone slash-command modals remain available
 
 ## Requirements
 
@@ -106,7 +107,9 @@ as "GLM 5.3" with a dimmed vendor label, catalogs that ship display metadata
 and the stored value stays the raw id. Provider, model, reasoning-effort,
 chat (`/chats`), and memory (`/memories`) pickers include filtering; type to
 narrow by name or id. Use `/models` for a dedicated model-only picker that
-preserves the active provider and connection settings.
+preserves the active provider and connection settings; it also shows reasoning
+effort whenever the highlighted model supports it. Press `Ctrl+P` to access the
+same Chats, Memories, Providers, and Models layouts in one tabbed modal.
 
 Remie remembers each provider's last-used values. Reopening the connection picker
 preselects the active provider, and switching providers restores that provider's
@@ -220,6 +223,7 @@ chat history or sent to the model.
 | --------- | ----------- |
 | `Ctrl+C`  | Copy selected text, or quit if nothing is selected |
 | `Ctrl+L`  | Start a new chat (the previous one is kept in history) |
+| `Ctrl+P`  | Open Chats, Memories, Providers, and Models in tabs |
 | `Ctrl+G`  | Show or hide the status image |
 | `Ctrl+T`  | Cycle System → Light → Dark themes |
 | `Esc`     | Stop the agent while it is running |

@@ -216,6 +216,7 @@ class ConnectionScreen(ModalScreen):
 
     def on_mount(self) -> None:
         provider = self.query_one("#provider-select", PickerList).value
+        standalone = self.parent is None or self.parent.__class__.__name__ != "TabPane"
         # Seed the master option lists for the searchable dropdowns.
         self._store_options(
             "provider-select",
@@ -243,16 +244,18 @@ class ConnectionScreen(ModalScreen):
             self.query_one("#api-key-input", Input).focus()
         if provider == "opencode-go":
             api_key = self.query_one("#api-key-input", Input).value.strip()
-            if api_key:
+            if api_key and standalone:
                 self.run_worker(
                     self._refresh_models(api_key, str(provider)), exclusive=False
                 )
         if provider == "codex":
             self._refresh_codex_models()
-            self.run_worker(self._prefetch_codex_models(), exclusive=False)
+            if standalone:
+                self.run_worker(self._prefetch_codex_models(), exclusive=False)
         if provider == "openrouter":
             self._refresh_openrouter_models()
-            self.run_worker(self._prefetch_openrouter_models(), exclusive=False)
+            if standalone:
+                self.run_worker(self._prefetch_openrouter_models(), exclusive=False)
 
     def _store_options(
         self, select_id: str, models: "list[str | ModelInfo | tuple[Text, str]]"

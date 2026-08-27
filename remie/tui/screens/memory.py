@@ -164,7 +164,8 @@ class MemoryScreen(ModalScreen):
             select.value = assigned
 
     def on_mount(self) -> None:
-        self.query_one("#memory-select", Select).focus()
+        if self.parent is None or self.parent.__class__.__name__ != "TabPane":
+            self.query_one("#memory-select", Select).focus()
 
     def _selected_id(self) -> str | None:
         value = self.query_one("#memory-select", Select).value

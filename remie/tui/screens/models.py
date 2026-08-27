@@ -4,7 +4,7 @@ from rich.text import Text
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Button, Input, Label, OptionList
+from textual.widgets import Button, Input, Label, OptionList, Select
 from textual.widgets.option_list import Option
 
 from remie import codex_auth
@@ -22,6 +22,7 @@ from remie.agent import (
     supports_reasoning_effort,
 )
 from remie.model_names import ModelInfo
+from remie.tui.constants import REASONING_EFFORTS
 from remie.tui.contracts import is_agent_app
 from remie.tui.helpers import _model_option
 from remie.tui.screens.connection_services import ConnectionServices
@@ -40,7 +41,7 @@ class ModelScreen(ModalScreen):
 
     #model-dialog {
         width: 64;
-        height: 22;
+        height: 26;
         max-width: 94%;
         max-height: 86%;
         padding: 1 2;
@@ -65,6 +66,16 @@ class ModelScreen(ModalScreen):
 
     #model-picker-list {
         height: 1fr;
+        margin-bottom: 1;
+    }
+
+    #model-reasoning-label {
+        height: 1;
+        color: $text-muted;
+    }
+
+    #model-reasoning-select {
+        width: 100%;
         margin-bottom: 1;
     }
 
@@ -127,6 +138,17 @@ class ModelScreen(ModalScreen):
                 id="model-picker-search",
             )
             yield OptionList(id="model-picker-list")
+            yield Label("Reasoning effort", id="model-reasoning-label")
+            yield Select(
+                [(effort.title(), effort) for effort in REASONING_EFFORTS],
+                value=(
+                    self._config.reasoning_effort
+                    if self._config.reasoning_effort in REASONING_EFFORTS
+                    else "medium"
+                ),
+                allow_blank=False,
+                id="model-reasoning-select",
+            )
             with Horizontal(id="model-picker-actions"):
                 yield Button("Cancel", id="model-picker-cancel")
                 yield Button(
@@ -136,8 +158,11 @@ class ModelScreen(ModalScreen):
     def on_mount(self) -> None:
         self._set_models(self._fallback_models())
         search = self.query_one("#model-picker-search", Input)
-        search.focus()
-        if self._config.provider != "local":
+        standalone = self.parent is None or self.parent.__class__.__name__ != "TabPane"
+        if standalone:
+            search.focus()
+        self._update_reasoning_control()
+        if standalone and self._config.provider != "local":
             self.run_worker(self._load_live_models(), exclusive=False)
 
     def _set_models(self, models: "list[str | ModelInfo]") -> None:
@@ -178,6 +203,18 @@ class ModelScreen(ModalScreen):
             else visible[0][1]
         )
         model_list.highlighted = model_list.get_option_index(selected_id)
+        self._update_reasoning_control(selected_id)
+
+    def _update_reasoning_control(self, model: str | None = None) -> None:
+        """Show reasoning effort only when the highlighted model supports it."""
+        if not self.is_mounted:
+            return
+        selected = model or self._selected_model()
+        supported = bool(selected) and supports_reasoning_effort(
+            selected, self._config.provider
+        )
+        self.query_one("#model-reasoning-label", Label).display = supported
+        self.query_one("#model-reasoning-select", Select).display = supported
 
     async def _load_live_models(self) -> None:
         try:
@@ -222,7 +259,8 @@ class ModelScreen(ModalScreen):
         if not model:
             self.notify("Choose a model first", severity="warning")
             return
-        effort = self._config.reasoning_effort
+        reasoning = self.query_one("#model-reasoning-select", Select).value
+        effort = reasoning if isinstance(reasoning, str) else self._config.reasoning_effort
         if not supports_reasoning_effort(model, self._config.provider):
             effort = "off"
         config = set_active_connection(
@@ -243,6 +281,15 @@ class ModelScreen(ModalScreen):
         self.app.notify(
             f"Switched to {_model_option(model)[0].plain}", title="Model updated"
         )
+
+    def on_option_list_option_highlighted(
+        self, event: OptionList.OptionHighlighted
+    ) -> None:
+        if event.option_list.id == "model-picker-list":
+            option_id = event.option.id if event.option is not None else None
+            self._update_reasoning_control(
+                str(option_id) if option_id is not None else None
+            )
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         if event.option_list.id == "model-picker-list":

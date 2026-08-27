@@ -62,21 +62,24 @@ def _command_body(result: dict[str, Any]) -> str:
     return "\n".join(part for part in (output, stderr) if part)
 
 
+def _pretty_json(text: str) -> str | None:
+    """Return consistently indented JSON when *text* is a complete JSON value."""
+    try:
+        value = json.loads(text.strip())
+    except (ValueError, TypeError, json.JSONDecodeError):
+        return None
+    return json.dumps(value, indent=2, ensure_ascii=False, default=str)
+
+
 def _command_output_lexer(output: str) -> str | None:
     """Detect a lexer for shell command output: json, unified diff, or a
     Python traceback; None (plain text) otherwise."""
-    sample = output.strip()
-    if len(sample) > 500:
-        sample = sample[:500]
-    if not sample:
+    full_output = output.strip()
+    if not full_output:
         return None
-    stripped = sample.lstrip()
-    if stripped.startswith(("{", "[")):
-        try:
-            json.loads(stripped)
-            return "json"
-        except ValueError, TypeError, json.JSONDecodeError:
-            pass
+    if _pretty_json(full_output) is not None:
+        return "json"
+    sample = full_output[:500]
     if sample.startswith(("--- ", "+++ ", "@@ ")) or "\n--- " in sample:
         return "diff"
     lines = sample.splitlines()[:3]
@@ -123,7 +126,7 @@ def _format_tool_result(name: str, result: dict[str, Any]) -> str:
     if name == "ask_user":
         answer = result.get("answer")
         return f"Answer: {answer}" if answer is not None else "Cancelled"
-    return json.dumps(result, default=str)
+    return json.dumps(result, indent=2, ensure_ascii=False, default=str)
 
 
 def _truncate_body(text: str, limit: int = TOOL_RESULT_MAX_CHARS) -> tuple[str, bool]:
@@ -179,6 +182,8 @@ def _render_run_command_result(
         parts.append("timed out")
     summary = " · ".join(parts)
     if lexer is not None:
+        if lexer == "json":
+            output = _pretty_json(output) or output
         body_text, truncated = _truncate_body(output)
         if truncated:
             summary += " \u00b7 (result truncated)"
@@ -211,5 +216,13 @@ def _render_tool_result(
     text = _format_tool_result(name, result)
     if not text:
         return None
-    body_text, _ = _truncate_body(text)
+    pretty = _pretty_json(text)
+    body_text, _ = _truncate_body(pretty or text)
+    if pretty is not None:
+        return Panel(
+            _PlainWrite(body_text, _make_syntax(body_text, "json", code_theme)),
+            title=f"Tool result · {name}",
+            border_style="blue",
+            padding=(0, 1),
+        )
     return _plain_tool_panel(name, body_text)
