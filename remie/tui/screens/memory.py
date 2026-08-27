@@ -85,6 +85,9 @@ class MemoryScreen(ModalScreen):
 
     def __init__(self) -> None:
         super().__init__()
+        self._init_state()
+
+    def _init_state(self) -> None:
         self._memories: list[dict] = []
         # Value the search filter programmatically assigned to the dropdown;
         # the resulting queued Select.Changed must not count as a user switch.

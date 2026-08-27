@@ -3706,3 +3706,31 @@ def test_adaptive_title_falls_back_when_generation_fails(monkeypatch):
             assert chat["name"] == "Refactor Auth Flow"
 
     asyncio.run(exercise())
+
+
+def test_ctrl_p_tabs_render_existing_modal_layouts():
+    async def exercise():
+        from remie.tui.screens.open import OpenScreen
+
+        app = AgentApp()
+        async with app.run_test(size=(110, 50)) as pilot:
+            await app.action_open_management()
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, OpenScreen)
+            tabs = screen.query_one("#open-tabs")
+            expected = {
+                "open-chats": "chat-dialog",
+                "open-memories": "memory-dialog",
+                "open-providers": "connection-dialog",
+                "open-models": "model-dialog",
+            }
+            for pane_id, dialog_id in expected.items():
+                tabs.active = pane_id
+                await pilot.pause()
+                assert tabs.active == pane_id
+                dialog = screen.query_one(f"#{dialog_id}")
+                assert dialog.region.width > 0
+                assert dialog.region.height > 0
+
+    asyncio.run(exercise())

@@ -42,6 +42,9 @@ class ConnectionScreen(ModalScreen):
 
     def __init__(self, services: ConnectionServices | None = None) -> None:
         super().__init__()
+        self._init_state(services)
+
+    def _init_state(self, services: ConnectionServices | None = None) -> None:
         self._services = services or ConnectionServices(
             fetch_opencode_models=fetch_opencode_go_models,
             fetch_codex_models=fetch_codex_models,
@@ -240,7 +243,7 @@ class ConnectionScreen(ModalScreen):
         self._store_options("model-select", initial_models)
         self._set_provider_fields(provider)
         self._update_reasoning_fields()
-        if provider == "local":
+        if provider == "local" and standalone:
             self.query_one("#api-key-input", Input).focus()
         if provider == "opencode-go":
             api_key = self.query_one("#api-key-input", Input).value.strip()

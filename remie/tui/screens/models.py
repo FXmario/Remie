@@ -91,6 +91,9 @@ class ModelScreen(ModalScreen):
 
     def __init__(self, services: ConnectionServices | None = None) -> None:
         super().__init__()
+        self._init_state(services)
+
+    def _init_state(self, services: ConnectionServices | None = None) -> None:
         self._services = services or ConnectionServices(
             fetch_opencode_models=fetch_opencode_go_models,
             fetch_codex_models=fetch_codex_models,

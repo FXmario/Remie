@@ -53,6 +53,9 @@ class ChatScreen(ModalScreen):
 
     def __init__(self) -> None:
         super().__init__()
+        self._init_state()
+
+    def _init_state(self) -> None:
         self._chats: list[dict] = []
         self._delete_armed = False
 
@@ -123,7 +126,8 @@ class ChatScreen(ModalScreen):
             index = chat_list.get_option_index(highlight)
             if index is not None:
                 chat_list.highlighted = index
-        chat_list.focus()
+        if self.parent is None or self.parent.__class__.__name__ != "TabPane":
+            chat_list.focus()
 
     def _selected_id(self) -> str | None:
         option = self.query_one("#chat-list", OptionList).highlighted_option
