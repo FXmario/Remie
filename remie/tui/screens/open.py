@@ -70,6 +70,33 @@ _TAB_CSS = (
     + ModelScreen.CSS.replace("ModelScreen", "#open-model-content")
 )
 
+# A standalone screen needs a centered, bordered dialog. Inside Ctrl+P the
+# TabbedContent is already that dialog, so the same content containers should
+# fill the pane without drawing a second modal shell.
+_FLAT_TAB_CSS = """
+#open-chat-content #chat-dialog,
+#open-memory-content #memory-dialog,
+#open-provider-content #connection-dialog,
+#open-model-content #model-dialog {
+    width: 100%;
+    height: 100%;
+    max-width: 100%;
+    max-height: 100%;
+    border: none;
+    background: transparent;
+}
+
+#open-chat-content #chat-dialog,
+#open-memory-content #memory-dialog,
+#open-model-content #model-dialog {
+    padding: 1 2;
+}
+
+#open-provider-content #connection-dialog {
+    padding: 0;
+}
+"""
+
 
 class OpenScreen(ModalScreen):
     """Host the existing management layouts in a keyboard-accessible tab set."""
@@ -104,6 +131,7 @@ class OpenScreen(ModalScreen):
         #open-model-content { width: 100%; height: 100%; }
         """
         + _TAB_CSS
+        + _FLAT_TAB_CSS
     )
 
     def __init__(self) -> None:

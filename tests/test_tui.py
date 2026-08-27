@@ -3730,7 +3730,8 @@ def test_ctrl_p_tabs_render_existing_modal_layouts():
                 await pilot.pause()
                 assert tabs.active == pane_id
                 dialog = screen.query_one(f"#{dialog_id}")
-                assert dialog.region.width > 0
-                assert dialog.region.height > 0
+                pane = screen.query_one(f"#{pane_id}")
+                assert dialog.region == pane.region
+                assert not dialog.styles.border
 
     asyncio.run(exercise())
