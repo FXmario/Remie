@@ -74,6 +74,12 @@ class AskUserScreen(ModalScreen):
         background: transparent;
     }
 
+    #ask-dialog #ask-options > .option-list--option-highlighted {
+        color: $text;
+        background: $primary 35%;
+        text-style: bold;
+    }
+
     #ask-dialog #ask-input {
         margin-top: 1;
     }

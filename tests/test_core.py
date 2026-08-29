@@ -69,6 +69,76 @@ def test_runner_repairs_only_unanswered_tool_calls():
     assert [m["tool_call_id"] for m in outputs] == ["missing", "done"]
 
 
+def test_tool_executor_requires_permission_outside_project(tmp_path):
+    project = tmp_path / "project"
+    outside = tmp_path / "outside" / "secret.txt"
+    project.mkdir()
+    outside.parent.mkdir()
+    outside.write_text("secret", encoding="utf-8")
+    prompts = []
+
+    async def deny(question, options):
+        prompts.append((question, options))
+        return "Deny"
+
+    executor = ToolExecutor(deny, project_root=project)
+    result = asyncio.run(executor.execute("read_file", {"filename": str(outside)}))
+
+    assert result["error"].startswith("Permission denied")
+    assert result["paths"] == [str(outside)]
+    assert prompts and prompts[0][1] == ["Allow once", "Deny"]
+
+
+def test_tool_executor_allows_approved_outside_access_once(tmp_path):
+    project = tmp_path / "project"
+    outside = tmp_path / "outside.txt"
+    project.mkdir()
+    outside.write_text("allowed", encoding="utf-8")
+
+    async def allow(_question, _options):
+        return "Allow once"
+
+    executor = ToolExecutor(allow, project_root=project)
+    result = asyncio.run(executor.execute("read_file", {"filename": str(outside)}))
+
+    assert result["content"] == "allowed"
+
+
+def test_tool_executor_prompts_for_outside_path_in_shell_command(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    questions = []
+
+    async def deny(question, _options):
+        questions.append(question)
+        return "Deny"
+
+    executor = ToolExecutor(deny, project_root=project)
+    result = asyncio.run(
+        executor.execute(
+            "run_command", {"command": "cat ../secret.txt", "cwd": str(project)}
+        )
+    )
+
+    assert result["error"].startswith("Permission denied")
+    assert str(tmp_path / "secret.txt") in questions[0]
+
+
+def test_tool_executor_does_not_prompt_for_project_paths(tmp_path):
+    project = tmp_path / "project"
+    target = project / "file.txt"
+    project.mkdir()
+    target.write_text("inside", encoding="utf-8")
+
+    async def unexpected_prompt(_question, _options):
+        raise AssertionError("inside-project access should not prompt")
+
+    executor = ToolExecutor(unexpected_prompt, project_root=project)
+    result = asyncio.run(executor.execute("read_file", {"filename": str(target)}))
+
+    assert result["content"] == "inside"
+
+
 def test_tool_executor_uses_injected_question_handler():
     async def ask(question, options):
         assert question == "Choose"
