@@ -5,6 +5,10 @@ Screen {
     layout: vertical;
 }
 
+HeaderIcon {
+    display: none;
+}
+
 #log {
     width: 1fr;
     height: 1fr;
