@@ -6,7 +6,7 @@ from rich.text import Text
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Button, Input, Label, RadioButton, RadioSet
+from textual.widgets import Button, Input, Label, RadioButton, RadioSet, Select
 
 from remie import codex_auth
 from remie.agent import (
@@ -30,7 +30,6 @@ from remie.tui.contracts import is_agent_app
 from remie.tui.constants import REASONING_EFFORTS, PROVIDER_BASE_URLS
 from remie.tui.screens.connection_css import CONNECTION_CSS
 from remie.tui.screens.connection_services import ConnectionServices
-from remie.tui.screens.connection_picker import PickerList
 from remie.tui.helpers import _coerce_model_info, _model_option
 from remie.tui.widgets import ModelBadge
 
@@ -61,7 +60,7 @@ class ConnectionScreen(ModalScreen):
         self._select_masters: dict[str, list[tuple[Text, str]]] = {}
         # Value tokens for filter-driven Select syncs: when a search filter
         # rebuilds options, the value we programmatically assign is recorded
-        # here so the resulting (queued) PickerList.Changed is recognized as a
+        # here so the resulting (queued) Select.Changed is recognized as a
         # programmatic sync instead of a user action — deterministic no matter
         # when the queued message runs.
         self._select_tokens: dict[str, str | None] = {}
@@ -86,22 +85,17 @@ class ConnectionScreen(ModalScreen):
                     id="service-label",
                     classes="field-label picker-field-label",
                 )
-                with Vertical(id="provider-filter-row", classes="filter-row"):
-                    yield Input(
-                        placeholder="Filter services by name or id…",
-                        id="provider-search",
-                    )
-                    yield PickerList(
-                        [
-                            ("Local (llama.cpp)", "local"),
-                            ("OpenCode Go", "opencode-go"),
-                            ("Codex (ChatGPT Plus/Pro)", "codex"),
-                            ("OpenRouter", "openrouter"),
-                        ],
-                        value=self._active_provider,
-                        id="provider-select",
-                    )
-                    yield Label("No services available", id="provider-empty", classes="picker-empty")
+                yield Select(
+                    [
+                        ("Local (llama.cpp)", "local"),
+                        ("OpenCode Go", "opencode-go"),
+                        ("Codex (ChatGPT Plus/Pro)", "codex"),
+                        ("OpenRouter", "openrouter"),
+                    ],
+                    value=self._active_provider,
+                    allow_blank=False,
+                    id="provider-select",
+                )
                 yield Label("AUTHENTICATION", classes="section-title")
                 yield Label(
                     "Base URL",
@@ -161,13 +155,14 @@ class ConnectionScreen(ModalScreen):
                         placeholder="Filter models by name or id…",
                         id="model-search",
                     )
-                    yield PickerList(
+                    yield Select(
                         [_model_option(model) for model in model_list],
                         value=(
                             current.model
                             if current.model in model_list
                             else model_list[0]
                         ),
+                        allow_blank=False,
                         id="model-select",
                     )
                     yield Label("No models available", id="model-empty", classes="picker-empty")
@@ -182,23 +177,16 @@ class ConnectionScreen(ModalScreen):
                     id="reasoning-effort-label",
                     classes="field-label picker-field-label",
                 )
-                with Vertical(id="reasoning-filter-row", classes="filter-row"):
-                    yield Input(
-                        placeholder="Filter reasoning efforts…",
-                        id="reasoning-search",
-                    )
-                    yield PickerList(
-                        [(effort.title(), effort) for effort in REASONING_EFFORTS],
-                        value=current.reasoning_effort
+                yield Select(
+                    [(effort.title(), effort) for effort in REASONING_EFFORTS],
+                    value=(
+                        current.reasoning_effort
                         if current.reasoning_effort in REASONING_EFFORTS
-                        else "medium",
-                        id="reasoning-effort-select",
-                    )
-                    yield Label(
-                        "No reasoning efforts available",
-                        id="reasoning-empty",
-                        classes="picker-empty",
-                    )
+                        else "medium"
+                    ),
+                    allow_blank=False,
+                    id="reasoning-effort-select",
+                )
                 yield Label(
                     "Verify local SSL certificates",
                     id="verify-ssl-label",
@@ -218,19 +206,9 @@ class ConnectionScreen(ModalScreen):
                 yield Button("Connect", variant="primary", id="submit-button")
 
     def on_mount(self) -> None:
-        provider = self.query_one("#provider-select", PickerList).value
+        provider = self.query_one("#provider-select", Select).value
         standalone = self.parent is None or self.parent.__class__.__name__ != "TabPane"
         # Seed the master option lists for the searchable dropdowns.
-        self._store_options(
-            "provider-select",
-            [
-                ("Local (llama.cpp)", "local"),
-                ("OpenCode Go", "opencode-go"),
-                ("Codex (ChatGPT Plus/Pro)", "codex"),
-                ("OpenRouter", "openrouter"),
-            ],
-        )
-        self._store_options("reasoning-effort-select", list(REASONING_EFFORTS))
         current = self._profiles[self._active_provider]
         if provider == "codex":
             initial_models = list(CODEX_MODELS)
@@ -287,7 +265,7 @@ class ConnectionScreen(ModalScreen):
         master = self._select_masters.get(select_id)
         if master is None:
             return
-        select = self.query_one(f"#{select_id}", PickerList)
+        select = self.query_one(f"#{select_id}", Select)
         previous = select.value
         q = query.strip().lower()
         if q:
@@ -299,7 +277,7 @@ class ConnectionScreen(ModalScreen):
         else:
             filtered = master
         # Programmatic value syncs during filtering must not trigger the
-        # screen's PickerList.Changed side effects; record the assigned value as
+        # screen's Select.Changed side effects; record the assigned value as
         # this Select's token so the queued Changed is recognized.
         select.set_options(filtered)
         select.display = bool(filtered)
@@ -381,7 +359,7 @@ class ConnectionScreen(ModalScreen):
             else fallback[0]
         )
         self._set_model_options(fallback)
-        select = self.query_one("#model-select", PickerList)
+        select = self.query_one("#model-select", Select)
         values = [value for _, value in self._select_masters.get("model-select", [])]
         if current_value in values:
             select.value = current_value
@@ -396,7 +374,7 @@ class ConnectionScreen(ModalScreen):
             return
         if not models or not self.is_running:
             return
-        select = self.query_one("#model-select", PickerList)
+        select = self.query_one("#model-select", Select)
         previously_selected = str(select.value)
         options = [model for model in models]
         if previously_selected and previously_selected not in [
@@ -443,11 +421,11 @@ class ConnectionScreen(ModalScreen):
             self._profiles["codex"] = ConnectionConfig(
                 CODEX_BACKEND_BASE,
                 "",
-                str(self.query_one("#model-select", PickerList).value),
+                str(self.query_one("#model-select", Select).value),
                 "codex",
-                self.query_one("#reasoning-effort-select", PickerList).value
+                self.query_one("#reasoning-effort-select", Select).value
                 if isinstance(
-                    self.query_one("#reasoning-effort-select", PickerList).value, str
+                    self.query_one("#reasoning-effort-select", Select).value, str
                 )
                 else "medium",
                 True,
@@ -485,7 +463,7 @@ class ConnectionScreen(ModalScreen):
             else fallback[0]
         )
         self._set_model_options(fallback)
-        select = self.query_one("#model-select", PickerList)
+        select = self.query_one("#model-select", Select)
         values = [value for _, value in self._select_masters.get("model-select", [])]
         if current_value in values:
             select.value = current_value
@@ -499,7 +477,7 @@ class ConnectionScreen(ModalScreen):
             return
         if not models or not self.is_running:
             return
-        select = self.query_one("#model-select", PickerList)
+        select = self.query_one("#model-select", Select)
         previously_selected = str(select.value)
         ids = [_coerce_model_info(model).id for model in models]
         if previously_selected and previously_selected in ids:
@@ -525,7 +503,7 @@ class ConnectionScreen(ModalScreen):
         api_key_input.disabled = is_codex
         api_key_label = self.query_one("#api-key-label", Label)
         api_key_label.display = not is_codex
-        model_select = self.query_one("#model-select", PickerList)
+        model_select = self.query_one("#model-select", Select)
         model_filter_row = self.query_one("#model-filter-row", Vertical)
         local_model_input = self.query_one("#local-model-input", Input)
         model_filter_row.display = has_provider and not is_local
@@ -533,7 +511,7 @@ class ConnectionScreen(ModalScreen):
         model_select.disabled = not has_provider or is_local
         local_model_input.display = is_local
         local_model_input.disabled = not is_local
-        reasoning_select = self.query_one("#reasoning-effort-select", PickerList)
+        reasoning_select = self.query_one("#reasoning-effort-select", Select)
         reasoning_label = self.query_one("#reasoning-effort-label", Label)
         reasoning_select.display = has_provider
         reasoning_label.display = has_provider
@@ -552,20 +530,11 @@ class ConnectionScreen(ModalScreen):
         signout_button.disabled = not is_codex
         if is_codex:
             self._update_codex_account_label()
-        # Search inputs mirror their dropdown's visibility.
+
         model_search = self.query_one("#model-search", Input)
         model_search.display = has_provider and not is_local
-        provider_search = self.query_one("#provider-search", Input)
-        provider_search.display = True
-        reasoning_search = self.query_one("#reasoning-search", Input)
-        reasoning_search.display = has_provider
-        reasoning_search.disabled = not has_provider
 
-    _SEARCH_TARGETS = {
-        "provider-search": "provider-select",
-        "model-search": "model-select",
-        "reasoning-search": "reasoning-effort-select",
-    }
+    _SEARCH_TARGETS = {"model-search": "model-select"}
 
     def on_input_changed(self, event: Input.Changed) -> None:
         select_id = self._SEARCH_TARGETS.get(event.input.id or "")
@@ -581,7 +550,7 @@ class ConnectionScreen(ModalScreen):
             # submitting the whole form.
             select_id = self._SEARCH_TARGETS[event.input.id or ""]
             try:
-                self.query_one(f"#{select_id}", PickerList).focus()
+                self.query_one(f"#{select_id}", Select).focus()
             except Exception:
                 pass
             return
@@ -604,7 +573,7 @@ class ConnectionScreen(ModalScreen):
             if provider == "local"
             else self._selected_model()
         )
-        effort = self.query_one("#reasoning-effort-select", PickerList).value
+        effort = self.query_one("#reasoning-effort-select", Select).value
         if not isinstance(effort, str):
             effort = "medium"
         self._profiles[provider] = ConnectionConfig(
@@ -625,7 +594,7 @@ class ConnectionScreen(ModalScreen):
         self.query_one("#base-url-input", Input).value = profile.base_url
         self.query_one("#api-key-input", Input).value = profile.api_key
         self.query_one("#local-model-input", Input).value = profile.model
-        reasoning = self.query_one("#reasoning-effort-select", PickerList)
+        reasoning = self.query_one("#reasoning-effort-select", Select)
         reasoning.value = profile.reasoning_effort
         self._set_verify_ssl_value(profile.verify_ssl)
 
@@ -637,11 +606,11 @@ class ConnectionScreen(ModalScreen):
         and restored when a supported model is selected again.
         """
         model = selected_model or self._selected_model()
-        provider = self.query_one("#provider-select", PickerList).value
+        provider = self.query_one("#provider-select", Select).value
         if provider not in {"local", "opencode-go", "codex", "openrouter"}:
             return
         supported = supports_reasoning_effort(model, provider)
-        select = self.query_one("#reasoning-effort-select", PickerList)
+        select = self.query_one("#reasoning-effort-select", Select)
         label = self.query_one("#reasoning-effort-label", Label)
         if supported:
             select.disabled = False
@@ -656,44 +625,43 @@ class ConnectionScreen(ModalScreen):
             select.disabled = True
             label.disabled = True
 
-    async def on_picker_list_changed(self, event: PickerList.Changed) -> None:
-        select_id = event.picker.id or ""
+    async def on_select_changed(self, event: Select.Changed) -> None:
+        """Handle the provider, model, and reasoning dropdowns."""
+        select_id = event.select.id or ""
         if self._select_tokens.get(select_id) == event.value:
-            # Programmatic sync from the search filter, not a user action.
             return
         self._select_tokens[select_id] = (
             event.value if isinstance(event.value, str) else None
         )
-        if select_id == "provider-select":
-            self._capture_profile()
-            self._active_provider = str(event.value)
-            self._apply_profile(self._active_provider)
-            self._set_provider_fields(event.value)
-            if event.value == "codex":
-                self._refresh_codex_models()
-                self.run_worker(self._prefetch_codex_models(), exclusive=False)
-            elif event.value == "openrouter":
-                self._refresh_openrouter_models()
-                self.run_worker(self._prefetch_openrouter_models(), exclusive=False)
-            elif event.value in PROVIDER_BASE_URLS:
-                self.query_one("#base-url-input", Input).value = PROVIDER_BASE_URLS[
-                    event.value
-                ]
-                fallback_models: "list[str | ModelInfo]" = list(OPENCODE_GO_MODELS)
-                profile = self._profiles[self._active_provider]
-                if profile.model and profile.model not in fallback_models:
-                    fallback_models.insert(0, profile.model)
-                self._set_model_options(fallback_models)
-                model_select = self.query_one("#model-select", PickerList)
-                model_select.value = profile.model or fallback_models[0]
-                api_key = self.query_one("#api-key-input", Input).value.strip()
-                if api_key:
-                    await self._refresh_models(api_key, str(event.value))
-        if event.picker.id in {"provider-select", "model-select"}:
-            selected_model = (
-                str(event.value) if event.picker.id == "model-select" else None
-            )
-            self._update_reasoning_fields(selected_model)
+        if select_id == "provider-select" and isinstance(event.value, str):
+            await self._change_provider(event.value)
+        elif select_id == "model-select" and isinstance(event.value, str):
+            self._update_reasoning_fields(event.value)
+
+    async def _change_provider(self, provider: str) -> None:
+        self._capture_profile()
+        self._active_provider = provider
+        self._apply_profile(provider)
+        self._set_provider_fields(provider)
+        if provider == "codex":
+            self._refresh_codex_models()
+            self.run_worker(self._prefetch_codex_models(), exclusive=False)
+        elif provider == "openrouter":
+            self._refresh_openrouter_models()
+            self.run_worker(self._prefetch_openrouter_models(), exclusive=False)
+        elif provider in PROVIDER_BASE_URLS:
+            self.query_one("#base-url-input", Input).value = PROVIDER_BASE_URLS[provider]
+            fallback_models: "list[str | ModelInfo]" = list(OPENCODE_GO_MODELS)
+            profile = self._profiles[provider]
+            if profile.model and profile.model not in fallback_models:
+                fallback_models.insert(0, profile.model)
+            self._set_model_options(fallback_models)
+            model_select = self.query_one("#model-select", Select)
+            model_select.value = profile.model or fallback_models[0]
+            api_key = self.query_one("#api-key-input", Input).value.strip()
+            if api_key:
+                await self._refresh_models(api_key, provider)
+        self._update_reasoning_fields()
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id in {"cancel-button", "connection-close"}:
@@ -709,7 +677,7 @@ class ConnectionScreen(ModalScreen):
     async def _refresh_models(
         self, api_key: str, provider: str = "opencode-go"
     ) -> None:
-        select = self.query_one("#model-select", PickerList)
+        select = self.query_one("#model-select", Select)
         previously_selected = select.value
         select.loading = True
         models: "list[str | ModelInfo]" = await self._services.fetch_opencode_models(
@@ -727,7 +695,7 @@ class ConnectionScreen(ModalScreen):
         self._update_reasoning_fields()
 
     def _connect(self) -> None:
-        provider = self.query_one("#provider-select", PickerList).value
+        provider = self.query_one("#provider-select", Select).value
         if provider not in {"local", "opencode-go", "codex", "openrouter"}:
             self.notify("Choose a provider first", severity="warning")
             return
@@ -758,7 +726,7 @@ class ConnectionScreen(ModalScreen):
             if provider == "local"
             else True
         )
-        effort = self.query_one("#reasoning-effort-select", PickerList).value
+        effort = self.query_one("#reasoning-effort-select", Select).value
         if not isinstance(effort, str):
             effort = "medium"
         if not supports_reasoning_effort(model, str(provider)):
@@ -792,10 +760,10 @@ class ConnectionScreen(ModalScreen):
         )
 
     def _selected_model(self) -> str:
-        provider = self.query_one("#provider-select", PickerList).value
+        provider = self.query_one("#provider-select", Select).value
         if provider == "local":
             return self.query_one("#local-model-input", Input).value.strip()
-        value = self.query_one("#model-select", PickerList).value
+        value = self.query_one("#model-select", Select).value
         if isinstance(value, str):
             return value
         fallbacks = {
