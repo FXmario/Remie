@@ -72,7 +72,7 @@ the same `run_tui` compatibility alias.
 
 1. Load the active connection from `~/.config/remie/config.json`.
 2. Ensure the project has an active durable memory.
-3. Load the latest chat from `.remie/chats/`, or create a new chat.
+3. Load the latest chat from `~/.remie/projects/<project-id>/chats/`, or create a new chat.
 4. Repair native tool calls that were interrupted before receiving a result.
 5. Rebuild the system prompt for the active provider.
 6. Restore the visible transcript, prompt history, and cumulative token usage.
@@ -384,7 +384,7 @@ currently active runtime connection and lazily created HTTP clients.
 `remie/storage/chats.py` stores chats under:
 
 ```text
-.remie/chats/
+~/.remie/projects/<project-id>/chats/
 ```
 
 Each chat contains context messages, transcript messages, title metadata, and
@@ -397,7 +397,7 @@ token usage. Index updates use atomic JSON writes where required.
 `remie/storage/memories.py` stores named UUID-backed memories under:
 
 ```text
-.remie/memory/
+~/.remie/projects/<project-id>/memory/
 ```
 
 `remie/tools/memory.py` is the model-callable adapter around that storage. The

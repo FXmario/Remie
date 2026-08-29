@@ -21,8 +21,9 @@ def memory_tool(
     action: str, text: str = "", id: str = "", name: str = ""
 ) -> dict[str, Any]:
     """
-    Persists a note to a project memory file (.remie/memory/<uuid>.md), reads
-    it, clears it, or deletes the whole memory. Use to remember durable facts,
+    Persists a note to a project memory file under
+    ~/.remie/projects/<project-id>/memory/<uuid>.md, reads it, clears it, or
+    deletes the whole memory. Use to remember durable facts,
     decisions, user preferences, and open tasks across sessions; do not log
     routine progress.
     :param action: 'add' to append a timestamped note, 'read' to return all
