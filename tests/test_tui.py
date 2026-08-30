@@ -33,6 +33,7 @@ from remie.tui import (
     PromptSubmitted,
     PromptTextArea,
     StatusIndicator,
+    StreamingRichLog,
     ThinkingIndicator,
     _format_tokens,
     _has_tool_call,
@@ -1112,6 +1113,16 @@ def test_tool_results_rendered_in_turn(monkeypatch, tmp_path):
     asyncio.run(exercise())
 
 
+def test_panel_decoration_is_removed_from_log_selection():
+    assert StreamingRichLog._without_panel_border("╭──── Assistant ────╮") == "Assistant"
+    assert StreamingRichLog._without_panel_border("│  answer text       │") == " answer text"
+    assert StreamingRichLog._without_panel_border("╰────────────────────╯") is None
+    # Ordinary content that happens to contain a box character is unchanged.
+    assert StreamingRichLog._without_panel_border("value │ value") == "value │ value"
+    assert StreamingRichLog._panel_content_bounds("│ answer │") == (2, 8)
+    assert StreamingRichLog._panel_content_bounds("╰────────╯") is None
+
+
 def test_mouse_release_copies_screen_selection_immediately(monkeypatch):
     async def exercise():
         app = AgentApp()
@@ -1862,6 +1873,36 @@ def test_context_full_error_notifies_clearly(monkeypatch):
 
             assert notifications
             assert notifications[0].get("title") == "Context window full"
+
+    asyncio.run(exercise())
+
+
+def test_prompt_ctrl_a_selects_all_text():
+    async def exercise():
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            prompt = app.query_one("#prompt", PromptTextArea)
+            prompt.load_text("select all of this")
+            prompt.focus()
+            await pilot.press("ctrl+a")
+            assert prompt.selected_text == "select all of this"
+
+    asyncio.run(exercise())
+
+
+def test_prompt_grows_and_shrinks_with_multiline_input():
+    async def exercise():
+        app = AgentApp()
+        async with app.run_test(size=(100, 30)) as pilot:
+            prompt = app.query_one("#prompt", PromptTextArea)
+            prompt.focus()
+            initial_height = prompt.outer_size.height
+            prompt.load_text("one\ntwo\nthree")
+            await pilot.pause()
+            assert prompt.outer_size.height == initial_height + 2
+            prompt.load_text("")
+            await pilot.pause()
+            assert prompt.outer_size.height == initial_height
 
     asyncio.run(exercise())
 

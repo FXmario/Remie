@@ -1,6 +1,7 @@
 """Reusable widgets for the Remie TUI."""
 
 # import os
+import re
 from pathlib import Path
 
 from PIL import Image as PILImage
@@ -40,14 +41,54 @@ from remie.tui.slash_commands import (
 class StreamingRichLog(RichLog):
     """A RichLog that can stream text in place at the bottom of the log."""
 
+    _PANEL_SIDES = re.compile(r"^(\s*)│ ?(.*?) ?│\s*$")
+    _PANEL_EDGE = re.compile(r"^\s*[╭┌╰└][─━]*(?:\s(.+?)\s[─━]*)?[╮┐╯┘]\s*$")
+
+    @classmethod
+    def _without_panel_border(cls, line: str) -> str | None:
+        """Remove Rich Panel decoration while retaining selectable content."""
+        if match := cls._PANEL_SIDES.match(line):
+            return (match.group(1) + match.group(2)).rstrip()
+        if match := cls._PANEL_EDGE.match(line):
+            # A titled top edge has useful text; an untitled edge is decoration.
+            return match.group(1)
+        # A selection may begin or end partway through a panel row, so only one
+        # side of the frame may be present in the extracted fragment.
+        line = re.sub(r"^[╭┌╰└─━]+\s*", "", line)
+        line = re.sub(r"^│ ?", "", line)
+        line = re.sub(r" ?│$", "", line)
+        line = re.sub(r"\s*[─━]+[╮┐╯┘]$", "", line)
+        return line.rstrip()
+
+    @classmethod
+    def _panel_content_bounds(cls, line: str) -> tuple[int, int] | None:
+        """Return the selectable portion of a panel row, excluding its frame."""
+        if match := cls._PANEL_SIDES.match(line):
+            start = len(match.group(1)) + 2  # left frame and panel padding
+            end = len(line.rstrip()) - 2  # panel padding and right frame
+            return start, max(start, end)
+        if match := cls._PANEL_EDGE.match(line):
+            title = match.group(1)
+            if title:
+                start = line.find(title)
+                return start, start + len(title)
+            return None
+        return 0, len(line)
+
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self._stream_start: int | None = None
 
     def get_selection(self, selection) -> tuple[str, str] | None:
-        """Extract selected text from the rendered log lines."""
+        """Extract text without copying Rich Panel borders and padding."""
         text = "\n".join(strip.text for strip in self.lines)
-        return selection.extract(text), "\n"
+        extracted = selection.extract(text)
+        cleaned: list[str] = []
+        for line in extracted.splitlines():
+            content = self._without_panel_border(line)
+            if content is not None:
+                cleaned.append(content)
+        return "\n".join(cleaned), "\n"
 
     def render_line(self, y: int) -> Strip:
         """Render a line with source offsets required for precise selection."""
@@ -63,12 +104,18 @@ class StreamingRichLog(RichLog):
             and (span := selection.get_span(content_y)) is not None
         ):
             start, end = span
+            bounds = self._panel_content_bounds(strip.text)
+            if bounds is None:
+                start = end = 0
+            else:
+                content_start, content_end = bounds
+                start = max(start, content_start + scroll_x)
+                if end == -1:
+                    end = content_end + scroll_x
+                else:
+                    end = min(end, content_end + scroll_x)
             visible_start = max(0, min(strip.cell_length, start - scroll_x))
-            visible_end = (
-                strip.cell_length
-                if end == -1
-                else max(0, min(strip.cell_length, end - scroll_x))
-            )
+            visible_end = max(0, min(strip.cell_length, end - scroll_x))
             if visible_start < visible_end:
                 selection_style = self.screen.get_component_rich_style(
                     "screen--selection"
@@ -446,6 +493,12 @@ class SlashCommandPopup(OptionList):
                 # with the bottom prompt instead of the top of the expanded row.
                 popup_height = min(len(self._commands) + 2, 6) if open_ else 0
                 status.styles.margin = (popup_height, 0, 0, 0)
+            try:
+                prompt_box = input_row.query_one("#prompt-box", PromptBox)
+            except (NoMatches, NameError):
+                pass
+            else:
+                prompt_box.resize_to_content()
 
     def close(self) -> None:
         """Hide the popup and return the input row to its compact height."""
@@ -571,7 +624,11 @@ class PromptTextArea(TextArea):
                 event.stop()
                 event.prevent_default()
                 return
-        if event.key == "enter":
+        if event.key == "ctrl+a":
+            event.stop()
+            event.prevent_default()
+            self.action_select_all()
+        elif event.key == "enter":
             event.stop()
             event.prevent_default()
             self._submit()
@@ -654,6 +711,8 @@ class ImageAttachmentBar(HorizontalScroll):
             self.parent.set_class(has_images, "has-images")
             if self.parent.parent is not None:
                 self.parent.parent.set_class(has_images, "has-images")
+            if isinstance(self.parent, PromptBox):
+                self.parent.resize_to_content()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         event.stop()
@@ -681,6 +740,8 @@ class ModelRow(Horizontal):
 
 
 class PromptBox(Vertical):
+    MAX_PROMPT_ROWS = 10
+
     def __init__(self) -> None:
         super().__init__(id="prompt-box")
 
@@ -690,10 +751,33 @@ class PromptBox(Vertical):
         yield PromptTextArea()
         yield ImageAttachmentBar()
 
+    def on_mount(self) -> None:
+        self.call_after_refresh(self.resize_to_content)
+
+    def resize_to_content(self) -> None:
+        """Grow with visual prompt rows, then scroll after a sensible limit."""
+        prompt = self.query_one(PromptTextArea)
+        visual_rows = max(1, prompt.wrapped_document.height)
+        visible_rows = min(visual_rows, self.MAX_PROMPT_ROWS)
+        prompt_height = visible_rows + 2  # TextArea's top and bottom borders
+        popup = self.query_one(SlashCommandPopup)
+        popup_height = min(len(popup._commands) + 2, 6) if popup.display else 0
+        image_height = 1 if self.has_class("has-images") else 0
+        box_height = 1 + popup_height + prompt_height + image_height
+
+        prompt.styles.height = prompt_height
+        self.styles.height = box_height
+        if self.parent is not None:
+            # The row has one bottom-padding cell in addition to PromptBox.
+            self.parent.styles.height = box_height + 1
+
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
         if event.text_area.id != "prompt":
             return
         self.query_one(SlashCommandPopup).update_for(event.text_area.text)
+        # TextArea updates its wrapped document as part of the edit. Deferring
+        # one refresh also catches wrapping changes caused by the new height.
+        self.call_after_refresh(self.resize_to_content)
 
     def on_slash_command_chosen(self, event: SlashCommandChosen) -> None:
         event.stop()
