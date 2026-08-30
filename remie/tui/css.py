@@ -34,6 +34,38 @@ HeaderIcon {
     width: 1fr;
 }
 
+#prompt-box.has-images {
+    height: 5;
+}
+
+#image-attachments {
+    display: none;
+    height: 1;
+    width: 100%;
+    padding: 0 1;
+    scrollbar-size-horizontal: 0;
+}
+
+#image-attachments.has-images {
+    display: block;
+}
+
+#image-attachments Button {
+    width: auto;
+    min-width: 11;
+    height: 1;
+    min-height: 1;
+    margin-right: 1;
+    padding: 0 1;
+    border: none;
+    background: $panel;
+    color: $text;
+}
+
+#image-attachments Button:hover {
+    background: $primary 35%;
+}
+
 #input-row.slash-open {
     height: auto;
 }
@@ -67,6 +99,10 @@ HeaderIcon {
     width: 100%;
     padding: 0 1 1 1;
     align: left middle;
+}
+
+#input-row.has-images {
+    height: 6;
 }
 
 #status {

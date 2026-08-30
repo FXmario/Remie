@@ -2047,7 +2047,7 @@ def test_paste_clipboard_image_attaches(monkeypatch):
         async with app.run_test() as pilot:
             prompt = app.query_one("#prompt", PromptTextArea)
             assert prompt._paste_clipboard_image() is True
-            assert app._pending_image is not None
+            assert app._pending_images == [image]
 
     asyncio.run(exercise())
 
@@ -2061,8 +2061,12 @@ def test_image_attachment_builds_multimodal_message(monkeypatch):
         monkeypatch.setattr(tui_app, "stream_llm_call", fake_stream)
 
         app = AgentApp()
-        image = Image.new("RGB", (8, 8), "red")
-        app.set_pending_image(image)
+        images = [
+            Image.new("RGB", (8, 8), "red"),
+            Image.new("RGB", (8, 8), "blue"),
+        ]
+        for image in images:
+            app.add_pending_image(image)
         async with app.run_test() as pilot:
             app.on_prompt_submitted(PromptSubmitted("what is this"))
             await pilot.pause()
@@ -2074,12 +2078,17 @@ def test_image_attachment_builds_multimodal_message(monkeypatch):
                 if m["role"] == "user"
             ][-1]
             assert isinstance(user_content, list)
-            assert [part["type"] for part in user_content] == ["text", "image_url"]
+            assert [part["type"] for part in user_content] == [
+                "text",
+                "image_url",
+                "image_url",
+            ]
             assert user_content[0]["text"] == "what is this"
-            assert user_content[1]["image_url"]["url"].startswith(
-                "data:image/png;base64,"
+            assert all(
+                part["image_url"]["url"].startswith("data:image/png;base64,")
+                for part in user_content[1:]
             )
-            assert app._pending_image is None
+            assert app._pending_images == []
 
     asyncio.run(exercise())
 

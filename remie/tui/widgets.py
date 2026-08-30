@@ -12,11 +12,11 @@ from rich.segment import Segment
 from textual.strip import Strip
 from rich.text import Text
 from textual import events
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, HorizontalScroll, Vertical
 from textual.css.query import NoMatches
 from textual.geometry import Size
 from textual.message import Message
-from textual.widgets import Label, OptionList, RichLog, TextArea
+from textual.widgets import Button, Label, OptionList, RichLog, TextArea
 from textual.widgets.option_list import Option
 from textual_image.widget import SixelImage as TerminalImage
 
@@ -577,6 +577,11 @@ class PromptTextArea(TextArea):
             if self._paste_clipboard_image():
                 event.stop()
                 event.prevent_default()
+        elif event.key == "backspace" and not self.text:
+            app = self.app
+            if is_agent_app(app) and app.remove_pending_image():
+                event.stop()
+                event.prevent_default()
         elif event.key in {"up", "down"}:
             if self._maybe_history_navigate(event.key):
                 event.stop()
@@ -617,9 +622,42 @@ class PromptTextArea(TextArea):
             return False
         app = self.app
         if is_agent_app(app):
-            app.set_pending_image(grabbed)
-            app.notify("Image attached — press Enter to send", title="Clipboard")
+            app.add_pending_image(grabbed)
         return True
+
+
+class ImageAttachmentBar(HorizontalScroll):
+    """Compact, removable chips for images attached to the next message."""
+
+    def __init__(self) -> None:
+        super().__init__(id="image-attachments")
+
+    def set_count(self, count: int) -> None:
+        buttons = list(self.query(Button))
+        if count > len(buttons):
+            self.mount_all(
+                Button(f"Image {index + 1}  ×", id=f"attachment-{index}")
+                for index in range(len(buttons), count)
+            )
+        elif count < len(buttons):
+            for button in buttons[count:]:
+                button.remove()
+        has_images = bool(count)
+        self.set_class(has_images, "has-images")
+        if self.parent is not None:
+            self.parent.set_class(has_images, "has-images")
+            if self.parent.parent is not None:
+                self.parent.parent.set_class(has_images, "has-images")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        try:
+            index = int(event.button.id.removeprefix("attachment-"))
+        except (AttributeError, ValueError):
+            return
+        app = self.app
+        if is_agent_app(app):
+            app.remove_pending_image(index)
 
 
 class InputRow(Horizontal):
@@ -644,6 +682,7 @@ class PromptBox(Vertical):
         yield ModelRow(id="model-row")
         yield SlashCommandPopup()
         yield PromptTextArea()
+        yield ImageAttachmentBar()
 
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
         if event.text_area.id != "prompt":

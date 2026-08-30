@@ -15,8 +15,9 @@ from rich.markup import escape
 from rich.panel import Panel
 from textual import events, work
 from textual.actions import SkipAction
-from textual.app import App, ComposeResult
+from textual.app import App, ComposeResult, ScreenStackError
 from textual.binding import Binding, BindingType
+from textual.css.query import NoMatches
 from textual.keys import format_key
 from textual.screen import Screen
 from textual.widgets import Footer, Header
@@ -58,6 +59,7 @@ from remie.tui.constants import (
     COMPACTION_KEEP_MESSAGES,
     LIVE_REASONING_TICK,
     MAX_AUTO_CONTINUATIONS,
+    MAX_IMAGE_ATTACHMENTS,
     MAX_EMPTY_RESPONSE_RETRIES,
     PROMPT_HISTORY_LIMIT,
     STREAM_RENDER_COALESCE_WINDOW,
@@ -82,6 +84,7 @@ from remie.tui.screens.open import OpenScreen
 from remie.tui.slash_commands import is_slash_command_token, resolve_slash_command
 from remie.tui.streaming import StreamingPresentationMixin
 from remie.tui.widgets import (
+    ImageAttachmentBar,
     InputRow,
     ModelBadge,
     PromptSelectionCompleted,
@@ -174,7 +177,7 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
         self._agent_task: asyncio.Task[Any] | None = None
         self._stop_requested = False
         self._input_queue: asyncio.Queue[str | list | None] = asyncio.Queue()
-        self._pending_image: PILImage.Image | None = None
+        self._pending_images: list[PILImage.Image] = []
         self._prompt_history: list[str] = []
         self._history_index: int | None = None
         self._history_draft = ""
@@ -328,8 +331,40 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
         except Exception:
             pass
 
-    def set_pending_image(self, image: PILImage.Image) -> None:
-        self._pending_image = image
+    def _refresh_image_attachments(self) -> None:
+        try:
+            self.query_one(ImageAttachmentBar).set_count(len(self._pending_images))
+        except (NoMatches, ScreenStackError):
+            pass
+
+    def add_pending_image(self, image: PILImage.Image) -> bool:
+        """Attach an image to the next message, up to the per-message limit."""
+        if len(self._pending_images) >= MAX_IMAGE_ATTACHMENTS:
+            self.notify(
+                f"A message can contain at most {MAX_IMAGE_ATTACHMENTS} images.",
+                title="Attachment limit",
+                severity="warning",
+            )
+            return False
+        self._pending_images.append(image)
+        self._refresh_image_attachments()
+        self.notify(
+            f"Image {len(self._pending_images)} attached — press Enter to send",
+            title="Clipboard",
+        )
+        return True
+
+    def remove_pending_image(self, index: int = -1) -> bool:
+        """Remove a pending image by index (the last one by default)."""
+        if not self._pending_images:
+            return False
+        if index < 0:
+            index += len(self._pending_images)
+        if not 0 <= index < len(self._pending_images):
+            return False
+        del self._pending_images[index]
+        self._refresh_image_attachments()
+        return True
 
     def _record_prompt_history(self, text: str) -> None:
         if not text:
@@ -392,14 +427,17 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
         self._record_prompt_history(user_input)
         log = self.query_one("#log", StreamingRichLog)
         content: str | list = user_input
-        if self._pending_image is not None:
+        if self._pending_images:
+            images = self._pending_images.copy()
             content = [
                 {"type": "text", "text": user_input},
-                self._image_to_content(self._pending_image),
+                *(self._image_to_content(image) for image in images),
             ]
-            self._pending_image = None
+            self._pending_images.clear()
+            self._refresh_image_attachments()
             log.write(render_user_message(user_input))
-            log.write("[dim]📷 image attached[/]")
+            label = "image" if len(images) == 1 else "images"
+            log.write(f"[dim]📷 {len(images)} {label} attached[/]")
         else:
             log.write(render_user_message(user_input))
         log.write("")
