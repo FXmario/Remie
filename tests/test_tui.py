@@ -754,6 +754,7 @@ def test_edit_tool_writes_diff_panel_to_log(monkeypatch, tmp_path):
         )
 
         app = AgentApp()
+        app._tool_executor.project_root = tmp_path
         async with app.run_test() as pilot:
             await app.run_agent_turn("edit it")
             await pilot.pause()
@@ -828,6 +829,7 @@ def test_truncated_tool_call_continues_before_executing(monkeypatch, tmp_path):
         monkeypatch.setattr(tui_app, "stream_llm_call", truncating_stream)
 
         app = AgentApp()
+        app._tool_executor.project_root = tmp_path
         async with app.run_test() as pilot:
             await app.run_agent_turn("edit it")
             await pilot.pause()
@@ -1102,6 +1104,7 @@ def test_tool_results_rendered_in_turn(monkeypatch, tmp_path):
         )
 
         app = AgentApp()
+        app._tool_executor.project_root = tmp_path
         async with app.run_test() as pilot:
             await app.run_agent_turn("read it")
             await pilot.pause()

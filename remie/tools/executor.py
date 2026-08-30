@@ -16,7 +16,7 @@ from remie.tools.files import (
     read_file_tool,
     tree_files_tool,
 )
-from remie.tools.commands import run_command_tool
+from remie.tools.commands import get_blocked_command_reason, run_command_tool
 from remie.tools.memory import memory_tool
 from remie.tools.common import _project_root, resolve_abs_path
 
@@ -141,6 +141,14 @@ class ToolExecutor:
             if answer is None:
                 return {"answer": None, "cancelled": True}
             return {"answer": answer}
+
+        # Reject known-destructive commands before asking for path permission.
+        # Otherwise `rm -rf /` is mistaken for an outside-path request and the
+        # UI never receives the structured `blocked` result it should display.
+        if name == "run_command" and get_blocked_command_reason(
+            str(args.get("command", ""))
+        ) is not None:
+            return await asyncio.to_thread(self.run, name, args)
 
         outside = _outside_project_paths(name, args, self.project_root)
         if outside:
