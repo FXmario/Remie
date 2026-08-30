@@ -61,11 +61,8 @@ def save_chat_index(chats: dict[str, Any]) -> None:
     )
 
 
-def find_chat_by_id(chat_id: str) -> dict[str, Any] | None:
-    """Return a chat's index metadata for a uuid, or None."""
-    entry = load_chat_index().get(chat_id)
-    if entry is None:
-        return None
+def _chat_metadata(chat_id: str, entry: dict[str, Any]) -> dict[str, Any]:
+    """Build public metadata from an already-loaded index entry."""
     return {
         "id": chat_id,
         "name": entry.get("name", ""),
@@ -77,6 +74,12 @@ def find_chat_by_id(chat_id: str) -> dict[str, Any] | None:
         # adaptive titles working after an upgrade.
         "title_source": entry.get("title_source", "auto"),
     }
+
+
+def find_chat_by_id(chat_id: str) -> dict[str, Any] | None:
+    """Return a chat's index metadata for a uuid, or None."""
+    entry = load_chat_index().get(chat_id)
+    return _chat_metadata(chat_id, entry) if isinstance(entry, dict) else None
 
 
 def list_chats() -> list[dict[str, Any]]:
@@ -110,7 +113,7 @@ def create_chat(name: str = DEFAULT_CHAT_NAME) -> dict[str, Any]:
         "title_source": "auto",
     }
     save_chat_index(chats)
-    return find_chat_by_id(chat_id)  # type: ignore[return-value]
+    return _chat_metadata(chat_id, chats[chat_id])
 
 
 def rename_chat(
@@ -122,7 +125,7 @@ def rename_chat(
         return None
     name = " ".join(name.split())[:MEMORY_NAME_MAX_CHARS].rstrip()
     if not name:
-        return find_chat_by_id(chat_id)
+        return _chat_metadata(chat_id, chats[chat_id])
     existing_names = {
         str(entry.get("name", "")).strip().lower()
         for other_id, entry in chats.items()
@@ -145,18 +148,19 @@ def rename_chat(
         title_source if title_source in {"auto", "manual"} else "manual"
     )
     save_chat_index(chats)
-    return find_chat_by_id(chat_id)
+    return _chat_metadata(chat_id, chats[chat_id])
 
 
 def delete_chat(chat_id: str) -> dict[str, Any] | None:
     """Remove a chat's file and index entry; returns the removed entry."""
-    chat = find_chat_by_id(chat_id)
-    if chat is None:
+    chats = load_chat_index()
+    entry = chats.get(chat_id)
+    if not isinstance(entry, dict):
         return None
+    chat = _chat_metadata(chat_id, entry)
     path = chat_file_path(chat_id)
     if path.is_file():
         path.unlink()
-    chats = load_chat_index()
     chats.pop(chat_id, None)
     save_chat_index(chats)
     return chat
@@ -196,7 +200,7 @@ def save_chat(
     _write_json_atomic(path, payload)
     chats[chat_id]["updated_at"] = _dt.datetime.now().isoformat(timespec="seconds")
     save_chat_index(chats)
-    return find_chat_by_id(chat_id)
+    return _chat_metadata(chat_id, chats[chat_id])
 
 
 def load_chat(chat_id: str) -> dict[str, Any] | None:

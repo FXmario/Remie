@@ -364,6 +364,12 @@ class ModelBadge(Label):
         self._speed = speed
         self._show(self._input_tokens, self._output_tokens)
 
+    def set_live_metrics(self, tokens: int | None, speed: float | None) -> None:
+        """Update live generation metrics with a single widget repaint."""
+        self._live_generated_tokens = tokens
+        self._speed = speed
+        self._show(self._input_tokens, self._output_tokens)
+
     def _show(self, input_tokens: int = 0, output_tokens: int = 0) -> None:
         text = (
             f"{self._model_text}  {self._vendor_text}"

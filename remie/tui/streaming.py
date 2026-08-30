@@ -34,10 +34,11 @@ class StreamingPresentationMixin:
             state["content_newlines"] + state["reasoning_newlines"],
         )
         badge: ModelBadge = state["badge"]
-        badge.set_live_generated_tokens(generated_tokens)
         elapsed = now - state["started"]
-        if elapsed > 0:
-            badge.set_speed(generated_tokens / elapsed)
+        speed = generated_tokens / elapsed if elapsed > 0 else None
+        # Updating both values together avoids two Textual widget repaints for
+        # every streaming tick.
+        badge.set_live_metrics(generated_tokens, speed)
 
     def _drain_live_reasoning(self) -> None:
         """Render and count newly-arrived reasoning while content is silent.
