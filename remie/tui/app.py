@@ -144,7 +144,6 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
     BINDINGS: ClassVar[list[BindingType]] = [
         ("ctrl+c,super+c", "copy_or_quit", "Copy/Quit"),
         ("ctrl+l", "new_chat", "New chat"),
-        ("ctrl+p", "open_management", "Open"),
         ("ctrl+g", "toggle_status_image", "Toggle status image"),
         ("ctrl+t", "toggle_theme", "Toggle theme"),
         ("escape", "stop_agent", "Stop agent"),

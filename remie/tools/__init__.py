@@ -86,6 +86,7 @@ from remie.storage.memories import (
     set_active_memory_id,
 )
 from remie.tools.memory import memory_tool
+from remie.tools.test_runner import run_test_shards_tool
 from remie.tools.registry import (
     TOOL_PARAMETERS,
     TOOL_REGISTRY,
@@ -178,6 +179,7 @@ __all__ = [
     "rename_memory",
     "resolve_abs_path",
     "run_command_tool",
+    "run_test_shards_tool",
     "save_chat",
     "save_chat_index",
     "session_file_path",

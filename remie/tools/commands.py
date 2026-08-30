@@ -119,7 +119,9 @@ def get_blocked_command_reason(command: str) -> str | None:
     return None
 
 
-def run_command_tool(command: str, cwd: str = ".") -> dict[str, Any]:
+def run_command_tool(
+    command: str, cwd: str = ".", timeout_seconds: int | None = None
+) -> dict[str, Any]:
     """
     Runs a shell command in the project and returns its exit code and output.
     Destructive commands (rm -rf on / or ~, disk formatting, shutdown, fork
@@ -129,6 +131,11 @@ def run_command_tool(command: str, cwd: str = ".") -> dict[str, Any]:
     :return: A dictionary with the exit code, stdout, stderr, cwd, and whether it timed out.
     """
     full_path = resolve_abs_path(cwd)
+    timeout = (
+        _tools_pkg.RUN_COMMAND_TIMEOUT
+        if timeout_seconds is None
+        else max(1, int(timeout_seconds))
+    )
     reason = get_blocked_command_reason(command)
     if reason is not None:
         return {
@@ -149,7 +156,7 @@ def run_command_tool(command: str, cwd: str = ".") -> dict[str, Any]:
             shell=True,
             capture_output=True,
             text=True,
-            timeout=_tools_pkg.RUN_COMMAND_TIMEOUT,
+            timeout=timeout,
             input=None,
         )
         exit_code = result.returncode
@@ -161,7 +168,7 @@ def run_command_tool(command: str, cwd: str = ".") -> dict[str, Any]:
         stderr = error.stderr or ""
         timed_out = True
         hint = (
-            f"\n\n[command timed out after {_tools_pkg.RUN_COMMAND_TIMEOUT}s] The command was "
+            f"\n\n[command timed out after {timeout}s] The command was "
             "killed before finishing. Do not retry the exact same command "
             "unchanged; instead reduce its scope (fewer files, shorter input, "
             "one step at a time) or increase REMIE_COMMAND_TIMEOUT and try again."

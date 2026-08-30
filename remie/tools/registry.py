@@ -13,6 +13,7 @@ from remie.tools.files import (
     tree_files_tool,
 )
 from remie.tools.memory import memory_tool
+from remie.tools.test_runner import run_test_shards_tool
 from remie.tools.web import web_fetch_tool, web_search_tool
 
 TOOL_REGISTRY = {
@@ -20,6 +21,7 @@ TOOL_REGISTRY = {
     "list_files": list_files_tool,
     "edit_file": edit_file_tool,
     "run_command": run_command_tool,
+    "run_test_shards": run_test_shards_tool,
     "glob_files": glob_files_tool,
     "tree_files": tree_files_tool,
     "ask_user": ask_user_tool,
@@ -33,6 +35,7 @@ TOOL_SUMMARIES = {
     "list_files": "list the files in a directory",
     "edit_file": "edit a file",
     "run_command": "run a shell command",
+    "run_test_shards": "run a test suite locally or in four parallel shards",
     "glob_files": "find files matching a glob pattern",
     "tree_files": "show the directory tree",
     "ask_user": "ask the user a question",
@@ -129,6 +132,17 @@ TOOL_PARAMETERS = {
             },
         },
         "required": ["command"],
+    },
+    "run_test_shards": {
+        "type": "object",
+        "properties": {
+            "command": {"type": "string", "description": "Test command; shard paths are appended. Defaults to pytest."},
+            "cwd": {"type": "string", "description": "Project directory. Defaults to '.'."},
+            "threshold_seconds": {"type": "integer", "description": "Minimum estimated sequential duration for four-way execution. Defaults to 120."},
+            "estimated_seconds": {"type": "number", "description": "Optional known or historical sequential duration."},
+            "patterns": {"type": "array", "items": {"type": "string"}, "description": "Optional test discovery glob patterns."},
+            "worker_timeout_seconds": {"type": "integer", "description": "Timeout for each shard. Defaults to 600 seconds."},
+        },
     },
     "ask_user": {
         "type": "object",

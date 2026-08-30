@@ -28,6 +28,7 @@ _PATH_ARGUMENTS = {
     "glob_files": ("path",),
     "tree_files": ("path",),
     "web_fetch": ("save_to",),
+    "run_test_shards": ("cwd",),
 }
 _COMMAND_PATH = re.compile(r"(?<![\w:/])(?:~(?:/|$)|/|\.\.(?:/|$))[^\s;|&<>]*")
 
