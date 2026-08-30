@@ -3052,7 +3052,7 @@ def test_run_command_json_output_is_highlighted():
     assert isinstance(rendered, Group)
     body = list(rendered.renderables)[-1]
     assert isinstance(body, tui._PlainWrite)
-    assert '{"status": "ok", "count": 3}' in body.plain
+    assert body.plain == '{\n  "status": "ok",\n  "count": 3\n}'
 
 
 def test_run_command_plain_output_is_plain_text():
