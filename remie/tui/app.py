@@ -143,6 +143,7 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
     IS_REMIE_AGENT_APP = True
     BINDINGS: ClassVar[list[BindingType]] = [
         ("ctrl+c,super+c", "copy_or_quit", "Copy/Quit"),
+        ("ctrl+p", "open_management", "Open"),
         ("ctrl+l", "new_chat", "New chat"),
         ("ctrl+g", "toggle_status_image", "Toggle status image"),
         ("ctrl+t", "toggle_theme", "Toggle theme"),

@@ -541,12 +541,13 @@ def test_connection_error_shows_toast_and_keeps_app_running(monkeypatch):
     asyncio.run(exercise())
 
 
-def test_picker_shortcuts_are_removed_from_bindings():
+def test_management_shortcut_replaces_individual_picker_shortcuts():
     keys = {
         binding[0] if isinstance(binding, tuple) else binding.key
         for binding in AgentApp.BINDINGS
     }
-    assert keys.isdisjoint({"ctrl+p", "ctrl+r", "ctrl+o"})
+    assert "ctrl+p" in keys
+    assert keys.isdisjoint({"ctrl+r", "ctrl+o"})
 
 
 def test_open_connection_ignored_while_agent_running(monkeypatch):
@@ -3767,7 +3768,7 @@ def test_ctrl_p_tabs_render_existing_modal_layouts():
 
         app = AgentApp()
         async with app.run_test(size=(110, 50)) as pilot:
-            await app.action_open_management()
+            await pilot.press("ctrl+p")
             await pilot.pause()
             screen = app.screen
             assert isinstance(screen, OpenScreen)
