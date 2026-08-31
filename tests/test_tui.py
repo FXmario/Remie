@@ -892,6 +892,11 @@ def test_ask_user_modal_renders_question_and_options():
             assert screen.query_one("#ask-submit", Button).display is False
             assert screen.query_one("#ask-close", Button)
             assert not screen.query("#ask-cancel")
+            dialog = screen.query_one("#ask-dialog")
+            footer = screen.query_one("#ask-footer")
+            assert options.region.height == len(options.options) + 2
+            assert options.region.bottom < footer.region.y
+            assert footer.region.bottom <= dialog.content_region.bottom
 
     asyncio.run(exercise())
 

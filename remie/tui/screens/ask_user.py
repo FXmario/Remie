@@ -98,7 +98,7 @@ class AskUserScreen(ModalScreen):
     }
 
     #ask-footer {
-        dock: bottom;
+        height: 1;
         padding: 0 2;
         text-style: dim;
     }
@@ -134,7 +134,12 @@ class AskUserScreen(ModalScreen):
                     for index, option in enumerate(self.options, start=1)
                 ]
                 choices.append(f"{len(self.options) + 1}. Write your answer")
-                yield OptionList(*choices, id="ask-options")
+                option_list = OptionList(*choices, id="ask-options")
+                # OptionList's automatic height can omit its bottom border.
+                # Reserve one row per choice plus both border rows, capped by
+                # the CSS maximum so longer lists remain scrollable.
+                option_list.styles.height = min(len(choices) + 2, 12)
+                yield option_list
                 yield Input(
                     placeholder="Write your answer…",
                     id="ask-input",
