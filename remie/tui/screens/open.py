@@ -134,8 +134,16 @@ class OpenScreen(ModalScreen):
         + _FLAT_TAB_CSS
     )
 
+    _TAB_CONTENT = {
+        "open-chats": _ChatTab,
+        "open-memories": _MemoryTab,
+        "open-providers": _ProviderTab,
+        "open-models": _ModelTab,
+    }
+
     def __init__(self) -> None:
         super().__init__()
+        self._mounted_tabs = {"open-chats"}
         self._loaded_tabs: set[str] = set()
         self._ready = False
 
@@ -143,25 +151,31 @@ class OpenScreen(ModalScreen):
         with Vertical(id="open-dialog"):
             with TabbedContent(initial="open-chats", id="open-tabs"):
                 with TabPane("Chats", id="open-chats"):
+                    # Only compose the visible tab. The other management
+                    # layouts are relatively expensive and are mounted on
+                    # first use by the activation handler below.
                     yield _ChatTab()
-                with TabPane("Memories", id="open-memories"):
-                    yield _MemoryTab()
-                with TabPane("Providers", id="open-providers"):
-                    yield _ProviderTab()
-                with TabPane("Models", id="open-models"):
-                    yield _ModelTab()
+                yield TabPane("Memories", id="open-memories")
+                yield TabPane("Providers", id="open-providers")
+                yield TabPane("Models", id="open-models")
 
     def on_mount(self) -> None:
         self.query_one("#open-tabs", TabbedContent).focus()
         self._ready = True
 
-    def on_tabbed_content_tab_activated(
+    async def on_tabbed_content_tab_activated(
         self, event: TabbedContent.TabActivated
     ) -> None:
-        """Fetch remote catalogs only when their tab is first opened."""
+        """Mount a tab on demand and fetch its remote data only once."""
         if not self._ready:
             return
         pane_id = event.pane.id or ""
+        if pane_id not in self._mounted_tabs:
+            content_type = self._TAB_CONTENT.get(pane_id)
+            if content_type is None:
+                return
+            self._mounted_tabs.add(pane_id)
+            await event.pane.mount(content_type())
         if pane_id in self._loaded_tabs:
             return
         self._loaded_tabs.add(pane_id)

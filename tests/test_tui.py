@@ -3772,6 +3772,12 @@ def test_ctrl_p_tabs_render_existing_modal_layouts():
             await pilot.pause()
             screen = app.screen
             assert isinstance(screen, OpenScreen)
+            # Inactive management layouts are mounted lazily so opening the
+            # launcher does not pay the composition cost for all four tabs.
+            assert len(screen.query("#open-chat-content")) == 1
+            assert len(screen.query("#open-memory-content")) == 0
+            assert len(screen.query("#open-provider-content")) == 0
+            assert len(screen.query("#open-model-content")) == 0
             tabs = screen.query_one("#open-tabs")
             expected = {
                 "open-chats": "chat-dialog",
