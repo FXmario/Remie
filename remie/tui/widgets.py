@@ -725,6 +725,49 @@ class ImageAttachmentBar(HorizontalScroll):
             app.remove_pending_image(index)
 
 
+class TabSidebar(Vertical):
+    """Left-side list of the project's open chat tabs."""
+
+    def __init__(self) -> None:
+        super().__init__(id="tab-sidebar")
+        self._tab_ids: list[str] = []
+
+    def compose(self):
+        yield Label("Tabs", id="tabs-title")
+        yield Vertical(id="tab-list")
+        yield Button("+ New tab", id="tab-new")
+        yield Button("× Close tab", id="tab-close")
+        yield Button("‹ Hide", id="tab-hide")
+
+    async def set_tabs(self, tabs: list[dict], active_id: str | None) -> None:
+        container = self.query_one("#tab-list", Vertical)
+        await container.remove_children()
+        self._tab_ids = [str(tab["id"]) for tab in tabs]
+        for index, tab in enumerate(tabs):
+            title = str(tab.get("title") or "New chat")
+            prefix = "● " if tab["id"] == active_id else "  "
+            await container.mount(
+                Button(prefix + title, id=f"tab-item-{index}", classes="active" if tab["id"] == active_id else "")
+            )
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        button_id = event.button.id or ""
+        app = self.app
+        if button_id == "tab-new":
+            app.action_new_chat()
+        elif button_id == "tab-close":
+            app.close_tab(app._active_tab_id)
+        elif button_id == "tab-hide":
+            app.action_toggle_tabs()
+        elif button_id.startswith("tab-item-"):
+            try:
+                tab_id = self._tab_ids[int(button_id.rsplit("-", 1)[1])]
+            except (ValueError, IndexError):
+                return
+            app.switch_tab(tab_id)
+
+
 class InputRow(Horizontal):
     def compose(self):
         yield StatusIndicator()

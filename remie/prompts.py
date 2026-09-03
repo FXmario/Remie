@@ -79,7 +79,9 @@ def load_agent_memory() -> str:
     return f'\n\n## Agent memory (from .remie/memory: "{memory["name"]}")\n{content}'
 
 
-def build_system_prompt(native_tools: bool = False) -> str:
+def build_system_prompt(
+    native_tools: bool = False, tab_context: dict[str, object] | None = None
+) -> str:
     """Build the system prompt.
 
     With ``native_tools`` (Codex provider) the text-protocol instructions are
@@ -106,10 +108,23 @@ def build_system_prompt(native_tools: bool = False) -> str:
             "tool_result(...) message, continue the task.\n"
             "If no tool is needed, respond normally.\n"
         )
+    tabs = ""
+    if tab_context:
+        tabs = (
+            "\n\n## Remie tabs\n"
+            f"Working directory: {tab_context.get('working_directory', Path.cwd())}\n"
+            f"Open tabs in this directory: {tab_context.get('tab_count', 1)}\n"
+            f"Current tab: {tab_context.get('active_index', 1)} of "
+            f"{tab_context.get('tab_count', 1)}\n"
+            f"Current tab title: {tab_context.get('active_title', '')}\n"
+            "All tabs belong to this working directory and have independent chat "
+            "histories. Tabs do not change the working directory."
+        )
     return (
         _compose_system_prompt(tool_list_repr, protocol)
         + load_project_context()
         + load_agent_memory()
+        + tabs
     )
 
 

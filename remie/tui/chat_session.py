@@ -9,6 +9,7 @@ from remie.prompts import build_system_prompt
 from remie.protocol import strip_protocol_lines
 from remie.rendering import render_assistant_panel, render_user_message
 from remie.storage.chats import create_chat, load_chat, save_chat
+from remie.storage.tabs import new_tab
 from remie.tokens import estimate_conversation_tokens
 from remie.tui.constants import PROMPT_HISTORY_LIMIT
 from remie.tui.widgets import ModelBadge, StreamingRichLog
@@ -37,6 +38,7 @@ class ChatSessionMixin:
                     "input_tokens": self._total_input_tokens,
                     "output_tokens": self._total_output_tokens,
                 },
+                keep_empty=True,
             )
 
     def on_unmount(self) -> None:
@@ -109,7 +111,8 @@ class ChatSessionMixin:
             {
                 "role": "system",
                 "content": build_system_prompt(
-                    native_tools=self._native_tool_calling()
+                    native_tools=self._native_tool_calling(),
+                    tab_context=self._tab_prompt_context(),
                 ),
             }
         ]
@@ -132,9 +135,15 @@ class ChatSessionMixin:
         self._save_current_chat()
         self.query_one("#log", RichLog).clear()
         chat = create_chat()
+        tab = new_tab(chat["id"])
+        self._tab_layout["tabs"].append(tab)
+        self._active_tab_id = tab["id"]
         self._chat_id = chat["id"]
         self.sub_title = chat["name"]
         self._reset_conversation_state()
+        self._save_current_chat()
+        self._persist_tab_layout()
+        self._refresh_tabs()
 
     def _load_chat_into_ui(self, chat_id: str) -> bool:
         """Switch to another saved chat, keeping the current one on disk."""
@@ -145,6 +154,14 @@ class ChatSessionMixin:
             self.notify("Could not load that chat", severity="warning")
             return False
         self._save_current_chat()
+        tab = next(
+            (tab for tab in self._tab_layout["tabs"] if tab["chat_id"] == chat_id),
+            None,
+        )
+        if tab is None:
+            tab = new_tab(chat_id)
+            self._tab_layout["tabs"].append(tab)
+        self._active_tab_id = tab["id"]
         self.query_one("#log", RichLog).clear()
         self._chat_id = chat["id"]
         self.conversation = list(chat.get("context_messages") or [])
@@ -158,4 +175,39 @@ class ChatSessionMixin:
         log = self.query_one("#log", StreamingRichLog)
         log.write("[dim]Switched to chat:[/] " + escape(chat.get("name", "")))
         self._replay_transcript()
+        self._persist_tab_layout()
+        self._refresh_tabs()
         return True
+
+    def close_tab(self, tab_id: str | None) -> bool:
+        """Close a tab without deleting its chat history."""
+        if self._agent_running or not tab_id:
+            return False
+        tabs = self._tab_layout["tabs"]
+        index = next((i for i, tab in enumerate(tabs) if tab["id"] == tab_id), None)
+        if index is None:
+            return False
+        self._save_current_chat()
+        was_active = tab_id == self._active_tab_id
+        tabs.pop(index)
+        if not was_active:
+            self._persist_tab_layout()
+            self._refresh_tabs()
+            return True
+        if tabs:
+            target = tabs[min(index, len(tabs) - 1)]
+            self._active_tab_id = target["id"]
+            return self._load_chat_into_ui(target["chat_id"])
+        self._active_tab_id = None
+        self.action_new_chat()
+        return True
+
+    def switch_tab(self, tab_id: str) -> bool:
+        """Activate an open tab by its stable tab id."""
+        if tab_id == self._active_tab_id:
+            return True
+        tab = next(
+            (tab for tab in self._tab_layout["tabs"] if tab["id"] == tab_id),
+            None,
+        )
+        return bool(tab and self._load_chat_into_ui(tab["chat_id"]))

@@ -171,6 +171,8 @@ def save_chat(
     context_messages: list[dict[str, Any]],
     transcript: list[dict[str, Any]],
     token_usage: dict[str, int] | None = None,
+    *,
+    keep_empty: bool = False,
 ) -> dict[str, Any] | None:
     """Persist a chat's resumable context and visible transcript.
 
@@ -184,7 +186,7 @@ def save_chat(
         return None
     has_content = bool(transcript) or len(context_messages) > 1
     path = chat_file_path(chat_id)
-    if not has_content and not path.is_file():
+    if not keep_empty and not has_content and not path.is_file():
         if chats[chat_id].get("name", "").strip().lower() == DEFAULT_CHAT_NAME.lower():
             chats.pop(chat_id, None)
             save_chat_index(chats)

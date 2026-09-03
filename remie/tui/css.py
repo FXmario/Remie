@@ -9,6 +9,54 @@ HeaderIcon {
     display: none;
 }
 
+#workspace {
+    height: 1fr;
+    width: 100%;
+}
+
+#chat-pane {
+    height: 1fr;
+    width: 1fr;
+}
+
+#tab-sidebar {
+    width: 26;
+    height: 1fr;
+    padding: 1;
+    border-right: solid $primary;
+}
+
+#tabs-title {
+    height: 2;
+    text-style: bold;
+}
+
+#tab-list {
+    height: 1fr;
+    overflow-y: auto;
+}
+
+#tab-sidebar Button {
+    width: 100%;
+    height: 3;
+    margin-bottom: 1;
+    text-align: left;
+}
+
+#tab-sidebar Button.active {
+    background: $primary 30%;
+}
+
+#tabs-show {
+    display: none;
+    width: 10;
+    min-width: 10;
+    height: 1;
+    min-height: 1;
+    margin-left: 1;
+    border: none;
+}
+
 #log {
     width: 1fr;
     height: 1fr;

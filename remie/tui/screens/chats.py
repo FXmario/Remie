@@ -177,25 +177,22 @@ class ChatScreen(ModalScreen):
             self._disarm_delete()
             return
         if is_agent_app(app):
+            removed_tabs = [
+                tab for tab in app._tab_layout["tabs"] if tab["chat_id"] == chat_id
+            ]
+            app._tab_layout["tabs"] = [
+                tab for tab in app._tab_layout["tabs"] if tab["chat_id"] != chat_id
+            ]
             if app._chat_id == chat_id:
                 latest = load_latest_chat()
-                app.query_one("#log", RichLog).clear()
                 if latest is not None:
-                    app._chat_id = latest["id"]
-                    app.conversation = list(latest.get("context_messages") or [])
-                    app._transcript = list(latest.get("transcript") or [])
-                    app._refresh_system_prompt()
-                    app._cached_conv_tokens = estimate_conversation_tokens(
-                        app.conversation
-                    )
-                    app._rebuild_prompt_history()
-                    app.sub_title = latest.get("name", "")
-                    app._replay_transcript()
+                    app._load_chat_into_ui(latest["id"])
                 else:
-                    fresh = create_chat()
-                    app._chat_id = fresh["id"]
-                    app.sub_title = fresh["name"]
-                    app._reset_conversation_state()
+                    app._active_tab_id = None
+                    app.action_new_chat()
+            elif removed_tabs:
+                app._persist_tab_layout()
+                app._refresh_tabs()
             app.notify(f"Deleted chat '{chat['name']}'", title="Chats")
         self._reload_options()
 

@@ -6,6 +6,7 @@ import io
 import json
 import os
 import time
+from pathlib import Path
 from typing import Any, ClassVar
 
 import httpx
@@ -20,7 +21,8 @@ from textual.binding import Binding, BindingType
 from textual.css.query import NoMatches
 from textual.keys import format_key
 from textual.screen import Screen
-from textual.widgets import Footer, Header
+from textual.containers import Horizontal, Vertical
+from textual.widgets import Button, Footer, Header
 
 from remie.agent import (
     fetch_opencode_go_models,
@@ -47,10 +49,12 @@ from remie.storage.chats import (
     DEFAULT_CHAT_NAME,
     create_chat,
     find_chat_by_id,
+    load_chat,
     load_latest_chat,
     rename_chat,
 )
 from remie.storage.memories import MEMORY_NAME_MAX_CHARS, ensure_active_memory
+from remie.storage.tabs import load_tab_layout, new_tab, save_tab_layout
 from remie.tools.executor import ToolExecutor, execute_tool_call
 from remie.tools.registry import get_tool_summary
 from remie.tui.chat_session import ChatSessionMixin
@@ -93,6 +97,7 @@ from remie.tui.widgets import (
     StatusIndicator,
     StreamingRichLog,
     ThinkingIndicator,
+    TabSidebar,
 )
 
 
@@ -147,6 +152,7 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
         ("ctrl+l", "new_chat", "New chat"),
         ("ctrl+g", "toggle_status_image", "Toggle status image"),
         ("ctrl+t", "toggle_theme", "Toggle theme"),
+        ("ctrl+b", "toggle_tabs", "Toggle tabs"),
         ("escape", "stop_agent", "Stop agent"),
     ]
 
@@ -185,6 +191,8 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
         self._total_output_tokens = 0
         self._status_animation_enabled = load_status_animation_enabled()
         self._chat_id: str | None = None
+        self._tab_layout = load_tab_layout()
+        self._active_tab_id: str | None = self._tab_layout.get("active_tab_id")
         self._transcript: list[dict[str, Any]] = []
         self.debug_mode = os.environ.get("REMIE_DEBUG", "").lower() in {
             "1",
@@ -200,8 +208,12 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
 
     def compose(self) -> ComposeResult:
         yield Header()
-        yield StreamingRichLog(id="log", markup=True, wrap=True)
-        yield InputRow(id="input-row")
+        with Horizontal(id="workspace"):
+            yield TabSidebar()
+            with Vertical(id="chat-pane"):
+                yield Button("› Tabs", id="tabs-show")
+                yield StreamingRichLog(id="log", markup=True, wrap=True)
+                yield InputRow(id="input-row")
         yield CopyableFooter()
 
     def _code_theme(self) -> str:
@@ -220,7 +232,26 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
             self._status_animation_enabled
         )
         ensure_active_memory()
-        chat = load_latest_chat()
+        # Keep only tabs whose project-local chats still exist. Prefer the
+        # persisted active tab, then another open tab, then the latest history.
+        valid_tabs = []
+        loaded_by_tab: dict[str, dict[str, Any]] = {}
+        for tab in self._tab_layout["tabs"]:
+            loaded = load_chat(tab["chat_id"])
+            if loaded is not None:
+                valid_tabs.append(tab)
+                loaded_by_tab[tab["id"]] = loaded
+        self._tab_layout["tabs"] = valid_tabs
+        chat = loaded_by_tab.get(str(self._active_tab_id))
+        if chat is None and valid_tabs:
+            self._active_tab_id = valid_tabs[0]["id"]
+            chat = loaded_by_tab[self._active_tab_id]
+        if chat is None:
+            chat = load_latest_chat()
+            if chat is not None:
+                tab = new_tab(chat["id"])
+                self._tab_layout["tabs"].append(tab)
+                self._active_tab_id = tab["id"]
         if chat is not None:
             self._chat_id = chat["id"]
             self.conversation = list(chat.get("context_messages") or [])
@@ -235,12 +266,16 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
             self._replay_transcript()
         else:
             chat = create_chat()
+            tab = new_tab(chat["id"])
+            self._tab_layout["tabs"].append(tab)
+            self._active_tab_id = tab["id"]
             self._chat_id = chat["id"]
             self.conversation = [
                 {
                     "role": "system",
                     "content": build_system_prompt(
-                        native_tools=self._native_tool_calling()
+                        native_tools=self._native_tool_calling(),
+                        tab_context=self._tab_prompt_context(),
                     ),
                 }
             ]
@@ -250,6 +285,9 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
         if "token_usage" in chat:
             self._restore_chat_token_usage(chat)
         self._rebuild_prompt_history()
+        self._persist_tab_layout()
+        self._apply_sidebar_visibility()
+        self._refresh_tabs()
         prompt.focus()
         self._prefetch_model_context()
 
@@ -263,6 +301,51 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
         state = "shown" if self._status_animation_enabled else "hidden"
         self.notify(f"Status image {state}", title="Status image")
 
+    def _persist_tab_layout(self) -> None:
+        self._tab_layout["active_tab_id"] = self._active_tab_id
+        save_tab_layout(self._tab_layout)
+
+    def _tab_prompt_context(self) -> dict[str, object]:
+        tabs = self._tab_layout.get("tabs", [])
+        index = next(
+            (i for i, tab in enumerate(tabs, 1) if tab["id"] == self._active_tab_id),
+            1,
+        )
+        return {
+            "working_directory": str(Path.cwd().resolve()),
+            "tab_count": max(1, len(tabs)),
+            "active_index": index,
+            "active_title": self.sub_title or DEFAULT_CHAT_NAME,
+        }
+
+    async def _refresh_tabs_async(self) -> None:
+        tabs = []
+        for tab in self._tab_layout.get("tabs", []):
+            chat = find_chat_by_id(tab["chat_id"])
+            if chat is not None:
+                tabs.append({**tab, "title": chat.get("name", DEFAULT_CHAT_NAME)})
+        await self.query_one(TabSidebar).set_tabs(tabs, self._active_tab_id)
+
+    def _refresh_tabs(self) -> None:
+        self.call_later(self._refresh_tabs_async)
+
+    def _apply_sidebar_visibility(self) -> None:
+        visible = bool(self._tab_layout.get("sidebar_visible", True))
+        self.query_one(TabSidebar).display = visible
+        self.query_one("#tabs-show", Button).display = not visible
+
+    def action_toggle_tabs(self) -> None:
+        self._tab_layout["sidebar_visible"] = not bool(
+            self._tab_layout.get("sidebar_visible", True)
+        )
+        self._apply_sidebar_visibility()
+        self._persist_tab_layout()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "tabs-show":
+            event.stop()
+            self.action_toggle_tabs()
+
     def _native_tool_calling(self) -> bool:
         """Native function calling is used for the Codex and OpenRouter
         providers; other providers rely on the text protocol."""
@@ -273,7 +356,10 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
         keep the conversation token cache in sync."""
         new_system = {
             "role": "system",
-            "content": build_system_prompt(native_tools=self._native_tool_calling()),
+            "content": build_system_prompt(
+                native_tools=self._native_tool_calling(),
+                tab_context=self._tab_prompt_context(),
+            ),
         }
         if self.conversation and self.conversation[0]["role"] == "system":
             self._cached_conv_tokens += estimate_message_tokens(
@@ -318,6 +404,7 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
         renamed = rename_chat(self._chat_id, name, title_source="auto")
         if renamed is not None:
             self.sub_title = renamed["name"]
+            self._refresh_tabs()
 
     @work(exclusive=False)
     async def _prefetch_model_context(self) -> None:
