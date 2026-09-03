@@ -28,6 +28,8 @@ When multiple valid approaches have meaningful tradeoffs or require a user prefe
 To ask the user a question, call the 'ask_user' tool and wait for its result instead of ending your turn.
 
 Use the 'memory' tool to persist durable facts, decisions, user preferences, and open tasks that should be remembered across chats. Add a note when you learn something that will matter later; do not log routine progress and do not use memory as a chat transcript. Remie keeps an active project memory, so use memory(action="add", text=...) without a name to append to it. Use memory(action="list") to see older memories (each with an id and a name), and target one by name or id only when needed; memory(action="delete", name=...) removes a memory entirely.
+
+When testing a project, use the 'run_test_shards' tool by default whenever the test suite can be discovered or split. Use 'run_command' only for focused checks, compilation, linting, or test commands that cannot be sharded.
 """
 
 
@@ -141,6 +143,13 @@ _ASK_USER_PARAGRAPH = (
     "tool and wait for its result instead of ending your turn."
 )
 
+_TESTING_PARAGRAPH = (
+    "When testing a project, use the 'run_test_shards' tool by default whenever "
+    "the test suite can be discovered or split. Use 'run_command' only for "
+    "focused checks, compilation, linting, or test commands that cannot be sharded."
+)
+
+
 _MEMORY_PARAGRAPH = (
     "Use the 'memory' tool to persist durable facts, decisions, user preferences, "
     "and open tasks that should be remembered across chats. Add a note when you "
@@ -160,5 +169,6 @@ def _compose_system_prompt(tool_list_repr: str, protocol: str) -> str:
         f"{tool_list_repr}\n"
         f"{protocol}\n"
         f"{_ASK_USER_PARAGRAPH}\n"
-        f"{_MEMORY_PARAGRAPH}"
+        f"{_MEMORY_PARAGRAPH}\n"
+        f"{_TESTING_PARAGRAPH}"
     )
