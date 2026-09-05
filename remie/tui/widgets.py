@@ -79,6 +79,32 @@ class StreamingRichLog(RichLog):
         super().__init__(*args, **kwargs)
         self._stream_start: int | None = None
 
+    def write(
+        self,
+        content: object,
+        width: int | None = None,
+        expand: bool = False,
+        shrink: bool = True,
+        scroll_end: bool | None = None,
+        animate: bool = False,
+    ):
+        """Append output without taking the scroll position from the user.
+
+        RichLog's default auto-scroll is unconditional. Follow new output only
+        while the viewport is already at the end; once the user scrolls up,
+        writes leave their position alone.
+        """
+        if scroll_end is None:
+            scroll_end = self.is_vertical_scroll_end
+        return super().write(
+            content,
+            width=width,
+            expand=expand,
+            shrink=shrink,
+            scroll_end=scroll_end,
+            animate=animate,
+        )
+
     def get_selection(self, selection) -> tuple[str, str] | None:
         """Extract text without copying Rich Panel borders and padding."""
         text = "\n".join(strip.text for strip in self.lines)
@@ -180,8 +206,10 @@ class StreamingRichLog(RichLog):
             ),
         )
         self._line_cache.clear()
+        follow_output = self.is_vertical_scroll_end
         self.virtual_size = Size(self._widest_line_width, len(self.lines))
-        self.scroll_end(animate=False, immediate=False, x_axis=False)
+        if follow_output:
+            self.scroll_end(animate=False, immediate=False, x_axis=False)
         self.refresh()
 
     def end_stream(self) -> None:
@@ -733,11 +761,11 @@ class TabSidebar(Vertical):
         self._tab_ids: list[str] = []
 
     def compose(self):
+        yield Button("< Hide", id="tab-hide")
         yield Label("Tabs", id="tabs-title")
         yield Vertical(id="tab-list")
         yield Button("+ New tab", id="tab-new")
         yield Button("× Close tab", id="tab-close")
-        yield Button("‹ Hide", id="tab-hide")
 
     async def set_tabs(self, tabs: list[dict], active_id: str | None) -> None:
         container = self.query_one("#tab-list", Vertical)

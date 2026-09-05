@@ -47,14 +47,21 @@ HeaderIcon {
     background: $primary 30%;
 }
 
-#tabs-show {
-    display: none;
+#tabs-show, #tab-sidebar Button#tab-hide {
     width: 10;
     min-width: 10;
     height: 1;
     min-height: 1;
-    margin-left: 1;
     border: none;
+}
+
+#tab-sidebar Button#tab-hide {
+    margin-bottom: 1;
+}
+
+#tabs-show {
+    display: none;
+    margin-left: 1;
 }
 
 #log {

@@ -211,7 +211,7 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
         with Horizontal(id="workspace"):
             yield TabSidebar()
             with Vertical(id="chat-pane"):
-                yield Button("› Tabs", id="tabs-show")
+                yield Button("> Tabs", id="tabs-show")
                 yield StreamingRichLog(id="log", markup=True, wrap=True)
                 yield InputRow(id="input-row")
         yield CopyableFooter()

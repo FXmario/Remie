@@ -178,6 +178,31 @@ def test_tmux_spinner_hidden_when_idle(monkeypatch):
     asyncio.run(exercise())
 
 
+def test_sidebar_toggle_buttons_have_matching_labels_and_positions():
+    async def exercise():
+        app = AgentApp()
+        app._tab_layout["sidebar_visible"] = True
+        async with app.run_test() as pilot:
+            sidebar = app.query_one("#tab-sidebar")
+            hide = app.query_one("#tab-hide", Button)
+            show = app.query_one("#tabs-show", Button)
+
+            assert sidebar.children[0] is hide
+            assert str(hide.label) == "< Hide"
+            assert str(show.label) == "> Tabs"
+            assert hide.size.height == 1
+
+            await pilot.click("#tab-hide")
+            assert sidebar.display is False
+            assert show.display is True
+
+            await pilot.click("#tabs-show")
+            assert sidebar.display is True
+            assert show.display is False
+
+    asyncio.run(exercise())
+
+
 def test_status_gifs_load_with_frame_timing():
     frames, durations = _load_status_gif("ready.gif")
 
@@ -1130,6 +1155,32 @@ def test_panel_decoration_is_removed_from_log_selection():
     assert StreamingRichLog._without_panel_border("value │ value") == "value │ value"
     assert StreamingRichLog._panel_content_bounds("│ answer │") == (2, 8)
     assert StreamingRichLog._panel_content_bounds("╰────────╯") is None
+
+
+def test_live_output_does_not_force_scrolled_log_to_bottom():
+    async def exercise():
+        app = AgentApp()
+        async with app.run_test(size=(100, 30)) as pilot:
+            log = app.query_one("#log", StreamingRichLog)
+            for index in range(60):
+                log.write(f"history {index}")
+            log.begin_stream()
+            log.update_stream("initial response")
+            await pilot.pause()
+
+            log.scroll_to(y=0, animate=False, immediate=True)
+            assert not log.is_vertical_scroll_end
+
+            # Both ordinary agent events and in-place streaming updates must
+            # preserve a user's position while they read earlier content.
+            log.write("tool event")
+            log.update_stream("updated response\n" * 20)
+            await pilot.pause()
+
+            assert log.scroll_y == 0
+            assert not log.is_vertical_scroll_end
+
+    asyncio.run(exercise())
 
 
 def test_mouse_release_copies_screen_selection_immediately(monkeypatch):
