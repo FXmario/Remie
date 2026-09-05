@@ -12,6 +12,9 @@ from textual import events
 from textual.widgets import Button, Input, Label, OptionList, Select
 from textual.widgets import RadioButton, RadioSet
 
+from remie.tui.constants import REASONING_EFFORTS
+from remie.tui.effort_slider import EffortSlider
+
 import remie.tui as tui
 import remie.tui.app as tui_app
 import remie.tui.screens.connection as connection_screen
@@ -2304,7 +2307,7 @@ def test_reasoning_effort_fades_for_unsupported_model(monkeypatch):
                 await screen.on_select_changed(
                     Select.Changed(provider_select, "opencode-go")
                 )
-                effort = screen.query_one("#reasoning-effort-select", Select)
+                effort = screen.query_one("#reasoning-effort-select", EffortSlider)
                 label = screen.query_one("#reasoning-effort-label")
                 assert effort.value == "off"
                 assert effort.disabled is True
@@ -2347,7 +2350,7 @@ def test_reasoning_effort_restores_on_switch_back(monkeypatch):
                 await screen.on_select_changed(
                     Select.Changed(provider_select, "opencode-go")
                 )
-                effort = screen.query_one("#reasoning-effort-select", Select)
+                effort = screen.query_one("#reasoning-effort-select", EffortSlider)
                 # Initial state: unsupported model -> faded at "off".
                 assert effort.value == "off"
                 assert effort.disabled is True
@@ -2387,7 +2390,7 @@ def test_local_keeps_reasoning_effort_enabled(monkeypatch):
                 await screen.on_select_changed(
                     Select.Changed(provider_select, "opencode-go")
                 )
-                effort = screen.query_one("#reasoning-effort-select", Select)
+                effort = screen.query_one("#reasoning-effort-select", EffortSlider)
                 assert effort.disabled is False
                 assert screen.query_one("#reasoning-effort-label").disabled is False
         finally:
@@ -2434,7 +2437,7 @@ def test_connect_clamps_effort_for_unsupported_model(monkeypatch):
                 await screen.on_select_changed(
                     Select.Changed(provider_select, "opencode-go")
                 )
-                effort = screen.query_one("#reasoning-effort-select", Select)
+                effort = screen.query_one("#reasoning-effort-select", EffortSlider)
                 assert effort.value == "off"
                 screen._connect()
                 await pilot.pause()
@@ -3854,4 +3857,51 @@ def test_ctrl_p_tabs_render_existing_modal_layouts():
                 assert dialog.region == pane.region
                 assert not dialog.styles.border
 
+    asyncio.run(exercise())
+
+
+def test_effort_slider_keyboard_and_pointer():
+    async def exercise():
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            await app.push_screen(ConnectionScreen())
+            slider = app.screen.query_one(EffortSlider)
+            slider.disabled = False
+            slider.focus()
+            await pilot.press('home', 'right', 'right')
+            assert slider.value == 'medium'
+            await pilot.press('end', 'right')
+            assert slider.value == 'max'
+            slider.scroll_visible(animate=False)
+            await pilot.pause()
+            await pilot.click(slider, offset=(1, 0))
+            assert slider.value == 'off'
+            assert not app.screen.query('#reasoning-search')
+            # Dragging across the slider must never begin a text selection.
+            assert slider.ALLOW_SELECT is False
+            await pilot.mouse_down(slider, offset=(1, 0))
+            await pilot.mouse_up(slider, offset=(10, 0))
+            await pilot.pause()
+            assert slider.text_selection is None
+            assert slider.value in REASONING_EFFORTS
+    asyncio.run(exercise())
+
+
+def test_long_question_keeps_footer_and_answer_accessible():
+    async def exercise():
+        app = AgentApp()
+        async with app.run_test(size=(80, 24)) as pilot:
+            screen = AskUserScreen('Long question\n' * 60, ['Yes', 'No'])
+            await app.push_screen(screen)
+            await pilot.pause()
+            dialog = screen.query_one('#ask-dialog')
+            footer = screen.query_one('#ask-footer')
+            assert footer.region.bottom <= dialog.content_region.bottom
+            screen._show_custom_answer()
+            await pilot.pause()
+            submit = screen.query_one('#ask-submit')
+            assert submit.region.bottom <= dialog.content_region.bottom
+            assert screen.query_one('#ask-input').region.intersection(
+                screen.query_one('#ask-body').content_region
+            ).height > 0
     asyncio.run(exercise())

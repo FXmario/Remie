@@ -144,7 +144,6 @@ class OpenScreen(ModalScreen):
     def __init__(self) -> None:
         super().__init__()
         self._mounted_tabs = {"open-chats"}
-        self._loaded_tabs: set[str] = set()
         self._ready = False
 
     def compose(self) -> ComposeResult:
@@ -166,7 +165,7 @@ class OpenScreen(ModalScreen):
     async def on_tabbed_content_tab_activated(
         self, event: TabbedContent.TabActivated
     ) -> None:
-        """Mount a tab on demand and fetch its remote data only once."""
+        """Mount tabs on demand and refresh remote data on every activation."""
         if not self._ready:
             return
         pane_id = event.pane.id or ""
@@ -176,9 +175,6 @@ class OpenScreen(ModalScreen):
                 return
             self._mounted_tabs.add(pane_id)
             await event.pane.mount(content_type())
-        if pane_id in self._loaded_tabs:
-            return
-        self._loaded_tabs.add(pane_id)
         if pane_id == "open-models":
             models = self.query_one("#open-model-content", _ModelTab)
             if models._config.provider != "local":

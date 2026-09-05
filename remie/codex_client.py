@@ -7,6 +7,7 @@ as Responses-API function definitions and the model returns ``function_call``
 output items that Remie executes and feeds back as ``function_call_output``.
 """
 
+import re
 import uuid
 from collections.abc import AsyncIterator, Callable
 from typing import Any
@@ -20,11 +21,10 @@ from remie.model_names import prettify_model_name
 
 CODEX_BACKEND_BASE = "https://chatgpt.com/backend-api/codex"
 CODEX_MODELS_URL = f"{CODEX_BACKEND_BASE}/models"
-# The subscription backend expects the CLI originator header and a
-# client_version query parameter on GET /models. The returned model list is
-# gated by this version: older clients get older lineups (e.g. 0.136.0 misses
-# the GPT-5.6 family), so track a recent CLI release here.
-CODEX_CLIENT_VERSION = "0.149.0"
+# Discover the official stable CLI version instead of spoofing a future version
+# or freezing model discovery to the release shipped with Remie.
+CODEX_RELEASE_URL = "https://registry.npmjs.org/@openai/codex/latest"
+_last_codex_client_version: str | None = None
 # The CLI originator header value expected by the backend.
 CODEX_ORIGINATOR = "codex_cli_rs"
 
@@ -629,16 +629,37 @@ async def stream_codex_call(
         yield chunk
 
 
+async def _discover_codex_client_version(client: httpx.AsyncClient) -> str | None:
+    """Refresh official release metadata; retain the last success this session.
+
+    Only public metadata is requested here. Never pass the authenticated Codex
+    headers to the package registry, and never execute or install its contents.
+    """
+    global _last_codex_client_version
+    try:
+        response = await client.get(CODEX_RELEASE_URL, timeout=10)
+        response.raise_for_status()
+        payload = response.json()
+        version = payload.get("version") if isinstance(payload, dict) else None
+        if isinstance(version, str) and re.fullmatch(r"\d+\.\d+\.\d+", version):
+            _last_codex_client_version = version
+    except (httpx.HTTPError, ValueError):
+        pass
+    return _last_codex_client_version
+
+
 async def fetch_codex_models() -> list[dict[str, Any]]:
     """Fetch the account's live Codex model metadata; [] on failure.
 
     Rows carry ``{"id", "display", "description", "context_window"}`` straight
     from the backend's ``display_name`` / ``description`` fields.
     """
-    from remie.codex_auth import load_auth
-
-    auth = load_auth()
-    if auth is None:
+    try:
+        # Refresh an expired session before querying the catalog. Otherwise a
+        # stale token silently falls back to the bundled list and hides models
+        # newly published by the Codex endpoint.
+        auth = await ensure_valid_auth()
+    except Exception:
         return []
     headers = {
         "Authorization": f"Bearer {auth.access_token}",
@@ -648,9 +669,12 @@ async def fetch_codex_models() -> list[dict[str, Any]]:
         headers["chatgpt-account-id"] = auth.account_id
     try:
         async with _create_client() as client:
+            version = await _discover_codex_client_version(client)
+            if version is None:
+                return []
             response = await client.get(
                 CODEX_MODELS_URL,
-                params={"client_version": CODEX_CLIENT_VERSION},
+                params={"client_version": version},
                 headers=headers,
             )
             response.raise_for_status()

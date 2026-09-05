@@ -8,6 +8,7 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, RadioButton, RadioSet, Select
 
+from remie.tui.effort_slider import EffortSlider
 from remie import codex_auth
 from remie.agent import (
     CODEX_BACKEND_BASE,
@@ -177,14 +178,12 @@ class ConnectionScreen(ModalScreen):
                     id="reasoning-effort-label",
                     classes="field-label picker-field-label",
                 )
-                yield Select(
-                    [(effort.title(), effort) for effort in REASONING_EFFORTS],
+                yield EffortSlider(
                     value=(
                         current.reasoning_effort
                         if current.reasoning_effort in REASONING_EFFORTS
                         else "medium"
                     ),
-                    allow_blank=False,
                     id="reasoning-effort-select",
                 )
                 yield Label(
@@ -313,7 +312,6 @@ class ConnectionScreen(ModalScreen):
         search_ids = {
             "provider-select": "provider-search",
             "model-select": "model-search",
-            "reasoning-effort-select": "reasoning-search",
         }
         search_id = search_ids.get(select_id)
         if not search_id:
@@ -423,9 +421,9 @@ class ConnectionScreen(ModalScreen):
                 "",
                 str(self.query_one("#model-select", Select).value),
                 "codex",
-                self.query_one("#reasoning-effort-select", Select).value
+                self.query_one("#reasoning-effort-select", EffortSlider).value
                 if isinstance(
-                    self.query_one("#reasoning-effort-select", Select).value, str
+                    self.query_one("#reasoning-effort-select", EffortSlider).value, str
                 )
                 else "medium",
                 True,
@@ -511,7 +509,7 @@ class ConnectionScreen(ModalScreen):
         model_select.disabled = not has_provider or is_local
         local_model_input.display = is_local
         local_model_input.disabled = not is_local
-        reasoning_select = self.query_one("#reasoning-effort-select", Select)
+        reasoning_select = self.query_one("#reasoning-effort-select", EffortSlider)
         reasoning_label = self.query_one("#reasoning-effort-label", Label)
         reasoning_select.display = has_provider
         reasoning_label.display = has_provider
@@ -573,7 +571,7 @@ class ConnectionScreen(ModalScreen):
             if provider == "local"
             else self._selected_model()
         )
-        effort = self.query_one("#reasoning-effort-select", Select).value
+        effort = self.query_one("#reasoning-effort-select", EffortSlider).value
         if not isinstance(effort, str):
             effort = "medium"
         self._profiles[provider] = ConnectionConfig(
@@ -594,7 +592,7 @@ class ConnectionScreen(ModalScreen):
         self.query_one("#base-url-input", Input).value = profile.base_url
         self.query_one("#api-key-input", Input).value = profile.api_key
         self.query_one("#local-model-input", Input).value = profile.model
-        reasoning = self.query_one("#reasoning-effort-select", Select)
+        reasoning = self.query_one("#reasoning-effort-select", EffortSlider)
         reasoning.value = profile.reasoning_effort
         self._set_verify_ssl_value(profile.verify_ssl)
 
@@ -610,7 +608,7 @@ class ConnectionScreen(ModalScreen):
         if provider not in {"local", "opencode-go", "codex", "openrouter"}:
             return
         supported = supports_reasoning_effort(model, provider)
-        select = self.query_one("#reasoning-effort-select", Select)
+        select = self.query_one("#reasoning-effort-select", EffortSlider)
         label = self.query_one("#reasoning-effort-label", Label)
         if supported:
             select.disabled = False
@@ -726,7 +724,7 @@ class ConnectionScreen(ModalScreen):
             if provider == "local"
             else True
         )
-        effort = self.query_one("#reasoning-effort-select", Select).value
+        effort = self.query_one("#reasoning-effort-select", EffortSlider).value
         if not isinstance(effort, str):
             effort = "medium"
         if not supports_reasoning_effort(model, str(provider)):

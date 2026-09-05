@@ -7,6 +7,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, OptionList, Select
 from textual.widgets.option_list import Option
 
+from remie.tui.effort_slider import EffortSlider
 from remie import codex_auth
 from remie.agent import (
     CODEX_MODELS,
@@ -142,14 +143,12 @@ class ModelScreen(ModalScreen):
             )
             yield OptionList(id="model-picker-list")
             yield Label("Reasoning effort", id="model-reasoning-label")
-            yield Select(
-                [(effort.title(), effort) for effort in REASONING_EFFORTS],
+            yield EffortSlider(
                 value=(
                     self._config.reasoning_effort
                     if self._config.reasoning_effort in REASONING_EFFORTS
                     else "medium"
                 ),
-                allow_blank=False,
                 id="model-reasoning-select",
             )
             with Horizontal(id="model-picker-actions"):
@@ -217,7 +216,7 @@ class ModelScreen(ModalScreen):
             selected, self._config.provider
         )
         self.query_one("#model-reasoning-label", Label).display = supported
-        self.query_one("#model-reasoning-select", Select).display = supported
+        self.query_one("#model-reasoning-select", EffortSlider).display = supported
 
     async def _load_live_models(self) -> None:
         try:
@@ -262,7 +261,7 @@ class ModelScreen(ModalScreen):
         if not model:
             self.notify("Choose a model first", severity="warning")
             return
-        reasoning = self.query_one("#model-reasoning-select", Select).value
+        reasoning = self.query_one("#model-reasoning-select", EffortSlider).value
         effort = reasoning if isinstance(reasoning, str) else self._config.reasoning_effort
         if not supports_reasoning_effort(model, self._config.provider):
             effort = "off"

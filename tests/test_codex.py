@@ -1021,9 +1021,11 @@ def test_fetch_codex_models_parses_slugs(monkeypatch):
     assert auth is not None
 
     def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.params["client_version"] == (
-            codex_client.CODEX_CLIENT_VERSION
-        )
+        if str(request.url) == codex_client.CODEX_RELEASE_URL:
+            assert "authorization" not in request.headers
+            assert "chatgpt-account-id" not in request.headers
+            return httpx.Response(200, json={"version": "0.201.0"})
+        assert request.url.params["client_version"] == "0.201.0"
         return httpx.Response(
             200,
             json={
@@ -1123,3 +1125,37 @@ def test_agent_routes_codex_provider_through_codex_stream(monkeypatch):
             previous.reasoning_effort,
             previous.verify_ssl,
         )
+
+
+@pytest.mark.parametrize("failure", ["http", "invalid", "prerelease"])
+def test_codex_release_discovery_refreshes_and_retains_last_success(monkeypatch, failure):
+    monkeypatch.setattr(codex_client, "_last_codex_client_version", None)
+    calls = 0
+
+    def handler(request):
+        nonlocal calls
+        calls += 1
+        assert "authorization" not in request.headers
+        if calls <= 2:
+            return httpx.Response(200, json={"version": f"0.{200 + calls}.0"})
+        if failure == "http":
+            return httpx.Response(503)
+        return httpx.Response(200, json={"version": "bad" if failure == "invalid" else "0.999.0-beta.1"})
+
+    async def exercise():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            assert await codex_client._discover_codex_client_version(client) == "0.201.0"
+            assert await codex_client._discover_codex_client_version(client) == "0.202.0"
+            assert await codex_client._discover_codex_client_version(client) == "0.202.0"
+    asyncio.run(exercise())
+
+
+def test_codex_release_discovery_failure_without_previous_version(monkeypatch):
+    monkeypatch.setattr(codex_client, "_last_codex_client_version", None)
+
+    async def exercise():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(
+            lambda request: httpx.Response(503)
+        )) as client:
+            assert await codex_client._discover_codex_client_version(client) is None
+    asyncio.run(exercise())

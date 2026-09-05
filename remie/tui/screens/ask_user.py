@@ -1,7 +1,7 @@
 """Modal asking the user a question with optional predefined choices."""
 
 from textual.app import ComposeResult
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, OptionList, Static
 
@@ -24,7 +24,7 @@ class AskUserScreen(ModalScreen):
     #ask-dialog {
         width: 72;
         max-width: 92%;
-        height: auto;
+        height: 80%;
         max-height: 80%;
         padding: 0;
         border: round $primary;
@@ -58,6 +58,8 @@ class AskUserScreen(ModalScreen):
     }
 
     #ask-body {
+        height: 1fr;
+        min-height: 1;
         padding: 1 2;
     }
 
@@ -89,6 +91,7 @@ class AskUserScreen(ModalScreen):
     }
 
     #ask-actions {
+        height: auto;
         align: right middle;
         margin-top: 1;
     }
@@ -127,7 +130,7 @@ class AskUserScreen(ModalScreen):
             with Horizontal(id="ask-header"):
                 yield Label("❓ Agent needs your input", id="ask-title")
                 yield Button("✕", id="ask-close")
-            with Vertical(id="ask-body"):
+            with VerticalScroll(id="ask-body"):
                 yield Static(self._question_renderable(), id="ask-question")
                 choices = [
                     f"{index}. {option}"
