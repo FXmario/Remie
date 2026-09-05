@@ -187,7 +187,11 @@ def test_sidebar_toggle_buttons_have_matching_labels_and_positions():
             hide = app.query_one("#tab-hide", Button)
             show = app.query_one("#tabs-show", Button)
 
-            assert sidebar.children[0] is hide
+            header = app.query_one("#tabs-header")
+            title = app.query_one("#tabs-title")
+            assert sidebar.children[0] is header
+            assert list(header.children) == [title, hide]
+            assert hide.region.x > title.region.x
             assert str(hide.label) == "< Hide"
             assert str(show.label) == "> Tabs"
             assert hide.size.height == 1

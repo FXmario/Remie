@@ -26,8 +26,14 @@ HeaderIcon {
     border-right: solid $primary;
 }
 
-#tabs-title {
+#tabs-header {
+    width: 100%;
     height: 2;
+}
+
+#tabs-title {
+    width: 1fr;
+    height: 1;
     text-style: bold;
 }
 
@@ -56,7 +62,10 @@ HeaderIcon {
 }
 
 #tab-sidebar Button#tab-hide {
-    margin-bottom: 1;
+    width: 8;
+    min-width: 8;
+    margin: 0;
+    text-align: right;
 }
 
 #tabs-show {

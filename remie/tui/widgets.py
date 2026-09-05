@@ -761,8 +761,9 @@ class TabSidebar(Vertical):
         self._tab_ids: list[str] = []
 
     def compose(self):
-        yield Button("< Hide", id="tab-hide")
-        yield Label("Tabs", id="tabs-title")
+        with Horizontal(id="tabs-header"):
+            yield Label("Tabs", id="tabs-title")
+            yield Button("< Hide", id="tab-hide")
         yield Vertical(id="tab-list")
         yield Button("+ New tab", id="tab-new")
         yield Button("× Close tab", id="tab-close")
