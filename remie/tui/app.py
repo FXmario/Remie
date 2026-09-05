@@ -6,6 +6,8 @@ import io
 import json
 import os
 import time
+from contextvars import ContextVar
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -139,8 +141,73 @@ class AgentScreen(Screen):
             raise SkipAction()
 
 
+@dataclass
+class TabRuntime:
+    """All mutable state owned by one independently-running tab."""
+
+    tab_id: str
+    chat_id: str | None = None
+    conversation: list[dict[str, Any]] = field(default_factory=list)
+    transcript: list[dict[str, Any]] = field(default_factory=list)
+    cached_conv_tokens: int = 0
+    input_queue: asyncio.Queue = field(default_factory=asyncio.Queue)
+    agent_running: bool = False
+    agent_task: asyncio.Task[Any] | None = None
+    stop_requested: bool = False
+    pending_images: list[PILImage.Image] = field(default_factory=list)
+    prompt_history: list[str] = field(default_factory=list)
+    history_index: int | None = None
+    history_draft: str = ""
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
+    status: str = "ready"
+    unread: bool = False
+    task_summary: str = ""
+    current_activity: str = ""
+    pane: Vertical | None = None
+    live_stream: dict[str, Any] = field(default_factory=dict)
+    live_reasoning_timer: Any = None
+    pending_question: tuple[str, list[str]] | None = None
+    pending_answer: asyncio.Future[str | None] | None = None
+
+
+def _runtime_property(name: str):
+    def get(app):
+        return getattr(app._runtime(), name)
+
+    def set_(app, value):
+        setattr(app._runtime(), name, value)
+
+    return property(get, set_)
+
+
+class ChatTabPane(Vertical):
+    """A tab's retained transcript, prompt, badge, and status widgets."""
+
+    def compose(self):
+        yield StreamingRichLog(markup=True, wrap=True, classes="chat-log")
+        yield InputRow(classes="input-row")
+
+
 class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
     """Textual TUI for the Remie coding assistant."""
+
+    conversation = _runtime_property("conversation")
+    _transcript = _runtime_property("transcript")
+    _cached_conv_tokens = _runtime_property("cached_conv_tokens")
+    _input_queue = _runtime_property("input_queue")
+    _agent_running = _runtime_property("agent_running")
+    _agent_task = _runtime_property("agent_task")
+    _stop_requested = _runtime_property("stop_requested")
+    _pending_images = _runtime_property("pending_images")
+    _prompt_history = _runtime_property("prompt_history")
+    _history_index = _runtime_property("history_index")
+    _history_draft = _runtime_property("history_draft")
+    _total_input_tokens = _runtime_property("total_input_tokens")
+    _total_output_tokens = _runtime_property("total_output_tokens")
+    _chat_id = _runtime_property("chat_id")
+    _live_stream = _runtime_property("live_stream")
+    _live_reasoning_timer = _runtime_property("live_reasoning_timer")
 
     TITLE = "Remie"
     CSS = CSS
@@ -166,8 +233,20 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
     def get_default_screen(self) -> Screen:
         return AgentScreen(id="_default")
 
+    def _runtime(self, tab_id: str | None = None) -> TabRuntime:
+        selected = tab_id or self._task_tab.get() or self._active_tab_id
+        if selected not in self._runtimes:
+            selected = next(iter(self._runtimes))
+        return self._runtimes[selected]
+
     def __init__(self) -> None:
         super().__init__()
+        bootstrap = "__bootstrap__"
+        self._active_tab_id: str | None = bootstrap
+        self._task_tab: ContextVar[str | None] = ContextVar("remie_tab", default=None)
+        self._runtimes: dict[str, TabRuntime] = {
+            bootstrap: TabRuntime(tab_id=bootstrap)
+        }
         self.conversation: list[dict[str, Any]] = []
         self._cached_conv_tokens = 0
         # Match the terminal's background at startup. OSC 11 detection may be
@@ -203,6 +282,7 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
         self._tool_executor = ToolExecutor(
             ask_user=self._ask_user_for_tool,
             run=execute_tool_call,
+            tab_status=self._tab_status_tool,
         )
         self._agent_runner = AgentRunner(self._tool_executor)
 
@@ -212,25 +292,118 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
             yield TabSidebar()
             with Vertical(id="chat-pane"):
                 yield Button("> Tabs", id="tabs-show")
-                yield StreamingRichLog(id="log", markup=True, wrap=True)
-                yield InputRow(id="input-row")
+                with Vertical(id="tab-stack"):
+                    yield ChatTabPane(id="initial-tab-pane", classes="chat-tab-pane")
         yield CopyableFooter()
+
+    def query_one(self, selector, expect_type=None):
+        """Resolve legacy main-widget selectors against the visible tab."""
+        routed = {
+            "#log": StreamingRichLog,
+            "#input-row": InputRow,
+            "#prompt": PromptTextArea,
+        }
+        routed_type = selector if selector in {
+            ModelBadge, StatusIndicator, ThinkingIndicator, ImageAttachmentBar
+        } else None
+        if (
+            ((isinstance(selector, str) and selector in routed) or routed_type)
+            and hasattr(self, "_runtimes")
+        ):
+            pane = self._runtime().pane
+            if pane is not None:
+                widget = pane.query_one(routed_type or routed[selector])
+                if expect_type is not None and not isinstance(widget, expect_type):
+                    return super().query_one(selector, expect_type)
+                return widget
+        return super().query_one(selector, expect_type)
+
+    def _widget(self, widget_type):
+        pane = self._runtime().pane
+        if pane is None:
+            raise NoMatches(f"Tab {self._runtime().tab_id} has no mounted pane")
+        return pane.query_one(widget_type)
+
+    def _add_runtime(self, tab_id: str, chat: dict[str, Any]) -> TabRuntime:
+        usage = chat.get("token_usage") or {}
+        runtime = TabRuntime(
+            tab_id=tab_id,
+            chat_id=chat["id"],
+            conversation=list(chat.get("context_messages") or []),
+            transcript=list(chat.get("transcript") or []),
+            total_input_tokens=int(usage.get("input_tokens") or 0),
+            total_output_tokens=int(usage.get("output_tokens") or 0),
+        )
+        runtime.cached_conv_tokens = estimate_conversation_tokens(runtime.conversation)
+        self._runtimes[tab_id] = runtime
+        return runtime
+
+    async def _show_runtime(self, tab_id: str) -> None:
+        runtime = self._runtimes[tab_id]
+        first_mount = runtime.pane is None
+        if first_mount:
+            pane = ChatTabPane(classes="chat-tab-pane")
+            runtime.pane = pane
+            await self.query_one("#tab-stack", Vertical).mount(pane)
+            pane.query_one(ModelBadge).update_config(get_config())
+            pane.query_one(StatusIndicator).set_animation_enabled(
+                self._status_animation_enabled
+            )
+        for other in self._runtimes.values():
+            if other.pane is None:
+                continue
+            active = other.tab_id == tab_id
+            other.pane.display = active
+        runtime.unread = False
+        if first_mount:
+            token = self._task_tab.set(tab_id)
+            try:
+                self._widget(StreamingRichLog).write(
+                    "[dim]Switched to chat:[/] " + escape(self._tab_title(tab_id))
+                )
+                self._replay_transcript()
+                self._restore_chat_token_usage({
+                    "token_usage": {
+                        "input_tokens": runtime.total_input_tokens,
+                        "output_tokens": runtime.total_output_tokens,
+                    }
+                })
+            finally:
+                self._task_tab.reset(token)
+        runtime.pane.query_one(PromptTextArea).focus()
+        self.sub_title = self._tab_title(tab_id)
+        if runtime.pending_question and runtime.pending_answer:
+            question, options = runtime.pending_question
+            answer = await self.push_screen_wait(AskUserScreen(question, options))
+            if not runtime.pending_answer.done():
+                runtime.pending_answer.set_result(answer)
+            runtime.pending_question = None
+            runtime.pending_answer = None
+            runtime.status = "working"
+        self._refresh_tabs()
 
     def _code_theme(self) -> str:
         theme = self.available_themes.get(self.theme)
         return "ansi_light" if theme is not None and not theme.dark else "ansi_dark"
 
+    def _drain_tab_reasoning(self, tab_id: str) -> None:
+        token = self._task_tab.set(tab_id)
+        try:
+            self._drain_live_reasoning()
+        finally:
+            self._task_tab.reset(token)
+
     def _set_status(self, status: str) -> None:
-        self.query_one(StatusIndicator).set_status(status)
-        self.query_one(ThinkingIndicator).set_status(status)
+        runtime = self._runtime()
+        runtime.status = status
+        self._widget(StatusIndicator).set_status(status)
+        self._widget(ThinkingIndicator).set_status(status)
+        if runtime.tab_id != self._active_tab_id and status in {"done", "ready"}:
+            runtime.unread = True
+        self._refresh_tabs()
 
     def on_mount(self) -> None:
         self.sub_title = ""
-        prompt = self.query_one("#prompt", PromptTextArea)
-        self.query_one(ModelBadge).update_config(get_config())
-        self.query_one(StatusIndicator).set_animation_enabled(
-            self._status_animation_enabled
-        )
         ensure_active_memory()
         # Keep only tabs whose project-local chats still exist. Prefer the
         # persisted active tab, then another open tab, then the latest history.
@@ -242,6 +415,28 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
                 valid_tabs.append(tab)
                 loaded_by_tab[tab["id"]] = loaded
         self._tab_layout["tabs"] = valid_tabs
+        for tab in valid_tabs:
+            loaded = loaded_by_tab[tab["id"]]
+            usage = loaded.get("token_usage") or {}
+            transcript = list(loaded.get("transcript") or [])
+            self._runtimes[tab["id"]] = TabRuntime(
+                tab_id=tab["id"],
+                chat_id=loaded["id"],
+                conversation=list(loaded.get("context_messages") or []),
+                transcript=transcript,
+                cached_conv_tokens=estimate_conversation_tokens(
+                    list(loaded.get("context_messages") or [])
+                ),
+                prompt_history=[
+                    str(message.get("content"))
+                    for message in transcript
+                    if message.get("role") == "user"
+                    and isinstance(message.get("content"), str)
+                    and not str(message.get("content")).startswith("tool_result(")
+                ][-PROMPT_HISTORY_LIMIT:],
+                total_input_tokens=int(usage.get("input_tokens") or 0),
+                total_output_tokens=int(usage.get("output_tokens") or 0),
+            )
         chat = loaded_by_tab.get(str(self._active_tab_id))
         if chat is None and valid_tabs:
             self._active_tab_id = valid_tabs[0]["id"]
@@ -251,7 +446,17 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
             if chat is not None:
                 tab = new_tab(chat["id"])
                 self._tab_layout["tabs"].append(tab)
+                self._runtimes[tab["id"]] = TabRuntime(tab["id"], chat["id"])
                 self._active_tab_id = tab["id"]
+        active_pane = self.query_one("#initial-tab-pane", ChatTabPane)
+        self._runtime().pane = active_pane
+        active_pane.query_one(StreamingRichLog).id = "log"
+        active_pane.query_one(InputRow).id = "input-row"
+        prompt = self._widget(PromptTextArea)
+        self._widget(ModelBadge).update_config(get_config())
+        self._widget(StatusIndicator).set_animation_enabled(
+            self._status_animation_enabled
+        )
         if chat is not None:
             self._chat_id = chat["id"]
             self.conversation = list(chat.get("context_messages") or [])
@@ -261,14 +466,17 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
             self._close_dangling_tool_calls()
             self._refresh_system_prompt()
             self.sub_title = chat.get("name", "")
-            log = self.query_one("#log", StreamingRichLog)
+            log = self._widget(StreamingRichLog)
             log.write("[dim]Resumed chat:[/] " + escape(chat.get("name", "")))
             self._replay_transcript()
         else:
             chat = create_chat()
             tab = new_tab(chat["id"])
             self._tab_layout["tabs"].append(tab)
+            self._runtimes[tab["id"]] = TabRuntime(tab["id"], chat["id"])
             self._active_tab_id = tab["id"]
+            self._runtime().pane = active_pane
+            self._runtimes["__bootstrap__"].pane = None
             self._chat_id = chat["id"]
             self.conversation = [
                 {
@@ -285,6 +493,10 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
         if "token_usage" in chat:
             self._restore_chat_token_usage(chat)
         self._rebuild_prompt_history()
+        bootstrap_runtime = self._runtimes.pop("__bootstrap__", None)
+        if bootstrap_runtime is not None and bootstrap_runtime is not self._runtime():
+            self._pending_images.extend(bootstrap_runtime.pending_images)
+            self._refresh_image_attachments()
         self._persist_tab_layout()
         self._apply_sidebar_visibility()
         self._refresh_tabs()
@@ -294,28 +506,62 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
     def action_toggle_status_image(self) -> None:
         """Toggle and persist the status image visibility."""
         self._status_animation_enabled = not self._status_animation_enabled
-        self.query_one(StatusIndicator).set_animation_enabled(
+        self._widget(StatusIndicator).set_animation_enabled(
             self._status_animation_enabled
         )
         save_status_animation_enabled(self._status_animation_enabled)
         state = "shown" if self._status_animation_enabled else "hidden"
         self.notify(f"Status image {state}", title="Status image")
 
+    def _save_runtime(self, tab_id: str) -> None:
+        token = self._task_tab.set(tab_id)
+        try:
+            self._save_current_chat()
+        finally:
+            self._task_tab.reset(token)
+
     def _persist_tab_layout(self) -> None:
         self._tab_layout["active_tab_id"] = self._active_tab_id
         save_tab_layout(self._tab_layout)
 
+    def _tab_title(self, tab_id: str) -> str:
+        tab = next((tab for tab in self._tab_layout.get("tabs", []) if tab["id"] == tab_id), None)
+        chat = find_chat_by_id(tab["chat_id"]) if tab else None
+        return str((chat or {}).get("name") or DEFAULT_CHAT_NAME)
+
+    def _tab_status_tool(self) -> dict[str, Any]:
+        context = self._tab_prompt_context()
+        return {
+            "working_directory": context["working_directory"],
+            "current_tab_id": self._runtime().tab_id,
+            "tab_count": context["tab_count"],
+            "other_tabs": context["other_tabs"],
+        }
+
     def _tab_prompt_context(self) -> dict[str, object]:
         tabs = self._tab_layout.get("tabs", [])
         index = next(
-            (i for i, tab in enumerate(tabs, 1) if tab["id"] == self._active_tab_id),
+            (i for i, tab in enumerate(tabs, 1) if tab["id"] == self._runtime().tab_id),
             1,
         )
+        other_tabs = []
+        for tab in tabs:
+            if tab["id"] == self._runtime().tab_id:
+                continue
+            runtime = self._runtimes.get(tab["id"])
+            other_tabs.append({
+                "id": tab["id"],
+                "title": self._tab_title(tab["id"]),
+                "status": runtime.status if runtime else "ready",
+                "task": (runtime.task_summary if runtime else "")[:240],
+                "activity": (runtime.current_activity if runtime else "")[:160],
+            })
         return {
             "working_directory": str(Path.cwd().resolve()),
             "tab_count": max(1, len(tabs)),
             "active_index": index,
-            "active_title": self.sub_title or DEFAULT_CHAT_NAME,
+            "active_title": self._tab_title(self._runtime().tab_id),
+            "other_tabs": other_tabs,
         }
 
     async def _refresh_tabs_async(self) -> None:
@@ -323,7 +569,14 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
         for tab in self._tab_layout.get("tabs", []):
             chat = find_chat_by_id(tab["chat_id"])
             if chat is not None:
-                tabs.append({**tab, "title": chat.get("name", DEFAULT_CHAT_NAME)})
+                runtime = self._runtimes.get(tab["id"])
+                tabs.append({
+                    **tab,
+                    "title": chat.get("name", DEFAULT_CHAT_NAME),
+                    "status": runtime.status if runtime else "ready",
+                    "unread": runtime.unread if runtime else False,
+                    "activity": runtime.current_activity if runtime else "",
+                })
         await self.query_one(TabSidebar).set_tabs(tabs, self._active_tab_id)
 
     def _refresh_tabs(self) -> None:
@@ -403,7 +656,8 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
             return
         renamed = rename_chat(self._chat_id, name, title_source="auto")
         if renamed is not None:
-            self.sub_title = renamed["name"]
+            if self._runtime().tab_id == self._active_tab_id:
+                self.sub_title = renamed["name"]
             self._refresh_tabs()
 
     @work(exclusive=False)
@@ -420,7 +674,7 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
 
     def _refresh_image_attachments(self) -> None:
         try:
-            self.query_one(ImageAttachmentBar).set_count(len(self._pending_images))
+            self._widget(ImageAttachmentBar).set_count(len(self._pending_images))
         except (NoMatches, ScreenStackError):
             pass
 
@@ -512,7 +766,9 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
             self.exit()
             return
         self._record_prompt_history(user_input)
-        log = self.query_one("#log", StreamingRichLog)
+        self._runtime().task_summary = " ".join(user_input.split())[:240]
+        self._refresh_tabs()
+        log = self._widget(StreamingRichLog)
         content: str | list = user_input
         if self._pending_images:
             images = self._pending_images.copy()
@@ -530,7 +786,7 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
         log.write("")
         self._input_queue.put_nowait(content)
         if not self._agent_running:
-            _ = self.message_worker()
+            _ = self.message_worker(self._active_tab_id)
 
     def _dispatch_slash_command(self, name: str) -> None:
         """Open a local command screen without adding a conversation turn."""
@@ -551,9 +807,13 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
         if screen_type is not None:
             self.push_screen(screen_type())
 
-    @work(exclusive=True)
-    async def message_worker(self) -> None:
-        """Consume queued user messages, processing them one at a time."""
+    @work(exclusive=False)
+    async def message_worker(self, tab_id: str | None = None) -> None:
+        """Consume one tab's queue without blocking workers in other tabs."""
+        tab_id = tab_id or self._active_tab_id
+        if tab_id is None:
+            return
+        token = self._task_tab.set(tab_id)
         try:
             while True:
                 user_content = await self._input_queue.get()
@@ -569,9 +829,11 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
         finally:
             self._stop_requested = False
             try:
-                self.query_one("#prompt", PromptTextArea).focus()
+                if tab_id == self._active_tab_id:
+                    self._widget(PromptTextArea).focus()
             except Exception:
                 pass
+            self._task_tab.reset(token)
 
     def _drain_queue(self) -> None:
         while not self._input_queue.empty():
@@ -626,12 +888,27 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
         )
         self._cached_conv_tokens = estimate_conversation_tokens(self.conversation)
 
+    @staticmethod
+    def _make_ask_screen(question: str, options: list[str]) -> AskUserScreen:
+        return AskUserScreen(question, options)
+
     async def _ask_user_for_tool(self, question: str, options: list[str]) -> str | None:
-        """Textual implementation of the core tool executor's user callback."""
-        return await self.push_screen_wait(AskUserScreen(question, options))
+        """Route questions to their originating tab without interrupting another."""
+        runtime = self._runtime()
+        if runtime.tab_id == self._active_tab_id:
+            return await self.push_screen_wait(AskUserScreen(question, options))
+        runtime.status = "waiting_for_user"
+        runtime.pending_question = (question, options)
+        runtime.pending_answer = asyncio.get_running_loop().create_future()
+        self.notify(
+            f"Tab '{self._tab_title(runtime.tab_id)}' needs your answer",
+            title="Background agent",
+        )
+        self._refresh_tabs()
+        return await runtime.pending_answer
 
     async def run_agent_turn(self, user_content: str | list) -> None:
-        log = self.query_one("#log", StreamingRichLog)
+        log = self._widget(StreamingRichLog)
         completed = False
         current_task = asyncio.current_task()
         self._agent_task = current_task
@@ -648,6 +925,9 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
             continuations = 0
             empty_retries = 0
             while True:
+                # Other tabs may have progressed while this tab was executing a
+                # tool; refresh their bounded status snapshot before every call.
+                self._refresh_system_prompt()
                 if self._stop_requested:
                     log.write("[dim]Stopped by user[/]")
                     break
@@ -667,7 +947,7 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
                 finish_box: dict[str, Any] = {}
                 tool_calls_box: list[dict[str, str]] = []
                 codex_reasoning_items: list[dict[str, str]] = []
-                badge = self.query_one(ModelBadge)
+                badge = self._widget(ModelBadge)
                 badge.set_live_generated_tokens(0)
                 stream_started = time.monotonic()
                 last_preview_update = stream_started
@@ -691,8 +971,10 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
                     "last_badge_update": 0.0,
                     "active": True,
                 }
+                stream_tab_id = self._runtime().tab_id
                 reasoning_timer = self.set_interval(
-                    LIVE_REASONING_TICK, self._drain_live_reasoning
+                    LIVE_REASONING_TICK,
+                    lambda: self._drain_tab_reasoning(stream_tab_id),
                 )
                 self._live_reasoning_timer = reasoning_timer
                 async for delta in stream_llm_call(
@@ -809,7 +1091,7 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
                 self._live_stream["last_badge_update"] = time.monotonic()
                 self._total_input_tokens += input_tokens
                 self._total_output_tokens += output_tokens
-                self.query_one(ModelBadge).set_tokens(
+                self._widget(ModelBadge).set_tokens(
                     self._total_input_tokens, self._total_output_tokens
                 )
                 prepared = self._agent_runner.prepare_response(
@@ -917,6 +1199,8 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
                 for call in pending_calls:
                     name = call.name
                     args = call.args
+                    self._runtime().current_activity = get_tool_summary(name)
+                    self._refresh_tabs()
                     if self._stop_requested:
                         log.write("[dim]Stopped by user[/]")
                         break
@@ -962,6 +1246,9 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
                         )
                     else:
                         self._push_message("user", f"tool_result({result_json})")
+                    # Background tabs may stay out of view for a long time;
+                    # checkpoint each completed tool boundary for crash recovery.
+                    self._save_current_chat()
         except asyncio.CancelledError:
             log.replace_stream()
             log.write("[dim]Stopped by user[/]")
@@ -1000,7 +1287,8 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
             )
         finally:
             self._stop_active_reasoning_timer()
-            self.query_one(ModelBadge).set_speed(None)
+            self._widget(ModelBadge).set_speed(None)
+            self._runtime().current_activity = ""
             self._agent_running = False
             if self._agent_task is current_task:
                 self._agent_task = None

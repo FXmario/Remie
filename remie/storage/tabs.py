@@ -3,6 +3,7 @@
 import datetime as _dt
 import json
 import os
+import threading
 import uuid
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,7 @@ from typing import Any
 from remie.tools.common import _write_json_atomic
 
 TAB_LAYOUT_VERSION = 1
+_TAB_LOCK = threading.RLock()
 
 
 def tabs_path() -> Path:
@@ -68,10 +70,11 @@ def load_tab_layout() -> dict[str, Any]:
 
 
 def save_tab_layout(layout: dict[str, Any]) -> None:
-    document = load_tab_document()
-    document["version"] = TAB_LAYOUT_VERSION
-    document["projects"][project_key()] = layout
-    _write_json_atomic(tabs_path(), document)
+    with _TAB_LOCK:
+        document = load_tab_document()
+        document["version"] = TAB_LAYOUT_VERSION
+        document["projects"][project_key()] = layout
+        _write_json_atomic(tabs_path(), document)
 
 
 def new_tab(chat_id: str) -> dict[str, str]:

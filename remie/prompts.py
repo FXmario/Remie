@@ -112,6 +112,21 @@ def build_system_prompt(
         )
     tabs = ""
     if tab_context:
+        others = tab_context.get("other_tabs") or []
+        other_lines = ""
+        if isinstance(others, list) and others:
+            rendered = []
+            for item in others:
+                if not isinstance(item, dict):
+                    continue
+                task = f"; task: {item.get('task')}" if item.get("task") else ""
+                activity = f"; activity: {item.get('activity')}" if item.get("activity") else ""
+                rendered.append(
+                    f"- {item.get('title', 'New chat')} [{item.get('status', 'ready')}]"
+                    f" (id: {item.get('id', '')}){task}{activity}"
+                )
+            if rendered:
+                other_lines = "\nOther tabs:\n" + "\n".join(rendered)
         tabs = (
             "\n\n## Remie tabs\n"
             f"Working directory: {tab_context.get('working_directory', Path.cwd())}\n"
@@ -120,7 +135,10 @@ def build_system_prompt(
             f"{tab_context.get('tab_count', 1)}\n"
             f"Current tab title: {tab_context.get('active_title', '')}\n"
             "All tabs belong to this working directory and have independent chat "
-            "histories. Tabs do not change the working directory."
+            "histories. Tabs do not change the working directory. Other tabs may "
+            "modify the same files, so avoid overlapping work or re-check files "
+            "before editing."
+            f"{other_lines}"
         )
     return (
         _compose_system_prompt(tool_list_repr, protocol)

@@ -2,7 +2,9 @@
 
 import datetime as _dt
 import json
+import threading
 import uuid
+from functools import wraps
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +26,16 @@ CHAT_INDEX_VERSION = 1
 CHAT_FILE_VERSION = 1
 LEGACY_SESSION_VERSION = 1
 DEFAULT_CHAT_NAME = "New chat"
+_CHAT_LOCK = threading.RLock()
+
+
+def _locked(function):
+    """Serialize index read-modify-write cycles used by parallel tabs."""
+    @wraps(function)
+    def wrapper(*args, **kwargs):
+        with _CHAT_LOCK:
+            return function(*args, **kwargs)
+    return wrapper
 
 
 def chat_dir() -> Path:
@@ -99,6 +111,7 @@ def list_chats() -> list[dict[str, Any]]:
     return sorted(chats, key=lambda item: item["updated_at"], reverse=True)
 
 
+@_locked
 def create_chat(name: str = DEFAULT_CHAT_NAME) -> dict[str, Any]:
     """Register a new chat and return its index entry (file written on save)."""
     name = " ".join(name.split())[:MEMORY_NAME_MAX_CHARS].rstrip() or DEFAULT_CHAT_NAME
@@ -116,6 +129,7 @@ def create_chat(name: str = DEFAULT_CHAT_NAME) -> dict[str, Any]:
     return _chat_metadata(chat_id, chats[chat_id])
 
 
+@_locked
 def rename_chat(
     chat_id: str, name: str, *, title_source: str = "manual"
 ) -> dict[str, Any] | None:
@@ -151,6 +165,7 @@ def rename_chat(
     return _chat_metadata(chat_id, chats[chat_id])
 
 
+@_locked
 def delete_chat(chat_id: str) -> dict[str, Any] | None:
     """Remove a chat's file and index entry; returns the removed entry."""
     chats = load_chat_index()
@@ -166,6 +181,7 @@ def delete_chat(chat_id: str) -> dict[str, Any] | None:
     return chat
 
 
+@_locked
 def save_chat(
     chat_id: str,
     context_messages: list[dict[str, Any]],

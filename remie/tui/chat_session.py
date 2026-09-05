@@ -2,9 +2,6 @@
 
 from typing import Any
 
-from rich.markup import escape
-from textual.widgets import RichLog
-
 from remie.prompts import build_system_prompt
 from remie.protocol import strip_protocol_lines
 from remie.rendering import render_assistant_panel, render_user_message
@@ -43,14 +40,17 @@ class ChatSessionMixin:
 
     def on_unmount(self) -> None:
         """Persist the current chat so a later launch can resume it."""
-        try:
-            self._save_current_chat()
-        except Exception:
-            pass
+        for tab_id in list(self._runtimes):
+            if tab_id == "__bootstrap__":
+                continue
+            try:
+                self._save_runtime(tab_id)
+            except Exception:
+                pass
 
     def _replay_transcript(self) -> None:
         """Replay a loaded chat's visible history into the log."""
-        log = self.query_one("#log", StreamingRichLog)
+        log = self._widget(StreamingRichLog)
         for message in self._transcript:
             role = message.get("role")
             content = message.get("content")
@@ -100,7 +100,7 @@ class ChatSessionMixin:
         usage = chat.get("token_usage") or {}
         self._total_input_tokens = int(usage.get("input_tokens") or 0)
         self._total_output_tokens = int(usage.get("output_tokens") or 0)
-        badge = self.query_one(ModelBadge)
+        badge = self._widget(ModelBadge)
         badge.set_tokens(self._total_input_tokens, self._total_output_tokens)
         # No generation is active for a freshly loaded chat.
         badge.set_live_generated_tokens(None)
@@ -120,7 +120,7 @@ class ChatSessionMixin:
         self._cached_conv_tokens = estimate_conversation_tokens(self.conversation)
         self._total_input_tokens = 0
         self._total_output_tokens = 0
-        badge = self.query_one(ModelBadge)
+        badge = self._widget(ModelBadge)
         badge.set_tokens(0, 0)
         # No generation is active in a fresh chat; drop any stale counter.
         badge.set_live_generated_tokens(None)
@@ -129,85 +129,111 @@ class ChatSessionMixin:
         self._history_draft = ""
 
     def action_new_chat(self) -> None:
-        """Start a new chat; the previous one stays in the chat history."""
-        if self._agent_running:
-            return
-        self._save_current_chat()
-        self.query_one("#log", RichLog).clear()
+        """Create and activate a tab without stopping background agents."""
+        if not self._agent_running:
+            self._save_current_chat()
         chat = create_chat()
         tab = new_tab(chat["id"])
         self._tab_layout["tabs"].append(tab)
+        runtime = self._add_runtime(tab["id"], chat)
         self._active_tab_id = tab["id"]
-        self._chat_id = chat["id"]
+        runtime.conversation = [
+            {
+                "role": "system",
+                "content": build_system_prompt(
+                    native_tools=self._native_tool_calling(),
+                    tab_context=self._tab_prompt_context(),
+                ),
+            }
+        ]
+        runtime.cached_conv_tokens = estimate_conversation_tokens(runtime.conversation)
         self.sub_title = chat["name"]
-        self._reset_conversation_state()
         self._save_current_chat()
         self._persist_tab_layout()
+        self.call_later(self._show_runtime, tab["id"])
         self._refresh_tabs()
 
     def _load_chat_into_ui(self, chat_id: str) -> bool:
-        """Switch to another saved chat, keeping the current one on disk."""
-        if self._agent_running:
-            return False
+        """Open history in a retained runtime, leaving all workers untouched."""
+        tab = next(
+            (tab for tab in self._tab_layout["tabs"] if tab["chat_id"] == chat_id),
+            None,
+        )
+        if tab is not None and tab["id"] in self._runtimes:
+            return self.switch_tab(tab["id"])
         chat = load_chat(chat_id)
         if chat is None:
             self.notify("Could not load that chat", severity="warning")
             return False
         self._save_current_chat()
-        tab = next(
-            (tab for tab in self._tab_layout["tabs"] if tab["chat_id"] == chat_id),
-            None,
-        )
         if tab is None:
             tab = new_tab(chat_id)
             self._tab_layout["tabs"].append(tab)
+        runtime = self._add_runtime(tab["id"], chat)
         self._active_tab_id = tab["id"]
-        self.query_one("#log", RichLog).clear()
-        self._chat_id = chat["id"]
-        self.conversation = list(chat.get("context_messages") or [])
-        self._transcript = list(chat.get("transcript") or [])
-        self._close_dangling_tool_calls()
-        self._refresh_system_prompt()
-        self._cached_conv_tokens = estimate_conversation_tokens(self.conversation)
-        self._restore_chat_token_usage(chat)
-        self._rebuild_prompt_history()
+        runtime.cached_conv_tokens = estimate_conversation_tokens(runtime.conversation)
         self.sub_title = chat.get("name", "")
-        log = self.query_one("#log", StreamingRichLog)
-        log.write("[dim]Switched to chat:[/] " + escape(chat.get("name", "")))
-        self._replay_transcript()
         self._persist_tab_layout()
+        self.call_later(self._show_runtime, tab["id"])
         self._refresh_tabs()
         return True
 
+    async def _confirm_close_tab(self, tab_id: str) -> None:
+        answer = await self.push_screen_wait(
+            self._make_ask_screen(
+                "This tab is still running. Stop its agent and close the tab?",
+                ["Stop and close", "Cancel"],
+            )
+        )
+        if answer == "Stop and close":
+            runtime = self._runtimes.get(tab_id)
+            if runtime:
+                runtime.stop_requested = True
+                if runtime.agent_task:
+                    runtime.agent_task.cancel()
+            self._close_tab_now(tab_id)
+
     def close_tab(self, tab_id: str | None) -> bool:
-        """Close a tab without deleting its chat history."""
-        if self._agent_running or not tab_id:
+        """Close an idle tab; ask before cancelling a running one."""
+        if not tab_id:
             return False
+        runtime = self._runtimes.get(tab_id)
+        if runtime and runtime.agent_running:
+            self.call_later(self._confirm_close_tab, tab_id)
+            return False
+        return self._close_tab_now(tab_id)
+
+    def _close_tab_now(self, tab_id: str) -> bool:
         tabs = self._tab_layout["tabs"]
         index = next((i for i, tab in enumerate(tabs) if tab["id"] == tab_id), None)
         if index is None:
             return False
-        self._save_current_chat()
+        self._save_runtime(tab_id)
         was_active = tab_id == self._active_tab_id
         tabs.pop(index)
+        runtime = self._runtimes.pop(tab_id, None)
+        if runtime and runtime.pane:
+            runtime.pane.remove()
         if not was_active:
             self._persist_tab_layout()
             self._refresh_tabs()
             return True
         if tabs:
             target = tabs[min(index, len(tabs) - 1)]
-            self._active_tab_id = target["id"]
-            return self._load_chat_into_ui(target["chat_id"])
+            return self.switch_tab(target["id"])
         self._active_tab_id = None
         self.action_new_chat()
         return True
 
     def switch_tab(self, tab_id: str) -> bool:
-        """Activate an open tab by its stable tab id."""
+        """Change presentation only; the previous tab's worker keeps running."""
         if tab_id == self._active_tab_id:
             return True
-        tab = next(
-            (tab for tab in self._tab_layout["tabs"] if tab["id"] == tab_id),
-            None,
-        )
-        return bool(tab and self._load_chat_into_ui(tab["chat_id"]))
+        if tab_id not in self._runtimes:
+            return False
+        self._active_tab_id = tab_id
+        self.sub_title = self._tab_title(tab_id)
+        self._persist_tab_layout()
+        self.call_later(self._show_runtime, tab_id)
+        self._refresh_tabs()
+        return True

@@ -14,6 +14,7 @@ from remie.tools.files import (
 )
 from remie.tools.memory import memory_tool
 from remie.tools.test_runner import run_test_shards_tool
+from remie.tools.tabs import tab_status_tool
 from remie.tools.web import web_fetch_tool, web_search_tool
 
 TOOL_REGISTRY = {
@@ -22,6 +23,7 @@ TOOL_REGISTRY = {
     "edit_file": edit_file_tool,
     "run_command": run_command_tool,
     "run_test_shards": run_test_shards_tool,
+    "tab_status": tab_status_tool,
     "glob_files": glob_files_tool,
     "tree_files": tree_files_tool,
     "ask_user": ask_user_tool,
@@ -36,6 +38,7 @@ TOOL_SUMMARIES = {
     "edit_file": "edit a file",
     "run_command": "run a shell command",
     "run_test_shards": "run a test suite locally or in four parallel shards",
+    "tab_status": "check other Remie tabs in this directory",
     "glob_files": "find files matching a glob pattern",
     "tree_files": "show the directory tree",
     "ask_user": "ask the user a question",
@@ -145,6 +148,7 @@ TOOL_PARAMETERS = {
             "worker_timeout_seconds": {"type": "integer", "description": "Timeout for each shard. Defaults to 600 seconds."},
         },
     },
+    "tab_status": {"type": "object", "properties": {}},
     "ask_user": {
         "type": "object",
         "properties": {

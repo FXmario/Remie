@@ -123,6 +123,7 @@ run_tool = execute_tool_call
 
 AskUser = Callable[[str, list[str]], Awaitable[str | None]]
 ToolFunction = Callable[[str, dict[str, Any]], dict[str, Any]]
+TabStatus = Callable[[], dict[str, Any]]
 
 
 @dataclass
@@ -132,8 +133,12 @@ class ToolExecutor:
     ask_user: AskUser
     run: ToolFunction = execute_tool_call
     project_root: Path = field(default_factory=_project_root)
+    tab_status: TabStatus | None = None
+    _edit_locks: dict[Path, asyncio.Lock] = field(default_factory=dict, init=False)
 
     async def execute(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
+        if name == "tab_status" and self.tab_status is not None:
+            return self.tab_status()
         if name == "ask_user":
             answer = await self.ask_user(
                 str(args.get("question", "")), list(args.get("options") or [])
@@ -163,4 +168,9 @@ class ToolExecutor:
                     "error": "Permission denied: outside-project access was not approved",
                     "paths": [str(path) for path in outside],
                 }
+        if name == "edit_file":
+            path = resolve_abs_path(str(args.get("path", ".")))
+            lock = self._edit_locks.setdefault(path, asyncio.Lock())
+            async with lock:
+                return await asyncio.to_thread(self.run, name, args)
         return await asyncio.to_thread(self.run, name, args)

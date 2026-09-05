@@ -775,8 +775,13 @@ class TabSidebar(Vertical):
         for index, tab in enumerate(tabs):
             title = str(tab.get("title") or "New chat")
             prefix = "● " if tab["id"] == active_id else "  "
+            status = {
+                "working": " …", "waiting_for_user": " ?",
+                "done": " ✓", "error": " !",
+            }.get(str(tab.get("status")), "")
+            unread = " •" if tab.get("unread") else ""
             await container.mount(
-                Button(prefix + title, id=f"tab-item-{index}", classes="active" if tab["id"] == active_id else "")
+                Button(prefix + title + status + unread, id=f"tab-item-{index}", classes="active" if tab["id"] == active_id else "")
             )
 
     def on_button_pressed(self, event: Button.Pressed) -> None:

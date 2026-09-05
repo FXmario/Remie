@@ -3905,3 +3905,81 @@ def test_long_question_keeps_footer_and_answer_accessible():
                 screen.query_one('#ask-body').content_region
             ).height > 0
     asyncio.run(exercise())
+
+
+def test_tabs_run_agent_turns_concurrently(monkeypatch):
+    async def exercise():
+        started = {"one": asyncio.Event(), "two": asyncio.Event()}
+        release = asyncio.Event()
+
+        async def concurrent_stream(
+            conversation, usage_box=None, reasoning_box=None, finish_box=None, **_kwargs
+        ):
+            text = next(
+                message["content"] for message in reversed(conversation)
+                if message["role"] == "user"
+            )
+            started[text].set()
+            await release.wait()
+            yield f"finished {text}"
+
+        monkeypatch.setattr(tui_app, "stream_llm_call", concurrent_stream)
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            first_tab = app._active_tab_id
+            app.on_prompt_submitted(PromptSubmitted("one"))
+            await pilot.pause()
+            await asyncio.wait_for(started["one"].wait(), 2)
+
+            app.action_new_chat()
+            await pilot.pause()
+            second_tab = app._active_tab_id
+            app.on_prompt_submitted(PromptSubmitted("two"))
+            await asyncio.wait_for(started["two"].wait(), 2)
+
+            assert app._runtimes[first_tab].agent_running
+            assert app._runtimes[second_tab].agent_running
+            release.set()
+            await asyncio.wait_for(
+                asyncio.gather(
+                    app._runtimes[first_tab].input_queue.join(),
+                    app._runtimes[second_tab].input_queue.join(),
+                ),
+                3,
+            )
+            await pilot.pause()
+            assert any(
+                message.get("content") == "finished one"
+                for message in app._runtimes[first_tab].conversation
+            )
+            assert any(
+                message.get("content") == "finished two"
+                for message in app._runtimes[second_tab].conversation
+            )
+
+    asyncio.run(exercise())
+
+
+def test_tab_prompt_context_reports_other_runtime_status():
+    app = AgentApp()
+    current = app._active_tab_id or "__bootstrap__"
+    app._tab_layout = {
+        "tabs": [
+            {"id": current, "chat_id": "chat-one"},
+            {"id": "other", "chat_id": "chat-two"},
+        ]
+    }
+    app._runtimes["other"] = tui_app.TabRuntime(
+        "other", "chat-two", status="working", current_activity="editing files"
+    )
+    context = app._tab_prompt_context()
+    assert context["tab_count"] == 2
+    assert context["other_tabs"] == [
+        {
+            "id": "other",
+            "title": "New chat",
+            "status": "working",
+            "task": "",
+            "activity": "editing files",
+        }
+    ]

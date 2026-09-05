@@ -14,7 +14,7 @@ HeaderIcon {
     width: 100%;
 }
 
-#chat-pane {
+#chat-pane, #tab-stack, .chat-tab-pane {
     height: 1fr;
     width: 1fr;
 }
@@ -73,7 +73,7 @@ HeaderIcon {
     margin-left: 1;
 }
 
-#log {
+#log, .chat-log {
     width: 1fr;
     height: 1fr;
     padding: 0 1;
