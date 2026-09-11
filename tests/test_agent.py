@@ -55,6 +55,7 @@ from remie.tools import (
     create_memory,
     delete_chat,
     delete_memory,
+    export_chat,
     edit_file_tool,
     find_chat_by_id,
     find_memory_by_id,
@@ -64,6 +65,7 @@ from remie.tools import (
     get_custom_blocked_commands,
     get_tool_summary,
     glob_files_tool,
+    import_chat,
     list_chats,
     list_files_tool,
     list_memories,
@@ -988,6 +990,35 @@ class TestChatStorage:
         assert data["context_messages"] == context
         assert data["transcript"] == transcript
         assert chat_file_path(chat["id"]).is_file()
+
+    def test_export_import_roundtrip(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        chat = create_chat("portable")
+        context = self._context()
+        transcript = [{"role": "user", "content": "hello"}]
+        save_chat(
+            chat["id"], context, transcript,
+            {"input_tokens": 12, "output_tokens": 4},
+        )
+
+        archive = export_chat(chat["id"], tmp_path / "backups" / "chat.json")
+        payload = json.loads(archive.read_text(encoding="utf-8"))
+        assert payload["format"] == "remie-chat"
+        imported = import_chat(archive)
+
+        assert imported["id"] != chat["id"]
+        assert imported["name"] == "portable"
+        assert imported["context_messages"] == context
+        assert imported["transcript"] == transcript
+        assert imported["token_usage"] == {"input_tokens": 12, "output_tokens": 4}
+
+    def test_import_rejects_unrecognized_json(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        archive = tmp_path / "bad.json"
+        archive.write_text('{"version": 1}', encoding="utf-8")
+        with pytest.raises(ValueError, match="supported Remie chat archive"):
+            import_chat(archive)
+        assert list_chats() == []
 
     def test_empty_new_default_chat_is_dropped(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)

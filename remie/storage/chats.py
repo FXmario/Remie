@@ -24,6 +24,8 @@ def session_file_path() -> Path:
 
 CHAT_INDEX_VERSION = 1
 CHAT_FILE_VERSION = 1
+CHAT_EXPORT_VERSION = 1
+CHAT_EXPORT_FORMAT = "remie-chat"
 LEGACY_SESSION_VERSION = 1
 DEFAULT_CHAT_NAME = "New chat"
 _CHAT_LOCK = threading.RLock()
@@ -31,10 +33,12 @@ _CHAT_LOCK = threading.RLock()
 
 def _locked(function):
     """Serialize index read-modify-write cycles used by parallel tabs."""
+
     @wraps(function)
     def wrapper(*args, **kwargs):
         with _CHAT_LOCK:
             return function(*args, **kwargs)
+
     return wrapper
 
 
@@ -307,6 +311,96 @@ def migrate_legacy_session() -> str | None:
     save_chat_index(chats)
     path.unlink(missing_ok=True)
     return chat_id
+
+
+def export_chat(chat_id: str, destination: str | Path) -> Path:
+    """Write a portable, versioned JSON archive for one chat."""
+    chat = load_chat(chat_id)
+    if chat is None:
+        raise ValueError("Chat does not exist or has not been saved yet")
+    path = Path(destination).expanduser()
+    if not path.name:
+        raise ValueError("Choose an export file")
+    payload = {
+        "format": CHAT_EXPORT_FORMAT,
+        "version": CHAT_EXPORT_VERSION,
+        "chat": {
+            "name": chat["name"],
+            "created_at": chat["created_at"],
+            "updated_at": chat["updated_at"],
+            "model": chat["model"],
+            "title_source": chat["title_source"],
+            "context_messages": chat["context_messages"],
+            "transcript": chat["transcript"],
+            "token_usage": chat["token_usage"],
+        },
+    }
+    _write_json_atomic(path, payload)
+    return path.resolve()
+
+
+@_locked
+def import_chat(source: str | Path) -> dict[str, Any]:
+    """Import a portable chat archive as a new chat with a fresh id."""
+    path = Path(source).expanduser()
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise ValueError(f"Could not read chat archive: {error}") from error
+    if (
+        not isinstance(payload, dict)
+        or payload.get("format") != CHAT_EXPORT_FORMAT
+        or payload.get("version") != CHAT_EXPORT_VERSION
+        or not isinstance(payload.get("chat"), dict)
+    ):
+        raise ValueError("Not a supported Remie chat archive")
+    archive = payload["chat"]
+    context = archive.get("context_messages")
+    transcript = archive.get("transcript")
+    if not isinstance(context, list) or not isinstance(transcript, list):
+        raise ValueError("Chat archive has invalid messages")
+    if not all(isinstance(message, dict) for message in [*context, *transcript]):
+        raise ValueError("Chat archive has invalid messages")
+    usage = archive.get("token_usage", {})
+    if not (
+        isinstance(usage, dict)
+        and isinstance(usage.get("input_tokens", 0), int)
+        and isinstance(usage.get("output_tokens", 0), int)
+    ):
+        raise ValueError("Chat archive has invalid token usage")
+
+    created = create_chat(str(archive.get("name") or DEFAULT_CHAT_NAME))
+    chat_id = created["id"]
+    try:
+        save_chat(
+            chat_id,
+            context,
+            transcript,
+            {
+                "input_tokens": usage.get("input_tokens", 0),
+                "output_tokens": usage.get("output_tokens", 0),
+            },
+            keep_empty=True,
+        )
+        chats = load_chat_index()
+        entry = chats[chat_id]
+        entry["model"] = str(archive.get("model") or "")
+        entry["title_source"] = (
+            archive.get("title_source")
+            if archive.get("title_source") in {"auto", "manual"}
+            else "manual"
+        )
+        # Preserve creation time for provenance; updated_at reflects the import.
+        if isinstance(archive.get("created_at"), str):
+            entry["created_at"] = archive["created_at"]
+        save_chat_index(chats)
+    except Exception:
+        delete_chat(chat_id)
+        raise
+    imported = load_chat(chat_id)
+    if imported is None:  # Defensive: writes above should make this impossible.
+        raise ValueError("Could not import chat archive")
+    return imported
 
 
 def load_latest_chat() -> dict[str, Any] | None:
