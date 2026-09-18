@@ -2212,6 +2212,24 @@ def test_model_badge_shows_token_usage():
     assert badge.render().plain == "Kimi K3  OpenCode Go · 6.9k tok"
 
 
+def test_model_badge_shows_context_occupancy_with_discovered_limit():
+    badge = ModelBadge()
+    badge.update_config(
+        ConnectionConfig("http://localhost/v1", "key", "local", reasoning_effort="off")
+    )
+    badge.set_context(32_000, 128_000)
+    assert badge.render().plain == "Local  Local · CTX 32k/128k (25%)"
+
+
+def test_model_badge_shows_unknown_context_limit_without_guessing():
+    badge = ModelBadge()
+    badge.update_config(
+        ConnectionConfig("http://localhost/v1", "key", "local", reasoning_effort="off")
+    )
+    badge.set_context(12_345)
+    assert badge.render().plain == "Local  Local · CTX 12.3k/?"
+
+
 def test_model_badge_hides_usage_when_zero():
     badge = ModelBadge()
     badge.update_config(

@@ -28,7 +28,9 @@ from textual.containers import Horizontal, Vertical
 from textual.widgets import Button, Footer, Header
 
 from remie.agent import (
+    fetch_codex_models,
     fetch_opencode_go_models,
+    fetch_openrouter_models,
     generate_chat_title,
     get_config,
     get_connection_error_message,
@@ -665,13 +667,21 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
 
     @work(exclusive=False)
     async def _prefetch_model_context(self) -> None:
-        """Populate the live context-window cache when connected to OpenCode Go,
-        so compaction uses the actual model window without opening the picker."""
+        """Populate context limits from the active provider's model metadata."""
         config = get_config()
-        if config.provider != "opencode-go" or not config.api_key:
-            return
         try:
-            await fetch_opencode_go_models(config.api_key)
+            if config.provider == "opencode-go" and config.api_key:
+                await fetch_opencode_go_models(config.api_key)
+            elif config.provider == "codex":
+                await fetch_codex_models()
+            elif config.provider == "openrouter":
+                await fetch_openrouter_models()
+            else:
+                return
+            self._widget(ModelBadge).update_config(config)
+            self._widget(ModelBadge).set_context(
+                self._cached_conv_tokens, self._context_limit()
+            )
         except Exception:
             pass
 
@@ -898,6 +908,9 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
         if role != "system":
             self._transcript.append(message)
         self._cached_conv_tokens += estimate_message_tokens(message)
+        self._widget(ModelBadge).set_context(
+            self._cached_conv_tokens, self._context_limit()
+        )
 
     def _conversation_too_large(self, limit: int | None) -> bool:
         if not limit:
@@ -927,6 +940,9 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
             self.conversation[:1] + [{"role": "system", "content": note}] + tail
         )
         self._cached_conv_tokens = estimate_conversation_tokens(self.conversation)
+        self._widget(ModelBadge).set_context(
+            self._cached_conv_tokens, self._context_limit()
+        )
 
     @staticmethod
     def _make_ask_screen(question: str, options: list[str]) -> AskUserScreen:
@@ -1123,6 +1139,13 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
                 output_tokens = usage_box.get("completion_tokens") or estimate_tokens(
                     full_text
                 )
+                if usage_box.get("prompt_tokens"):
+                    # Provider usage is more accurate than the local character
+                    # estimate and becomes the baseline for subsequent messages.
+                    self._cached_conv_tokens = input_tokens
+                    badge.set_context(
+                        self._cached_conv_tokens, self._context_limit()
+                    )
                 # Replace the live estimate with the provider's exact count
                 # when available, and keep the final generated count visible.
                 badge.set_live_generated_tokens(output_tokens)

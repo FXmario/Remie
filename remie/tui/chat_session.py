@@ -102,6 +102,7 @@ class ChatSessionMixin:
         self._total_output_tokens = int(usage.get("output_tokens") or 0)
         badge = self._widget(ModelBadge)
         badge.set_tokens(self._total_input_tokens, self._total_output_tokens)
+        badge.set_context(self._cached_conv_tokens, self._context_limit())
         # No generation is active for a freshly loaded chat.
         badge.set_live_generated_tokens(None)
 
@@ -122,6 +123,7 @@ class ChatSessionMixin:
         self._total_output_tokens = 0
         badge = self._widget(ModelBadge)
         badge.set_tokens(0, 0)
+        badge.set_context(self._cached_conv_tokens, self._context_limit())
         # No generation is active in a fresh chat; drop any stale counter.
         badge.set_live_generated_tokens(None)
         self._prompt_history = []

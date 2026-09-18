@@ -1805,10 +1805,9 @@ class TestConnectionConfig:
             ("brand-new-model", "Brand New Model"),
         ]
         assert agent._opencode_go_model_context["kimi-k3"] == 256000
-        # Context windows are cached live for compaction; models without a
-        # reported window fall back to the default.
+        # Context windows are cached live; missing metadata remains unknown.
         assert get_model_context_limit("kimi-k3", "opencode-go") == 256_000
-        assert get_model_context_limit("grok-4.5", "opencode-go") == 128_000
+        assert get_model_context_limit("grok-4.5", "opencode-go") is None
 
     def test_opencode_models_returns_all_live_ids(self):
         import asyncio
@@ -1860,7 +1859,7 @@ class TestConnectionConfig:
 
         monkeypatch.setattr(agent, "_opencode_go_model_context", {"kimi-k3": 256_000})
         assert get_model_context_limit("kimi-k3", "opencode-go") == 256_000
-        assert get_model_context_limit("unknown-model", "opencode-go") == 128_000
+        assert get_model_context_limit("unknown-model", "opencode-go") is None
         assert get_model_context_limit("any", "local") is None
 
     def test_max_output_tokens_defaults_by_provider(self):

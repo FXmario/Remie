@@ -12,9 +12,6 @@ from remie.config import (
 )
 from remie.model_names import ModelInfo, prettify_model_id, prettify_model_name
 
-CODEX_DEFAULT_CONTEXT_LIMIT = 272_000
-OPENROUTER_DEFAULT_CONTEXT_LIMIT = 128_000
-OPENCODE_GO_DEFAULT_CONTEXT_LIMIT = 128_000
 
 NON_REASONING_EFFORT_MODELS = {
     "grok-4.5",
@@ -157,12 +154,13 @@ def get_model_context_limit(
     provider: str,
     opencode_context: dict[str, int],
     openrouter_context: dict[str, int],
-    _codex_context: dict[str, int],
+    codex_context: dict[str, int],
 ) -> int | None:
+    """Return a discovered context window; never substitute a guessed default."""
     if provider == "codex":
-        return CODEX_DEFAULT_CONTEXT_LIMIT
+        return codex_context.get(model)
     if provider == "openrouter":
-        return openrouter_context.get(model, OPENROUTER_DEFAULT_CONTEXT_LIMIT)
-    if provider != "opencode-go":
-        return None
-    return opencode_context.get(model, OPENCODE_GO_DEFAULT_CONTEXT_LIMIT)
+        return openrouter_context.get(model)
+    if provider == "opencode-go":
+        return opencode_context.get(model)
+    return None

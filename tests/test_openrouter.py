@@ -565,10 +565,7 @@ def test_agent_routes_openrouter_with_native_tools(monkeypatch):
         for model_id, context_length in rows:
             agent._openrouter_model_context[model_id] = context_length
         assert agent.get_model_context_limit("big/model", "openrouter") == 262144
-        assert (
-            agent.get_model_context_limit("unknown/model", "openrouter")
-            == agent.OPENROUTER_DEFAULT_CONTEXT_LIMIT
-        )
+        assert agent.get_model_context_limit("unknown/model", "openrouter") is None
     finally:
         agent.configure_openai(
             previous.base_url,

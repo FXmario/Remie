@@ -1094,7 +1094,7 @@ def test_agent_routes_codex_provider_through_codex_stream(monkeypatch):
             reasoning_effort="high",
         )
         assert agent._provider_defaults("codex").model == agent.CODEX_MODELS[0]
-        assert agent.get_model_context_limit("gpt-5.5", "codex") == 272_000
+        assert agent.get_model_context_limit("gpt-5.5", "codex") is None
         assert agent.supports_reasoning_effort("gpt-5.5", "codex") is True
 
         async def collect_agent():

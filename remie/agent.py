@@ -54,10 +54,7 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     **{
         name: ("remie.providers.catalog", name)
         for name in (
-            "CODEX_DEFAULT_CONTEXT_LIMIT",
             "NON_REASONING_EFFORT_MODELS",
-            "OPENCODE_GO_DEFAULT_CONTEXT_LIMIT",
-            "OPENROUTER_DEFAULT_CONTEXT_LIMIT",
         )
     },
     **{
