@@ -93,6 +93,7 @@ from remie.tui.screens.models import ModelScreen
 from remie.tui.screens.open import OpenScreen
 from remie.tui.slash_commands import is_slash_command_token, resolve_slash_command
 from remie.tui.streaming import StreamingPresentationMixin
+from remie.tui.workspaces import WorkspaceError, separate_workspace
 from remie.tui.widgets import (
     ImageAttachmentBar,
     InputRow,
@@ -329,6 +330,31 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
             raise NoMatches(f"Tab {self._runtime().tab_id} has no mounted pane")
         return pane.query_one(widget_type)
 
+    def _tab_directory(self, tab: dict[str, Any]) -> Path:
+        return Path(tab.get("working_directory") or Path.cwd()).resolve()
+
+    def _allocate_tab_directory(
+        self, requested: Path, tab_id: str, *, occupied: set[Path] | None = None
+    ) -> Path:
+        """Keep each open tab in its own directory without moving other tabs."""
+        requested = requested.resolve()
+        if occupied is None:
+            occupied = {
+                self._tab_directory(tab) for tab in self._tab_layout["tabs"]
+                if tab["id"] != tab_id
+            }
+        if requested in occupied:
+            tab = next(
+                (item for item in self._tab_layout["tabs"] if item["id"] == tab_id),
+                None,
+            )
+            if tab and tab.get("workspace_source") == str(requested):
+                existing = self._tab_directory(tab)
+                if existing.is_dir() and existing not in occupied:
+                    return existing
+            return separate_workspace(requested, tab_id)
+        return requested
+
     def _add_runtime(self, tab_id: str, chat: dict[str, Any]) -> TabRuntime:
         usage = chat.get("token_usage") or {}
         tab = next((item for item in self._tab_layout["tabs"] if item["id"] == tab_id), {})
@@ -422,7 +448,20 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
                 valid_tabs.append(tab)
                 loaded_by_tab[tab["id"]] = loaded
         self._tab_layout["tabs"] = valid_tabs
+        occupied: set[Path] = set()
         for tab in valid_tabs:
+            requested = self._tab_directory(tab)
+            try:
+                directory = self._allocate_tab_directory(
+                    requested, tab["id"], occupied=occupied
+                )
+            except WorkspaceError as error:
+                self.notify(str(error), title="Tab workspace", severity="error")
+                directory = requested
+            if directory != requested:
+                tab["working_directory"] = str(directory)
+                tab["workspace_source"] = str(requested)
+            occupied.add(directory)
             loaded = loaded_by_tab[tab["id"]]
             usage = loaded.get("token_usage") or {}
             transcript = list(loaded.get("transcript") or [])
@@ -831,15 +870,24 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
             if not path.is_dir():
                 self.notify(f"Not a directory: {path}", title="Change directory", severity="warning")
                 return
-            self._runtime().working_directory = str(path)
+            try:
+                directory = self._allocate_tab_directory(path, self._runtime().tab_id)
+            except WorkspaceError as error:
+                self.notify(str(error), title="Change directory", severity="error")
+                return
+            self._runtime().working_directory = str(directory)
             for tab in self._tab_layout["tabs"]:
                 if tab["id"] == self._runtime().tab_id:
-                    tab["working_directory"] = str(path)
+                    tab["working_directory"] = str(directory)
+                    if directory != path:
+                        tab["workspace_source"] = str(path)
+                    else:
+                        tab.pop("workspace_source", None)
                     break
             self._refresh_system_prompt()
             self._save_current_chat()
             self._persist_tab_layout()
-            self.notify(f"Working directory: {path}", title="Change directory")
+            self.notify(f"Working directory: {directory}", title="Change directory")
             return
         screens = {
             "memories": MemoryScreen,

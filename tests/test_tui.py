@@ -1449,7 +1449,9 @@ def test_on_mount_fresh_when_no_chats(monkeypatch):
     asyncio.run(exercise())
 
 
-def test_action_new_chat_keeps_previous_chat(monkeypatch):
+def test_action_new_chat_keeps_previous_chat(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+
     async def exercise():
         async def fake_stream(_conversation, usage_box=None, reasoning_box=None, finish_box=None, **_kwargs):
             if False:
@@ -3948,7 +3950,9 @@ def test_long_question_keeps_footer_and_answer_accessible():
     asyncio.run(exercise())
 
 
-def test_tabs_run_agent_turns_concurrently(monkeypatch):
+def test_tabs_run_agent_turns_concurrently(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+
     async def exercise():
         started = {"one": asyncio.Event(), "two": asyncio.Event()}
         release = asyncio.Event()

@@ -218,6 +218,8 @@ completes its highlighted command.
 
 The left sidebar lists open chats and their `ready`, `working`, `waiting for user`, or `done` state. Select a tab to switch without stopping work in the others. Use the sidebar buttons to create tabs and hide the sidebar; `Ctrl+B` toggles it from anywhere. Background tabs can finish or request an answer without taking focus from the active tab.
 
+New tabs start from the current tab's directory. If another tab already uses it, Remie gives the new tab a separate Git worktree and `remie/tab-…` branch next to the repository, or an **empty** `remie-tab-…` subdirectory for non-Git projects. Git worktrees start from committed `HEAD`; uncommitted and untracked files are not copied. `/change dir <path>` also isolates the tab if the target directory is already occupied. Closing a tab leaves its directory, worktree and branch intact for you to manage.
+
 ### Slash commands
 
 Type `/` in an empty prompt to show the command menu. The menu remains attached

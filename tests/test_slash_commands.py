@@ -207,7 +207,10 @@ def test_change_dir_is_tab_local_persistent_and_used_by_tools(tmp_path, monkeypa
             app.action_new_chat()
             await pilot.pause()
             second = app._active_tab_id
-            assert app._tab_prompt_context()["working_directory"] == str(tmp_path)
+            second_dir = Path(app._tab_prompt_context()["working_directory"])
+            assert second_dir.parent == target
+            assert second_dir.is_dir()
+            assert list(second_dir.iterdir()) == []
             assert app.switch_tab(original)
             await pilot.pause()
             assert app._tab_prompt_context()["working_directory"] == str(target)
@@ -224,7 +227,7 @@ def test_change_dir_is_tab_local_persistent_and_used_by_tools(tmp_path, monkeypa
         restored = AgentApp()
         async with restored.run_test():
             assert restored._runtimes[original].working_directory == str(target)
-            assert restored._runtimes[second].working_directory is None
+            assert restored._runtimes[second].working_directory == str(second_dir)
 
     asyncio.run(exercise())
 

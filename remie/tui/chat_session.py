@@ -1,6 +1,9 @@
 """Chat persistence and UI session lifecycle behavior."""
 
+from pathlib import Path
 from typing import Any
+
+from remie.tui.workspaces import WorkspaceError
 
 from remie.prompts import build_system_prompt
 from remie.protocol import strip_protocol_lines
@@ -130,12 +133,26 @@ class ChatSessionMixin:
         self._history_index = None
         self._history_draft = ""
 
-    def action_new_chat(self) -> None:
+    def action_new_chat(self, replacing_tab_id: str | None = None) -> None:
         """Create and activate a tab without stopping background agents."""
+        source = self._tab_prompt_context()["working_directory"]
+        tab = new_tab("")
+        try:
+            # Replacing the sole closing tab doesn't create a concurrent tab.
+            if replacing_tab_id == self._active_tab_id:
+                directory = Path(source)
+            else:
+                directory = self._allocate_tab_directory(Path(source), tab["id"])
+        except WorkspaceError as error:
+            self.notify(str(error), title="Tab workspace", severity="error")
+            return
         if not self._agent_running:
             self._save_current_chat()
         chat = create_chat()
-        tab = new_tab(chat["id"])
+        tab["chat_id"] = chat["id"]
+        tab["working_directory"] = str(directory)
+        if directory != Path(source):
+            tab["workspace_source"] = str(source)
         self._tab_layout["tabs"].append(tab)
         runtime = self._add_runtime(tab["id"], chat)
         self._active_tab_id = tab["id"]
@@ -167,9 +184,19 @@ class ChatSessionMixin:
         if chat is None:
             self.notify("Could not load that chat", severity="warning")
             return False
-        self._save_current_chat()
         if tab is None:
             tab = new_tab(chat_id)
+        requested = Path(tab.get("working_directory") or self._tab_prompt_context()["working_directory"])
+        try:
+            directory = self._allocate_tab_directory(requested, tab["id"])
+        except WorkspaceError as error:
+            self.notify(str(error), title="Tab workspace", severity="error")
+            return False
+        self._save_current_chat()
+        tab["working_directory"] = str(directory)
+        if directory != requested:
+            tab["workspace_source"] = str(requested)
+        if tab not in self._tab_layout["tabs"]:
             self._tab_layout["tabs"].append(tab)
         runtime = self._add_runtime(tab["id"], chat)
         self._active_tab_id = tab["id"]
@@ -218,7 +245,9 @@ class ChatSessionMixin:
         # app.  Create and activate the replacement first, then remove the old
         # tab through the normal inactive-tab path below.
         if len(tabs) == 1:
-            self.action_new_chat()
+            self.action_new_chat(replacing_tab_id=tab_id)
+            if len(tabs) == 1:
+                return False
         was_active = tab_id == self._active_tab_id
         tabs.pop(index)
         runtime = self._runtimes.pop(tab_id, None)
