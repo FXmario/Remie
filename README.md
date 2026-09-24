@@ -194,10 +194,11 @@ remie
 uv run main.py
 ```
 
-Press `Ctrl+G` to show or hide the status image beside the prompt. Outside
-tmux it is animated at no more than 30 FPS; inside tmux it uses a static frame.
-The preference is saved in Remie's configuration and restored on the next
-launch.
+Press `Ctrl+G` to show or hide the animated status image beside the prompt
+(up to 30 FPS). Inside tmux or basic terminals such as Linux TTY, terminal
+images are disabled entirely and a text-only working indicator is used instead.
+`Ctrl+G` cannot enable images there; your saved preference is retained for
+supported terminals.
 
 Remie starts in **System** theme mode. This uses ANSI colors so the terminal's
 background and transparency remain visible. Outside tmux, Remie queries the
@@ -207,6 +208,11 @@ cycle **System → Light → Dark**. The explicit Light and Dark modes use compl
 opaque Textual palettes.
 
 Type a message at the bottom input and press Enter. The agent will reason (`Thinking:`), call tools when needed, show the results, and reply — with the response streaming in as it is generated.
+
+Use `Tab` / `Shift+Tab` to move between the prompt and clickable controls,
+and `Enter` / `Space` to activate a focused button. This works without a mouse,
+including on a Linux TTY. When the slash-command popup is open, `Tab` still
+completes its highlighted command.
 
 The left sidebar lists open chats and their `ready`, `working`, `waiting for user`, or `done` state. Select a tab to switch without stopping work in the others. Use the sidebar buttons to create tabs and hide the sidebar; `Ctrl+B` toggles it from anywhere. Background tabs can finish or request an answer without taking focus from the active tab.
 

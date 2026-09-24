@@ -209,7 +209,7 @@ HeaderIcon {
     background: $panel;
 }
 
-#model-badge:hover {
+#model-badge:hover, #model-badge:focus {
     background: $primary 20%;
 }
 """

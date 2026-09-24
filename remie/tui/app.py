@@ -59,6 +59,7 @@ from remie.storage.chats import (
 )
 from remie.storage.memories import MEMORY_NAME_MAX_CHARS, ensure_active_memory
 from remie.storage.tabs import load_tab_layout, new_tab, save_tab_layout
+from remie.tools.common import tool_working_directory
 from remie.tools.executor import ToolExecutor, execute_tool_call
 from remie.tools.registry import get_tool_summary
 from remie.tui.chat_session import ChatSessionMixin
@@ -81,6 +82,7 @@ from remie.tui.helpers import (
     _safe_reasoning_markdown,
     _safe_stream_markdown,
     _should_update_stream,
+    _supports_terminal_graphics,
 )
 from remie.tui.render import _render_diff, _render_tool_result
 from remie.tui.screens.ask_user import AskUserScreen
@@ -149,6 +151,7 @@ class TabRuntime:
 
     tab_id: str
     chat_id: str | None = None
+    working_directory: str | None = None
     conversation: list[dict[str, Any]] = field(default_factory=list)
     transcript: list[dict[str, Any]] = field(default_factory=list)
     cached_conv_tokens: int = 0
@@ -328,9 +331,11 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
 
     def _add_runtime(self, tab_id: str, chat: dict[str, Any]) -> TabRuntime:
         usage = chat.get("token_usage") or {}
+        tab = next((item for item in self._tab_layout["tabs"] if item["id"] == tab_id), {})
         runtime = TabRuntime(
             tab_id=tab_id,
             chat_id=chat["id"],
+            working_directory=tab.get("working_directory"),
             conversation=list(chat.get("context_messages") or []),
             transcript=list(chat.get("transcript") or []),
             total_input_tokens=int(usage.get("input_tokens") or 0),
@@ -424,6 +429,7 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
             self._runtimes[tab["id"]] = TabRuntime(
                 tab_id=tab["id"],
                 chat_id=loaded["id"],
+                working_directory=tab.get("working_directory"),
                 conversation=list(loaded.get("context_messages") or []),
                 transcript=transcript,
                 cached_conv_tokens=estimate_conversation_tokens(
@@ -506,7 +512,10 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
         self._prefetch_model_context()
 
     def action_toggle_status_image(self) -> None:
-        """Toggle and persist the status image visibility."""
+        """Toggle and persist the status image visibility when supported."""
+        if not _supports_terminal_graphics():
+            self.notify("Terminal graphics are unavailable here", title="Status image")
+            return
         self._status_animation_enabled = not self._status_animation_enabled
         self._widget(StatusIndicator).set_animation_enabled(
             self._status_animation_enabled
@@ -559,7 +568,7 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
                 "activity": (runtime.current_activity if runtime else "")[:160],
             })
         return {
-            "working_directory": str(Path.cwd().resolve()),
+            "working_directory": self._runtime().working_directory or str(Path.cwd().resolve()),
             "tab_count": max(1, len(tabs)),
             "active_index": index,
             "active_title": self._tab_title(self._runtime().tab_id),
@@ -761,6 +770,10 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
         user_input = event.text.strip()
         if not user_input:
             return
+        if user_input.casefold() == "/change dir" or user_input.casefold().startswith("/change dir "):
+            argument = user_input[len("/change dir"):].strip()
+            self._dispatch_slash_command("change dir", argument)
+            return
         command = resolve_slash_command(user_input)
         if command is not None:
             self._dispatch_slash_command(command.name)
@@ -807,6 +820,27 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
                 severity="warning",
             )
             return
+        if name == "change dir":
+            if not argument:
+                self.notify("Usage: /change dir <path>", title="Change directory", severity="warning")
+                return
+            path = Path(argument).expanduser()
+            if not path.is_absolute():
+                path = Path(self._tab_prompt_context()["working_directory"]) / path
+            path = path.resolve()
+            if not path.is_dir():
+                self.notify(f"Not a directory: {path}", title="Change directory", severity="warning")
+                return
+            self._runtime().working_directory = str(path)
+            for tab in self._tab_layout["tabs"]:
+                if tab["id"] == self._runtime().tab_id:
+                    tab["working_directory"] = str(path)
+                    break
+            self._refresh_system_prompt()
+            self._save_current_chat()
+            self._persist_tab_layout()
+            self.notify(f"Working directory: {path}", title="Change directory")
+            return
         screens = {
             "memories": MemoryScreen,
             "chats": ChatScreen,
@@ -824,6 +858,8 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
         if tab_id is None:
             return
         token = self._task_tab.set(tab_id)
+        directory = self._runtime().working_directory
+        directory_token = tool_working_directory.set(Path(directory) if directory else None)
         try:
             while True:
                 user_content = await self._input_queue.get()
@@ -843,6 +879,7 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
                     self._widget(PromptTextArea).focus()
             except Exception:
                 pass
+            tool_working_directory.reset(directory_token)
             self._task_tab.reset(token)
 
     def _drain_queue(self) -> None:

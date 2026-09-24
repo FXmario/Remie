@@ -31,7 +31,7 @@ def _detect_terminal_background() -> str | None:
     our timeout, causing the raw ``rgb:…`` control response to leak into the
     shell after Remie starts.
     """
-    if os.environ.get("TMUX"):
+    if not _supports_terminal_graphics():
         return None
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         return None
@@ -64,6 +64,17 @@ def _detect_terminal_background() -> str | None:
 
 def _is_tmux() -> bool:
     return bool(os.environ.get("TMUX"))
+
+
+def _supports_terminal_graphics() -> bool:
+    """Avoid image escape sequences in multiplexers and basic text terminals."""
+    if _is_tmux():
+        return False
+    term = os.environ.get("TERM", "").lower()
+    return bool(term) and not (
+        term in {"dumb", "linux", "ansi", "unknown", "screen", "cons25"}
+        or term.startswith(("vt", "screen-", "linux-", "cons"))
+    )
 
 
 def _safe_stream_markdown(

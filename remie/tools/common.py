@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import subprocess  # noqa: F401 -- re-exported; tests patch remie.tools.subprocess.run
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
@@ -97,13 +98,19 @@ def _remie_dir() -> Path:
     return destination
 
 
+# Set only during a tab's agent turn; never change the process cwd for other tabs.
+tool_working_directory: ContextVar[Path | None] = ContextVar(
+    "remie_tool_working_directory", default=None
+)
+
+
 def resolve_abs_path(path_str: str) -> Path:
     """
     file.py -> /Users/home/username/project/file.py
     """
     path = Path(path_str).expanduser()
     if not path.is_absolute():
-        path = (Path.cwd() / path).resolve()
+        path = ((tool_working_directory.get() or Path.cwd()) / path).resolve()
     return path
 
 

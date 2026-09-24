@@ -392,7 +392,7 @@ def test_ctrl_t_toggles_full_light_and_dark_themes(monkeypatch):
     asyncio.run(exercise())
 
 
-def test_ctrl_g_toggles_static_status_image_in_tmux(monkeypatch, tmp_path):
+def test_ctrl_g_cannot_enable_status_image_in_tmux(monkeypatch, tmp_path):
     import remie.agent as agent
 
     monkeypatch.setenv("TMUX", "/tmp/tmux-1000/default,1,0")
@@ -403,18 +403,16 @@ def test_ctrl_g_toggles_static_status_image_in_tmux(monkeypatch, tmp_path):
         app = AgentApp()
         async with app.run_test() as pilot:
             indicator = app.query_one(StatusIndicator)
-            assert indicator.display is True
+            assert indicator.display is False
             assert indicator._timer is None
-            assert indicator.query_one("#status-gif")
+            assert not indicator.query("#status-gif")
+            assert indicator._frames == {}
 
             await pilot.press("ctrl+g")
             await pilot.pause()
             assert indicator.display is False
-
-            await pilot.press("ctrl+g")
-            await pilot.pause()
-            assert indicator.display is True
-            assert indicator._timer is None
+            assert indicator._frames == {}
+            assert agent.load_status_animation_enabled() is True
 
     asyncio.run(exercise())
 
@@ -1472,6 +1470,31 @@ def test_action_new_chat_keeps_previous_chat(monkeypatch):
             # The previous chat was kept, not deleted.
             assert find_chat_by_id(first_id) is not None
             assert load_chat_index().get(app._chat_id) is not None
+
+    asyncio.run(exercise())
+
+
+def test_closing_only_tab_creates_and_activates_replacement():
+    async def exercise():
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            old_tab_id = app._active_tab_id
+            old_chat_id = app._chat_id
+
+            assert old_tab_id is not None
+            assert len(app._tab_layout["tabs"]) == 1
+            assert app.close_tab(old_tab_id) is True
+            await pilot.pause()
+
+            assert len(app._tab_layout["tabs"]) == 1
+            replacement = app._tab_layout["tabs"][0]
+            assert replacement["id"] != old_tab_id
+            assert replacement["chat_id"] != old_chat_id
+            assert app._active_tab_id == replacement["id"]
+            assert app._chat_id == replacement["chat_id"]
+            assert replacement["id"] in app._runtimes
+            assert old_tab_id not in app._runtimes
+            assert app._runtime().pane is not None
 
     asyncio.run(exercise())
 

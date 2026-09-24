@@ -163,7 +163,10 @@ class ConnectionScreen(ModalScreen):
                             if current.model in model_list
                             else model_list[0]
                         ),
-                        allow_blank=False,
+                        # Filtering is allowed to produce zero matches; the
+                        # empty-state label handles that case without making
+                        # Textual's Select reject an empty option list.
+                        allow_blank=True,
                         id="model-select",
                     )
                     yield Label("No models available", id="model-empty", classes="picker-empty")

@@ -18,7 +18,7 @@ from remie.tools.files import (
 )
 from remie.tools.commands import get_blocked_command_reason, run_command_tool
 from remie.tools.memory import memory_tool
-from remie.tools.common import _project_root, resolve_abs_path
+from remie.tools.common import _project_root, resolve_abs_path, tool_working_directory
 
 
 _PATH_ARGUMENTS = {
@@ -155,12 +155,13 @@ class ToolExecutor:
         ) is not None:
             return await asyncio.to_thread(self.run, name, args)
 
-        outside = _outside_project_paths(name, args, self.project_root)
+        project_root = tool_working_directory.get() or self.project_root
+        outside = _outside_project_paths(name, args, project_root)
         if outside:
             paths = "\n".join(f"• {path}" for path in outside)
             answer = await self.ask_user(
                 f"The agent wants to access path(s) outside the current project "
-                f"({self.project_root}):\n\n{paths}\n\nAllow this operation once?",
+                f"({project_root}):\n\n{paths}\n\nAllow this operation once?",
                 ["Allow once", "Deny"],
             )
             if answer != "Allow once":

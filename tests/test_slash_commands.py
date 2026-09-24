@@ -1,4 +1,7 @@
 import asyncio
+from pathlib import Path
+
+from remie.tools.common import resolve_abs_path, tool_working_directory
 
 import pytest
 from textual.widgets import Input, OptionList
@@ -43,7 +46,10 @@ def test_slash_command_registry_filters_and_resolves_trailing_slash():
         "chats",
         "connect",
         "models",
+        "change dir",
     ]
+    assert [command.name for command in slash_command_matches("/change d")] == ["change dir"]
+    assert slash_command_matches("/change dir /tmp") == ()
     assert [command.name for command in slash_command_matches("/mo")] == ["models"]
     assert slash_command_matches("explain /models") == ()
     assert slash_command_matches("/models please") == ()
@@ -179,6 +185,63 @@ def test_busy_agent_rejects_slash_command_without_queueing():
                 assert notifications[-1][1]["title"] == "Agent busy"
         finally:
             monkeypatch.undo()
+
+    asyncio.run(exercise())
+
+
+def test_change_dir_is_tab_local_persistent_and_used_by_tools(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    target = tmp_path / "other project"
+    target.mkdir()
+    (target / "hello.txt").write_text("hello")
+
+    async def exercise():
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            original = app._active_tab_id
+            app.on_prompt_submitted(tui_app.PromptSubmitted(f"/change dir {target}"))
+            assert app._tab_prompt_context()["working_directory"] == str(target)
+            assert str(target) in app.conversation[0]["content"]
+            assert app._input_queue.empty()
+            assert app._prompt_history == []
+            app.action_new_chat()
+            await pilot.pause()
+            second = app._active_tab_id
+            assert app._tab_prompt_context()["working_directory"] == str(tmp_path)
+            assert app.switch_tab(original)
+            await pilot.pause()
+            assert app._tab_prompt_context()["working_directory"] == str(target)
+            # The context propagates into thread-based tool execution, without os.chdir.
+            token = tool_working_directory.set(Path(app._runtime().working_directory))
+            try:
+                assert await asyncio.to_thread(resolve_abs_path, "hello.txt") == target / "hello.txt"
+                assert (await app._tool_executor.execute("read_file", {"filename": "hello.txt"}))["content"] == "hello"
+            finally:
+                tool_working_directory.reset(token)
+            assert app.switch_tab(second)
+            await pilot.pause()
+            assert resolve_abs_path("hello.txt") == tmp_path / "hello.txt"
+        restored = AgentApp()
+        async with restored.run_test():
+            assert restored._runtimes[original].working_directory == str(target)
+            assert restored._runtimes[second].working_directory is None
+
+    asyncio.run(exercise())
+
+
+def test_change_dir_rejects_invalid_path_and_busy_agent(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    async def exercise():
+        app = AgentApp()
+        async with app.run_test():
+            initial = app._tab_prompt_context()["working_directory"]
+            app.on_prompt_submitted(tui_app.PromptSubmitted("/change dir missing"))
+            assert app._tab_prompt_context()["working_directory"] == initial
+            app._agent_running = True
+            app.on_prompt_submitted(tui_app.PromptSubmitted(f"/change dir {tmp_path.parent}"))
+            assert app._tab_prompt_context()["working_directory"] == initial
+            app._agent_running = False
 
     asyncio.run(exercise())
 

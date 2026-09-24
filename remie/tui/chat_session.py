@@ -211,6 +211,14 @@ class ChatSessionMixin:
         if index is None:
             return False
         self._save_runtime(tab_id)
+        # Keep an active runtime throughout the transition.  Several routed UI
+        # properties (for example ``_agent_running`` and ``_widget``) assume an
+        # active tab exists, so removing the final tab before creating its
+        # replacement leaves them pointing at a missing runtime and crashes the
+        # app.  Create and activate the replacement first, then remove the old
+        # tab through the normal inactive-tab path below.
+        if len(tabs) == 1:
+            self.action_new_chat()
         was_active = tab_id == self._active_tab_id
         tabs.pop(index)
         runtime = self._runtimes.pop(tab_id, None)

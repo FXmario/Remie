@@ -130,14 +130,14 @@ def build_system_prompt(
         tabs = (
             "\n\n## Remie tabs\n"
             f"Working directory: {tab_context.get('working_directory', Path.cwd())}\n"
-            f"Open tabs in this directory: {tab_context.get('tab_count', 1)}\n"
+            f"Open tabs in this session: {tab_context.get('tab_count', 1)}\n"
             f"Current tab: {tab_context.get('active_index', 1)} of "
             f"{tab_context.get('tab_count', 1)}\n"
             f"Current tab title: {tab_context.get('active_title', '')}\n"
-            "All tabs belong to this working directory and have independent chat "
-            "histories. Tabs do not change the working directory. Other tabs may "
-            "modify the same files, so avoid overlapping work or re-check files "
-            "before editing."
+            "Each tab has its own working directory and independent chat "
+            "history. Use /change dir <path> to change only this tab's directory. "
+            "Other tabs may modify the same files, so avoid overlapping work or "
+            "re-check files before editing."
             f"{other_lines}"
         )
     return (

@@ -31,7 +31,7 @@ from remie.agent import (
 # from remie.agent import strip_protocol_lines
 from remie.tui.constants import STATUS_ANIMATION_MAX_FPS
 from remie.tui.contracts import is_agent_app
-from remie.tui.helpers import _format_tokens, _is_tmux
+from remie.tui.helpers import _format_tokens, _is_tmux, _supports_terminal_graphics
 from remie.tui.slash_commands import (
     SlashCommand,
     resolve_slash_command,
@@ -293,6 +293,9 @@ class StatusIndicator(Vertical):
         return self._frames[status]
 
     def compose(self):
+        if not _supports_terminal_graphics():
+            self.display = False
+            return
         frames, _ = self._ensure_loaded(self._state)
         if frames:
             yield TerminalImage(frames[0], id="status-gif")
@@ -301,7 +304,7 @@ class StatusIndicator(Vertical):
             self.display = False
 
     def on_mount(self) -> None:
-        if self._animation_enabled and self.display and not _is_tmux():
+        if self._animation_enabled and self.display and _supports_terminal_graphics():
             self._schedule_next_frame()
 
     def _schedule_next_frame(self) -> None:
@@ -328,7 +331,7 @@ class StatusIndicator(Vertical):
             # image widget. Status changes should remain harmless.
             self.display = False
             return
-        if self._animation_enabled and not _is_tmux():
+        if self._animation_enabled and _supports_terminal_graphics():
             self._schedule_next_frame()
 
     def set_animation_enabled(self, enabled: bool) -> None:
@@ -337,6 +340,9 @@ class StatusIndicator(Vertical):
         if self._timer is not None:
             self._timer.stop()
             self._timer = None
+        if not _supports_terminal_graphics():
+            self.display = False
+            return
         frames, _ = self._ensure_loaded(self._state)
         self.display = enabled and bool(frames)
         if self.is_attached:
@@ -345,7 +351,7 @@ class StatusIndicator(Vertical):
             # clears stale image pixels instead of leaving a fragment behind.
             self.parent.refresh(layout=True)
             self.screen.refresh(layout=True)
-        if self.display and self.is_attached and not _is_tmux():
+        if self.display and self.is_attached and _supports_terminal_graphics():
             self._schedule_next_frame()
 
     def set_status(self, status: str) -> None:
@@ -356,6 +362,9 @@ class StatusIndicator(Vertical):
             self._timer = None
         self._state = status
         self._frame_index = 0
+        if not _supports_terminal_graphics():
+            self.display = False
+            return
         frames, _ = self._ensure_loaded(status)
         if not frames:
             self.display = False
@@ -366,12 +375,13 @@ class StatusIndicator(Vertical):
             self.display = False
             return
         self.display = self._animation_enabled
-        if self._animation_enabled and not _is_tmux():
+        if self._animation_enabled and _supports_terminal_graphics():
             self._schedule_next_frame()
 
 
 class ThinkingIndicator(Label):
     FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+    ASCII_FRAMES = ["|", "/", "-", "\\"]
 
     def __init__(self) -> None:
         super().__init__(id="tmux-spinner")
@@ -379,23 +389,27 @@ class ThinkingIndicator(Label):
         self._working = False
 
     def on_mount(self) -> None:
-        if _is_tmux():
+        if not _supports_terminal_graphics():
             self.set_interval(0.1, self._advance)
+
+    def _frames(self) -> list[str]:
+        return self.FRAMES if _is_tmux() else self.ASCII_FRAMES
 
     def _advance(self) -> None:
         if self._working:
-            self._frame_index = (self._frame_index + 1) % len(self.FRAMES)
-            self.update(f"{self.FRAMES[self._frame_index]}")
+            frames = self._frames()
+            self._frame_index = (self._frame_index + 1) % len(frames)
+            self.update(frames[self._frame_index])
 
     def set_status(self, status: str) -> None:
         self._working = status == "working"
-        self.display = self._working and _is_tmux()
+        self.display = self._working and not _supports_terminal_graphics()
         if self._working:
             self._frame_index = 0
-            self.update(self.FRAMES[0])
+            self.update(self._frames()[0])
 
 
-class ModelBadge(Label):
+class ModelBadge(Label, can_focus=True):
     """Clickable label showing the model and generated-output token usage."""
 
     def __init__(self) -> None:
@@ -488,6 +502,12 @@ class ModelBadge(Label):
         if is_agent_app(app):
             await app.action_open_connection()
 
+    async def on_key(self, event: events.Key) -> None:
+        if event.key in {"enter", "space"}:
+            event.stop()
+            event.prevent_default()
+            await self.on_click()
+
 
 class PromptSubmitted(Message):
     """Posted when the user submits the prompt box."""
@@ -577,7 +597,7 @@ class SlashCommandPopup(OptionList):
         self._set_open(bool(self._commands))
         self.highlighted = 0 if self._commands else None
         exact = resolve_slash_command(text)
-        if exact is not None and self._auto_pending != exact.name:
+        if exact is not None and exact.name != "change dir" and self._auto_pending != exact.name:
             self._auto_pending = exact.name
             self.call_later(self._auto_choose, exact)
         elif exact is None:
@@ -673,6 +693,16 @@ class PromptTextArea(TextArea):
                 event.stop()
                 event.prevent_default()
                 return
+        if event.key in {"tab", "shift+tab"}:
+            # TextArea normally inserts indentation; let keyboard-only users
+            # reach the sidebar and other focusable controls instead.
+            event.stop()
+            event.prevent_default()
+            if event.key == "tab":
+                self.app.action_focus_next()
+            else:
+                self.app.action_focus_previous()
+            return
         if event.key == "ctrl+a":
             event.stop()
             event.prevent_default()
@@ -880,8 +910,10 @@ class PromptBox(Vertical):
     def on_slash_command_chosen(self, event: SlashCommandChosen) -> None:
         event.stop()
         prompt = self.query_one(PromptTextArea)
-        prompt.load_text("")
+        prompt.load_text("/change dir " if event.command.name == "change dir" else "")
         prompt.focus()
+        if event.command.name == "change dir":
+            return
         app = self.app
         dispatch = getattr(app, "_dispatch_slash_command", None)
         if is_agent_app(app) and callable(dispatch):
