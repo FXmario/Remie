@@ -20,8 +20,6 @@ SLASH_COMMANDS = (
     SlashCommand("chats", "Open saved chats"),
     SlashCommand("connect", "Configure a provider connection"),
     SlashCommand("models", "Switch the active model"),
-    SlashCommand("export", "Export the current chat to a JSON file"),
-    SlashCommand("import", "Import a chat from a JSON file"),
 )
 
 _COMMANDS_BY_NAME = {command.name: command for command in SLASH_COMMANDS}

@@ -9,8 +9,6 @@ from textual.widgets.option_list import Option
 from remie.storage.chats import (
     DEFAULT_CHAT_NAME,
     delete_chat,
-    export_chat,
-    import_chat,
     list_chats,
     load_latest_chat,
 )
@@ -77,13 +75,6 @@ class ChatScreen(ModalScreen):
                 ],
                 id="chat-list",
             )
-            yield Input(
-                placeholder="Export/import path (for example chat.remie.json)",
-                id="chat-file-path",
-            )
-            with Horizontal(classes="row"):
-                yield Button("Export", id="chat-export")
-                yield Button("Import", id="chat-import")
             with Horizontal(classes="row"):
                 yield Button("New", variant="primary", id="chat-new")
                 yield Button("Switch", variant="primary", id="chat-switch")
@@ -168,47 +159,6 @@ class ChatScreen(ModalScreen):
             app.notify("Started a new chat", title="Chats")
         self.dismiss()
 
-    def _file_path(self) -> str | None:
-        value = self.query_one("#chat-file-path", Input).value.strip()
-        if not value:
-            self.notify("Enter a chat archive path", severity="warning")
-            return None
-        return value
-
-    def _export_selected(self) -> None:
-        chat_id = self._selected_id()
-        path = self._file_path()
-        if not chat_id:
-            self.notify("Select a chat to export", severity="warning")
-            return
-        if path is None:
-            return
-        app = self.app
-        if is_agent_app(app) and app._chat_id == chat_id:
-            app._save_current_chat()
-        try:
-            written = export_chat(chat_id, path)
-        except (OSError, ValueError) as error:
-            self.notify(str(error), title="Export failed", severity="error")
-            return
-        self.notify(f"Exported to {written}", title="Chats")
-
-    def _import_archive(self) -> None:
-        path = self._file_path()
-        if path is None:
-            return
-        try:
-            chat = import_chat(path)
-        except ValueError as error:
-            self.notify(str(error), title="Import failed", severity="error")
-            return
-        self._reload_options()
-        app = self.app
-        if is_agent_app(app):
-            app._load_chat_into_ui(chat["id"])
-        self.notify(f"Imported '{chat['name']}'", title="Chats")
-        self.dismiss()
-
     def _delete_current(self) -> None:
         chat_id = self._selected_id()
         if not chat_id:
@@ -259,7 +209,3 @@ class ChatScreen(ModalScreen):
             self._switch(self._selected_id())
         elif button_id == "chat-delete":
             self._delete_current()
-        elif button_id == "chat-export":
-            self._export_selected()
-        elif button_id == "chat-import":
-            self._import_archive()

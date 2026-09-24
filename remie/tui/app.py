@@ -5,7 +5,6 @@ import base64
 import io
 import json
 import os
-import shlex
 import time
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -53,9 +52,7 @@ from remie.tokens import (
 from remie.storage.chats import (
     DEFAULT_CHAT_NAME,
     create_chat,
-    export_chat,
     find_chat_by_id,
-    import_chat,
     load_chat,
     load_latest_chat,
     rename_chat,
@@ -768,21 +765,6 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
         if command is not None:
             self._dispatch_slash_command(command.name)
             return
-        if user_input.casefold().startswith(("/export ", "/import ")):
-            try:
-                parts = shlex.split(user_input)
-            except ValueError as error:
-                self.notify(str(error), title="Slash commands", severity="warning")
-                return
-            if len(parts) == 2:
-                self._dispatch_slash_command(parts[0][1:].casefold(), parts[1])
-            else:
-                self.notify(
-                    "Usage: /export <path> or /import <path>",
-                    title="Slash commands",
-                    severity="warning",
-                )
-            return
         if is_slash_command_token(user_input):
             self.notify(
                 f"Unknown command: {user_input}",
@@ -824,28 +806,6 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
                 title="Agent busy",
                 severity="warning",
             )
-            return
-        if name in {"export", "import"}:
-            if not argument:
-                self.notify(
-                    f"Usage: /{name} <path>",
-                    title="Slash commands",
-                    severity="warning",
-                )
-                return
-            try:
-                if name == "export":
-                    self._save_current_chat()
-                    if not self._chat_id:
-                        raise ValueError("There is no current chat to export")
-                    path = export_chat(self._chat_id, argument)
-                    self.notify(f"Exported to {path}", title="Chats")
-                else:
-                    chat = import_chat(argument)
-                    self._load_chat_into_ui(chat["id"])
-                    self.notify(f"Imported '{chat['name']}'", title="Chats")
-            except (OSError, ValueError) as error:
-                self.notify(str(error), title=f"Chat {name} failed", severity="error")
             return
         screens = {
             "memories": MemoryScreen,
