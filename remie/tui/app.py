@@ -93,7 +93,7 @@ from remie.tui.screens.models import ModelScreen
 from remie.tui.screens.open import OpenScreen
 from remie.tui.slash_commands import is_slash_command_token, resolve_slash_command
 from remie.tui.streaming import StreamingPresentationMixin
-from remie.tui.workspaces import WorkspaceError, separate_workspace
+from remie.tui.workspaces import WorkspaceError, separate_workspace, workspace_label
 from remie.tui.widgets import (
     ImageAttachmentBar,
     InputRow,
@@ -404,7 +404,7 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
             finally:
                 self._task_tab.reset(token)
         runtime.pane.query_one(PromptTextArea).focus()
-        self.sub_title = self._tab_title(tab_id)
+        self.sub_title = self._tab_header_title(tab_id)
         if runtime.pending_question and runtime.pending_answer:
             question, options = runtime.pending_question
             answer = await self.push_screen_wait(AskUserScreen(question, options))
@@ -512,7 +512,7 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
             # unanswered tool calls; heal them before anything is replayed.
             self._close_dangling_tool_calls()
             self._refresh_system_prompt()
-            self.sub_title = chat.get("name", "")
+            self.sub_title = self._tab_header_title(self._active_tab_id, chat.get("name", ""))
             log = self._widget(StreamingRichLog)
             log.write("[dim]Resumed chat:[/] " + escape(chat.get("name", "")))
             self._replay_transcript()
@@ -535,7 +535,7 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
                 }
             ]
             self._transcript = []
-            self.sub_title = chat["name"]
+            self.sub_title = self._tab_header_title(self._active_tab_id, chat["name"])
         self._cached_conv_tokens = estimate_conversation_tokens(self.conversation)
         if "token_usage" in chat:
             self._restore_chat_token_usage(chat)
@@ -578,6 +578,11 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
         tab = next((tab for tab in self._tab_layout.get("tabs", []) if tab["id"] == tab_id), None)
         chat = find_chat_by_id(tab["chat_id"]) if tab else None
         return str((chat or {}).get("name") or DEFAULT_CHAT_NAME)
+
+    def _tab_header_title(self, tab_id: str, chat_title: str | None = None) -> str:
+        tab = next((tab for tab in self._tab_layout["tabs"] if tab["id"] == tab_id), None)
+        directory = self._tab_directory(tab) if tab else Path.cwd().resolve()
+        return f"{chat_title or self._tab_title(tab_id)} · {workspace_label(directory)}"
 
     def _tab_status_tool(self) -> dict[str, Any]:
         context = self._tab_prompt_context()
@@ -707,7 +712,7 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
         renamed = rename_chat(self._chat_id, name, title_source="auto")
         if renamed is not None:
             if self._runtime().tab_id == self._active_tab_id:
-                self.sub_title = renamed["name"]
+                self.sub_title = self._tab_header_title(self._active_tab_id, renamed["name"])
             self._refresh_tabs()
 
     @work(exclusive=False)
@@ -887,6 +892,7 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
             self._refresh_system_prompt()
             self._save_current_chat()
             self._persist_tab_layout()
+            self.sub_title = self._tab_header_title(self._active_tab_id)
             self.notify(f"Working directory: {directory}", title="Change directory")
             return
         screens = {

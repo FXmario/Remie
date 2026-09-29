@@ -5,6 +5,20 @@ import uuid
 from pathlib import Path
 
 
+def workspace_label(directory: Path) -> str:
+    """Identify a tab's worktree by branch, falling back to its directory name."""
+    try:
+        branch = subprocess.run(
+            ["git", "-C", str(directory), "symbolic-ref", "--quiet", "--short", "HEAD"],
+            capture_output=True, text=True, check=False, timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        branch = None
+    if branch is not None and branch.returncode == 0 and branch.stdout.strip():
+        return branch.stdout.strip()
+    return directory.name
+
+
 class WorkspaceError(Exception):
     """A separate tab workspace could not be created."""
 

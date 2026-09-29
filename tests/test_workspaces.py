@@ -35,10 +35,12 @@ def test_git_worktree_starts_at_head_and_preserves_original(tmp_path, monkeypatc
         app = AgentApp()
         async with app.run_test() as pilot:
             original = app._active_tab_id
+            assert app.sub_title.endswith(" · " + git("branch", "--show-current", cwd=root))
             app.action_new_chat()
             await pilot.pause()
             second = app._active_tab_id
             target = Path(app._runtime().working_directory)
+            assert app.sub_title.endswith(" · " + git("branch", "--show-current", cwd=target))
             assert target != root / "sub"
             assert target.parent.parent == tmp_path
             assert (target / "file.txt").read_text() == "committed"
@@ -138,9 +140,15 @@ def test_non_git_tabs_and_change_dir_get_empty_unique_directories(tmp_path, monk
             app.on_prompt_submitted(PromptSubmitted(f"/change dir {tmp_path}"))
             assert Path(app._runtime().working_directory).parent == tmp_path
             assert Path(app._runtime().working_directory) == workspace
+            assert app.sub_title.endswith(" · " + workspace.name)
             assert app.switch_tab(original)
             await pilot.pause()
             assert app._tab_prompt_context()["working_directory"] == str(tmp_path)
+            assert app.sub_title.endswith(" · " + tmp_path.name)
+            other = tmp_path / "other"
+            other.mkdir()
+            app.on_prompt_submitted(PromptSubmitted(f"/change dir {other}"))
+            assert app.sub_title.endswith(" · other")
             assert app.switch_tab(second)
             await pilot.pause()
             assert app._tab_prompt_context()["working_directory"] != str(tmp_path)

@@ -166,7 +166,7 @@ class ChatSessionMixin:
             }
         ]
         runtime.cached_conv_tokens = estimate_conversation_tokens(runtime.conversation)
-        self.sub_title = chat["name"]
+        self.sub_title = self._tab_header_title(tab["id"], chat["name"])
         self._save_current_chat()
         self._persist_tab_layout()
         self.call_later(self._show_runtime, tab["id"])
@@ -201,7 +201,7 @@ class ChatSessionMixin:
         runtime = self._add_runtime(tab["id"], chat)
         self._active_tab_id = tab["id"]
         runtime.cached_conv_tokens = estimate_conversation_tokens(runtime.conversation)
-        self.sub_title = chat.get("name", "")
+        self.sub_title = self._tab_header_title(tab["id"], chat.get("name", ""))
         self._persist_tab_layout()
         self.call_later(self._show_runtime, tab["id"])
         self._refresh_tabs()
@@ -271,7 +271,7 @@ class ChatSessionMixin:
         if tab_id not in self._runtimes:
             return False
         self._active_tab_id = tab_id
-        self.sub_title = self._tab_title(tab_id)
+        self.sub_title = self._tab_header_title(tab_id)
         self._persist_tab_layout()
         self.call_later(self._show_runtime, tab_id)
         self._refresh_tabs()

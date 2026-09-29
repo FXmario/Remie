@@ -3734,7 +3734,8 @@ def test_adaptive_title_updates_after_completed_turn(monkeypatch):
             assert chat is not None
             assert chat["name"] == "Fix Login Redirect Bug"
             assert chat["title_source"] == "auto"
-            assert app.sub_title == "Fix Login Redirect Bug"
+            assert app.sub_title == app._tab_header_title(app._active_tab_id)
+            assert app.sub_title.startswith("Fix Login Redirect Bug · ")
 
     asyncio.run(exercise())
 
