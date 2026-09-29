@@ -3,6 +3,7 @@
 import asyncio
 import re
 import shlex
+import subprocess
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -41,6 +42,36 @@ def _is_within(path: Path, project_root: Path) -> bool:
         return False
 
 
+def _git_worktree_identity(path: Path) -> Path | None:
+    """Return the shared Git directory if path belongs to a worktree.
+
+    Use the closest existing directory so new files are covered, but verify
+    the requested path is under the reported worktree (not merely beside it).
+    A failed lookup must never relax the outside-project permission check.
+    """
+    path = path.resolve()
+    directory = path if path.is_dir() else path.parent
+    while not directory.is_dir() and directory != directory.parent:
+        directory = directory.parent
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(directory), "rev-parse", "--path-format=absolute",
+             "--show-toplevel", "--git-common-dir"],
+            capture_output=True, text=True, check=False, timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    lines = result.stdout.splitlines()
+    if len(lines) != 2:
+        return None
+    root, common_dir = (Path(line).resolve() for line in lines)
+    if not _is_within(path, root):
+        return None
+    return common_dir
+
+
 def _outside_project_paths(
     name: str, args: dict[str, Any], project_root: Path
 ) -> list[Path]:
@@ -66,8 +97,17 @@ def _outside_project_paths(
             candidates.append((cwd / path).resolve() if not path.is_absolute() else path.resolve())
 
     outside: list[Path] = []
+    project_identity: Path | None = None
+    checked_project = False
     for path in candidates:
-        if not _is_within(path, project_root) and path not in outside:
+        if _is_within(path, project_root):
+            continue
+        if not checked_project:
+            project_identity = _git_worktree_identity(project_root)
+            checked_project = True
+        if project_identity is not None and _git_worktree_identity(path) == project_identity:
+            continue
+        if path not in outside:
             outside.append(path)
     return outside
 

@@ -8,6 +8,8 @@ import pytest
 
 from remie.tui import AgentApp, PromptSubmitted
 from remie.tui.workspaces import WorkspaceError, separate_workspace
+from remie.tools.common import tool_working_directory
+from remie.tools.executor import ToolExecutor, _outside_project_paths
 
 
 def git(*args: str, cwd: Path) -> str:
@@ -56,6 +58,67 @@ def test_git_worktree_starts_at_head_and_preserves_original(tmp_path, monkeypatc
             assert restored._runtimes[second].working_directory == str(app._runtimes[second].working_directory)
 
     asyncio.run(exercise())
+
+
+def test_same_repository_worktrees_do_not_need_outside_permission(tmp_path):
+    root = tmp_path / "project"
+    root.mkdir()
+    git("init", "-q", cwd=root)
+    (root / "file.txt").write_text("original")
+    git("add", ".", cwd=root)
+    git("-c", "user.name=Test", "-c", "user.email=test@example.com",
+        "commit", "-qm", "initial", cwd=root)
+    tab = separate_workspace(root, "second")
+    unrelated = tmp_path / "unrelated"
+    unrelated.mkdir()
+    git("init", "-q", cwd=unrelated)
+    (unrelated / "file.txt").write_text("other")
+    sibling = tmp_path / "sibling.txt"
+    sibling.write_text("outside")
+    (root / "link").symlink_to(sibling)
+    prompts = []
+
+    async def deny(question, _options):
+        prompts.append(question)
+        return "Deny"
+
+    executor = ToolExecutor(deny, project_root=tab)
+    assert _outside_project_paths(
+        "edit_file", {"path": str(root / "new" / "file.txt")}, tab
+    ) == []
+    (root / "new").mkdir()
+
+    async def check(name, args, *, allowed):
+        result = await executor.execute(name, args)
+        if allowed:
+            assert "error" not in result, result
+        else:
+            assert result["error"].startswith("Permission denied"), result
+
+    async def exercise():
+        token = tool_working_directory.set(tab)
+        try:
+            await check("read_file", {"filename": str(root / "file.txt")}, allowed=True)
+            await check("edit_file", {"path": str(root / "file.txt"),
+                                      "old_str": "original", "new_str": "changed"}, allowed=True)
+            await check("edit_file", {"path": str(root / "new" / "file.txt"),
+                                      "old_str": "", "new_str": "new"}, allowed=True)
+            await check("run_command", {"command": "pwd", "cwd": str(root)}, allowed=True)
+            await check("run_command", {"command": f"cat {root / 'file.txt'}",
+                                         "cwd": str(tab)}, allowed=True)
+            await check("read_file", {"filename": str(unrelated / "file.txt")}, allowed=False)
+            await check("read_file", {"filename": str(sibling)}, allowed=False)
+            await check("read_file", {"filename": str(root / "link")}, allowed=False)
+            await check("edit_file", {"path": str(tmp_path / "missing" / "file.txt"),
+                                      "old_str": "", "new_str": "no"}, allowed=False)
+        finally:
+            tool_working_directory.reset(token)
+
+    asyncio.run(exercise())
+    assert len(prompts) == 4
+    assert _outside_project_paths("read_file", {"filename": str(tab / "file.txt")}, root) == []
+    assert (root / "file.txt").read_text() == "changed"
+    assert (root / "new" / "file.txt").read_text() == "new"
 
 
 def test_non_git_tabs_and_change_dir_get_empty_unique_directories(tmp_path, monkeypatch):
