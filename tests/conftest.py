@@ -1,8 +1,4 @@
-import os
-
 import pytest
-
-os.environ.setdefault("LLAMA_BASE_URL", "http://localhost:7070/v1")
 
 
 @pytest.fixture(autouse=True)

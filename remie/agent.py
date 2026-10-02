@@ -28,7 +28,7 @@ from remie.providers.catalog import (
     fetch_codex_models as _fetch_codex_models,
     fetch_opencode_go_models as _fetch_opencode_go_models,
     fetch_openrouter_models as _fetch_openrouter_models,
-    get_max_output_tokens,
+    get_max_output_tokens as _get_max_output_tokens,
     get_model_context_limit as _get_model_context_limit,
     get_model_info as _get_model_info,
     supports_reasoning_effort,
@@ -109,6 +109,9 @@ def __getattr__(name: str) -> Any:
 # models API at connect time (used for context compaction).
 _openrouter_model_context: dict[str, int] = {}
 
+# Live per-model generation ceilings from OpenRouter top_provider metadata.
+_openrouter_model_output: dict[str, int] = {}
+
 # Live context windows for Codex subscription models, populated from the
 # account's model list at connect time.
 _codex_model_context: dict[str, int] = {}
@@ -139,7 +142,13 @@ async def fetch_codex_models() -> list[ModelInfo]:
 
 
 async def fetch_openrouter_models() -> list[ModelInfo]:
-    return await _fetch_openrouter_models(_openrouter_model_context, _model_info_cache)
+    return await _fetch_openrouter_models(
+        _openrouter_model_context, _model_info_cache, _openrouter_model_output
+    )
+
+
+def get_max_output_tokens(provider: str = "local", model: str = "") -> int:
+    return _get_max_output_tokens(provider, model, _openrouter_model_output)
 
 
 def get_model_context_limit(model: str, provider: str = "local") -> int | None:
@@ -308,7 +317,7 @@ async def stream_llm_call(
         _config,
         get_http_client=_get_http_client,
         get_local_openai_client=_get_local_openai_client,
-        max_output_tokens=get_max_output_tokens(_config.provider),
+        max_output_tokens=get_max_output_tokens(_config.provider, _config.model),
         reasoning_supported=supports_reasoning_effort(_config.model, _config.provider),
     )
     async for event in provider.stream(conversation):

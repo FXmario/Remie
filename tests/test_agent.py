@@ -1832,31 +1832,15 @@ class TestConnectionConfig:
         assert get_model_context_limit("any", "local") is None
 
     def test_max_output_tokens_defaults_by_provider(self):
-        import os
+        assert get_max_output_tokens("opencode-go") == 32_768
+        assert get_max_output_tokens("openrouter") == 32_768
+        assert get_max_output_tokens("local") == 8_192
+        assert get_max_output_tokens("codex") == 8_192
 
-        old = os.environ.get("REMIE_MAX_OUTPUT_TOKENS")
-        os.environ.pop("REMIE_MAX_OUTPUT_TOKENS", None)
-        try:
-            assert get_max_output_tokens("opencode-go") == 32_768
-            assert get_max_output_tokens("local") == 8_192
-        finally:
-            if old is None:
-                os.environ.pop("REMIE_MAX_OUTPUT_TOKENS", None)
-            else:
-                os.environ["REMIE_MAX_OUTPUT_TOKENS"] = old
-
-    def test_max_output_tokens_env_override(self):
-        import os
-
-        old = os.environ.get("REMIE_MAX_OUTPUT_TOKENS")
-        os.environ["REMIE_MAX_OUTPUT_TOKENS"] = "4000"
-        try:
-            assert get_max_output_tokens("opencode-go") == 4000
-        finally:
-            if old is None:
-                os.environ.pop("REMIE_MAX_OUTPUT_TOKENS", None)
-            else:
-                os.environ["REMIE_MAX_OUTPUT_TOKENS"] = old
+    def test_max_output_tokens_ignores_retired_env_override(self, monkeypatch):
+        monkeypatch.setenv("REMIE_MAX_OUTPUT_TOKENS", "4000")
+        assert get_max_output_tokens("opencode-go") == 32_768
+        assert get_max_output_tokens("local") == 8_192
 
 
 class TestHttpClientTlsVerification:

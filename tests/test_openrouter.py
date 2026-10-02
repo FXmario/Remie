@@ -456,6 +456,7 @@ def test_fetch_openrouter_models_parses_catalog(monkeypatch):
                         "id": "anthropic/claude-sonnet-4.6",
                         "name": "Anthropic: Claude Sonnet 4.6",
                         "context_length": 200000,
+                        "top_provider": {"max_completion_tokens": 128000},
                         "pricing": {"prompt": "0.000003", "completion": "0.000015"},
                     },
                     {
@@ -479,6 +480,7 @@ def test_fetch_openrouter_models_parses_catalog(monkeypatch):
             "vendor": "Anthropic",
             "context_length": 200000,
             "free": False,
+            "max_output_tokens": 128000,
         },
         {
             "id": "openai/gpt-5.6",
@@ -486,6 +488,7 @@ def test_fetch_openrouter_models_parses_catalog(monkeypatch):
             "vendor": "OpenAI",
             "context_length": 400000,
             "free": True,
+            "max_output_tokens": None,
         },
         {
             "id": "no-context-model",
@@ -493,6 +496,7 @@ def test_fetch_openrouter_models_parses_catalog(monkeypatch):
             "vendor": "",
             "context_length": 0,
             "free": False,
+            "max_output_tokens": None,
         },
     ]
 
@@ -514,6 +518,9 @@ def test_agent_routes_openrouter_with_native_tools(monkeypatch):
     import remie.agent as agent
 
     previous = agent.get_config()
+    monkeypatch.setattr(agent, "_openrouter_model_output", {
+        "anthropic/claude-sonnet-4.6": 128000,
+    })
     calls = {}
 
     async def fake_stream(api_key, conversation, model, reasoning_effort="off", **kw):
@@ -554,7 +561,7 @@ def test_agent_routes_openrouter_with_native_tools(monkeypatch):
         assert calls["api_key"] == "sk-or-key"
         assert calls["model"] == "anthropic/claude-sonnet-4.6"
         assert calls["effort"] == "medium"
-        assert calls["max_tokens"] == 32_768
+        assert calls["max_tokens"] == 128000
         names = [tool["name"] for tool in calls["tools"]]
         assert "read_file" in names and "memory" in names
         assert box == [{"id": "c1", "name": "read_file", "arguments": "{}"}]
@@ -610,3 +617,50 @@ def get_config_safe():
     from remie.agent import get_config
 
     return get_config()
+
+
+@pytest.mark.parametrize("value", [None, 0, -1, True, "128000", 1.5])
+def test_output_limit_rejects_invalid_metadata(monkeypatch, value):
+    def handler(request):
+        return httpx.Response(200, json={"data": [{
+            "id": "test/model",
+            "top_provider": {"max_completion_tokens": value},
+        }]})
+
+    install_transport(monkeypatch, handler)
+    rows = asyncio.run(openrouter_client.fetch_openrouter_models())
+    assert rows[0]["max_output_tokens"] is None
+
+
+def test_agent_discovers_and_refreshes_output_limits(monkeypatch):
+    import remie.agent as agent
+
+    monkeypatch.setattr(agent, "_openrouter_model_output", {})
+    monkeypatch.setattr(agent, "_openrouter_model_context", {})
+    monkeypatch.setattr(agent, "_model_info_cache", {})
+    rows = [
+        {"id": "test/a", "max_output_tokens": 128000},
+        {"id": "test/b", "max_output_tokens": 4096},
+    ]
+
+    async def fetch():
+        return rows
+
+    monkeypatch.setattr(openrouter_client, "fetch_openrouter_models", fetch)
+    asyncio.run(agent.fetch_openrouter_models())
+    assert agent.get_max_output_tokens("openrouter", "test/a") == 128000
+    assert agent.get_max_output_tokens("openrouter", "test/b") == 4096
+    assert agent.get_max_output_tokens("openrouter", "unknown") == 32768
+    assert agent.get_max_output_tokens("local", "test/a") == 8192
+    assert agent.get_max_output_tokens("opencode-go", "test/a") == 32768
+
+    # A failed discovery keeps last-successful metadata for this session.
+    rows = []
+    asyncio.run(agent.fetch_openrouter_models())
+    assert agent.get_max_output_tokens("openrouter", "test/a") == 128000
+
+    # A successful refresh drops removed or now-unknown ceilings.
+    rows = [{"id": "test/a", "max_output_tokens": None}]
+    asyncio.run(agent.fetch_openrouter_models())
+    assert agent.get_max_output_tokens("openrouter", "test/a") == 32768
+    assert agent.get_max_output_tokens("openrouter", "test/b") == 32768

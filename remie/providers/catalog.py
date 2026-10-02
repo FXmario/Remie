@@ -1,7 +1,5 @@
 """Provider model discovery, display metadata, and context limits."""
 
-import os
-
 import httpx
 
 from remie.config import (
@@ -33,13 +31,16 @@ def supports_reasoning_effort(model: str, provider: str = "local") -> bool:
     return model not in NON_REASONING_EFFORT_MODELS
 
 
-def get_max_output_tokens(provider: str = "local") -> int:
-    env_value = os.environ.get("REMIE_MAX_OUTPUT_TOKENS")
-    if env_value:
-        try:
-            return int(env_value)
-        except ValueError:
-            pass
+def get_max_output_tokens(
+    provider: str = "local",
+    model: str = "",
+    openrouter_output: dict[str, int] | None = None,
+) -> int:
+    """Use discovered OpenRouter output limits, otherwise provider defaults."""
+    if provider == "openrouter" and openrouter_output is not None:
+        limit = openrouter_output.get(model)
+        if type(limit) is int and limit > 0:
+            return limit
     return 32_768 if provider in ("opencode-go", "openrouter") else 8_192
 
 
@@ -121,6 +122,7 @@ async def fetch_codex_models(
 async def fetch_openrouter_models(
     context_cache: dict[str, int],
     info_cache: dict[str, ModelInfo],
+    output_cache: dict[str, int],
 ) -> list[ModelInfo]:
     from remie.openrouter_client import fetch_openrouter_models as fetch_live
 
@@ -130,8 +132,13 @@ async def fetch_openrouter_models(
         rows = []
     if not rows:
         return [_cache(prettify_model_id(m), info_cache) for m in OPENROUTER_MODELS]
+    # Replace only after successful discovery; failed refreshes retain known limits.
+    output_cache.clear()
     infos: list[ModelInfo] = []
     for row in rows:
+        output = row.get("max_output_tokens")
+        if type(output) is int and output > 0:
+            output_cache[row["id"]] = output
         context = row.get("context_length") or 0
         if isinstance(context, int) and context > 0:
             context_cache[row["id"]] = context

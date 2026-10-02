@@ -381,7 +381,7 @@ async def stream_openrouter_call(
 async def fetch_openrouter_models() -> list[dict[str, Any]]:
     """Fetch live catalog entries as metadata rows; [] on failure.
 
-    Rows carry ``{"id", "display", "vendor", "context_length", "free"}``.
+    Rows carry display metadata, context length, and optional max output tokens.
     OpenRouter's ``name`` field is formatted like ``"Meta: Muse Spark 1.2"``,
     so vendor is split out when present; ids fall back to heuristics.
     """
@@ -412,6 +412,13 @@ async def fetch_openrouter_models() -> list[dict[str, Any]]:
         display = display or info.display or model_id
         vendor = vendor or info.vendor
         context_length = row.get("context_length")
+        top_provider = row.get("top_provider")
+        max_output_tokens = (
+            top_provider.get("max_completion_tokens")
+            if isinstance(top_provider, dict) else None
+        )
+        if type(max_output_tokens) is not int or max_output_tokens <= 0:
+            max_output_tokens = None
         pricing = row.get("pricing")
         free = False
         if isinstance(pricing, dict):
@@ -431,6 +438,7 @@ async def fetch_openrouter_models() -> list[dict[str, Any]]:
                     context_length if isinstance(context_length, int) else 0
                 ),
                 "free": free,
+                "max_output_tokens": max_output_tokens,
             }
         )
     return results

@@ -88,24 +88,17 @@ def provider_defaults(provider: str) -> ConnectionConfig:
             True,
         )
     return ConnectionConfig(
-        os.environ.get("LLAMA_BASE_URL", LOCAL_BASE_URL),
-        os.environ.get("LLAMA_API_KEY", "llama-cpp"),
-        os.environ.get("LLAMA_MODEL", "local-model"),
+        LOCAL_BASE_URL,
+        "llama-cpp",
+        "local-model",
         "local",
-        os.environ.get("REMIE_REASONING_EFFORT", "medium"),
+        "medium",
         False,
     )
 
 
 def default_config() -> ConnectionConfig:
-    return ConnectionConfig(
-        base_url=os.environ.get("LLAMA_BASE_URL", LOCAL_BASE_URL),
-        api_key=os.environ.get("LLAMA_API_KEY", "llama-cpp"),
-        model=os.environ.get("LLAMA_MODEL", "local-model"),
-        provider="local",
-        reasoning_effort=os.environ.get("REMIE_REASONING_EFFORT", "medium"),
-        verify_ssl=False,
-    )
+    return provider_defaults("local")
 
 
 class ConfigStore:

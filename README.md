@@ -71,16 +71,19 @@ If the current project has an `AGENTS.md` at its root, its contents are added to
 agent's system prompt so it follows the project's conventions automatically. No
 `AGENTS.md` is required — the agent otherwise explores the project with its tools.
 
-Configure the LLM connection via environment variables (a `.env` file is loaded automatically):
+Configure the LLM connection in the **Providers** tab of the connection picker
+(`/connect` or the model badge). Provider profiles store the base URL, API key,
+model, and reasoning effort. OpenRouter output-token limits use the selected
+model’s live catalog metadata, falling back to 32,768 when unavailable. OpenCode
+Go and local servers retain their built-in limits; Codex leaves the limit to its
+backend.
+
+The following environment variables control runtime behavior and storage
+(a `.env` file is loaded automatically):
 
 | Variable          | Description                        | Default       |
 | ----------------- | ---------------------------------- | ------------- |
-| `LLAMA_BASE_URL`  | Base URL of the local LLM server   | `http://localhost:7070/v1` |
-| `LLAMA_API_KEY`   | API key for the server             | `llama-cpp`   |
-| `LLAMA_MODEL`     | Model name                         | `local-model` |
 | `REMIE_DEBUG`            | Show raw tool calls (name + params) | (unset)       |
-| `REMIE_REASONING_EFFORT` | Reasoning mode: off/low/medium/high/max | `medium`   |
-| `REMIE_MAX_OUTPUT_TOKENS` | Max output tokens per response | OpenCode Go `32768`, local `8192` |
 | `REMIE_MAX_AUTO_CONTINUATIONS` | Max silent auto-continuations per response | `10` |
 | `REMIE_MAX_EMPTY_RESPONSE_RETRIES` | Retries when a provider returns no usable output | `2` |
 | `REMIE_COMMAND_TIMEOUT` | Default timeout in seconds for `run_command` | `180` |
