@@ -1,9 +1,11 @@
 """Chat persistence and UI session lifecycle behavior."""
 
+import asyncio
 from pathlib import Path
 from typing import Any
 
-from remie.tui.workspaces import WorkspaceError
+from remie.tui.workspaces import (WorkspaceError, linked_worktree, list_worktrees,
+                                  remove_worktree, name_worktree)
 
 from remie.prompts import build_system_prompt
 from remie.protocol import strip_protocol_lines
@@ -133,13 +135,15 @@ class ChatSessionMixin:
         self._history_index = None
         self._history_draft = ""
 
-    def action_new_chat(self, replacing_tab_id: str | None = None) -> None:
+    def action_new_chat(self, replacing_tab_id: str | None = None, *, directory: Path | None = None) -> None:
         """Create and activate a tab without stopping background agents."""
         source = self._tab_prompt_context()["working_directory"]
         tab = new_tab("")
         try:
             # Replacing the sole closing tab doesn't create a concurrent tab.
-            if replacing_tab_id == self._active_tab_id:
+            if directory is not None:
+                directory = directory.resolve()
+            elif replacing_tab_id == self._active_tab_id:
                 directory = Path(source)
             else:
                 directory = self._allocate_tab_directory(Path(source), tab["id"])
@@ -220,7 +224,12 @@ class ChatSessionMixin:
                 runtime.stop_requested = True
                 if runtime.agent_task:
                     runtime.agent_task.cancel()
-            self._close_tab_now(tab_id)
+                if runtime.agent_task:
+                    try:
+                        await runtime.agent_task
+                    except asyncio.CancelledError:
+                        pass
+            await self._close_worktree_tab(tab_id)
 
     def close_tab(self, tab_id: str | None) -> bool:
         """Close an idle tab; ask before cancelling a running one."""
@@ -228,7 +237,11 @@ class ChatSessionMixin:
             return False
         runtime = self._runtimes.get(tab_id)
         if runtime and runtime.agent_running:
-            self.call_later(self._confirm_close_tab, tab_id)
+            self.run_worker(self._confirm_close_tab(tab_id), exclusive=False)
+            return False
+        tab = next((item for item in self._tab_layout["tabs"] if item["id"] == tab_id), None)
+        if tab and linked_worktree(self._tab_directory(tab)):
+            self.run_worker(self._close_worktree_tab(tab_id), exclusive=False)
             return False
         return self._close_tab_now(tab_id)
 
@@ -276,3 +289,106 @@ class ChatSessionMixin:
         self.call_later(self._show_runtime, tab_id)
         self._refresh_tabs()
         return True
+
+
+    def _worktree_users(self, root: Path) -> list[dict]:
+        return [tab for tab in self._tab_layout["tabs"]
+                if self._tab_directory(tab).is_relative_to(root)]
+
+    async def _close_worktree_tab(self, tab_id: str) -> None:
+        tab = next((item for item in self._tab_layout["tabs"] if item["id"] == tab_id), None)
+        if tab is None:
+            return
+        item = linked_worktree(self._tab_directory(tab))
+        if item is None:
+            self._close_tab_now(tab_id)
+            return
+        answer = await self.push_screen_wait(self._make_ask_screen(
+            f'Close this tab in {item["path"]}? Committed work stays on its Git branch. '
+            'Use /list worktree to reopen or delete kept worktrees later.',
+            ["Keep worktree and close tab", "Delete worktree and close tab", "Cancel"]))
+        if answer == "Keep worktree and close tab":
+            self._close_tab_now(tab_id)
+        elif answer == "Delete worktree and close tab":
+            try:
+                users = self._worktree_users(item["path"])
+                if any(user["id"] != tab_id for user in users):
+                    raise WorkspaceError("Another tab uses this worktree. Close it first.")
+                runtime = self._runtimes.get(tab_id)
+                if runtime and runtime.agent_running:
+                    raise WorkspaceError("Stop this tab's agent before deleting its worktree.")
+                main = list_worktrees(item["path"])[0]["path"]
+                self._save_runtime(tab_id)
+                remove_worktree(item["path"])
+            except WorkspaceError as error:
+                self.notify(str(error), severity="error")
+                return
+            if len(self._tab_layout["tabs"]) == 1:
+                self.action_new_chat(directory=main)
+            self._close_tab_now(tab_id)
+
+    async def _pick_worktree(self) -> None:
+        from remie.tui.screens.worktrees import WorktreeScreen
+
+        try:
+            items = list_worktrees(Path(self._tab_prompt_context()["working_directory"]))
+        except WorkspaceError as error:
+            self.notify(str(error), title="Worktrees", severity="error")
+            return
+        occupied = {item["path"] for item in items if self._worktree_users(item["path"])}
+        result = await self.push_screen_wait(WorktreeScreen(items, occupied))
+        if not result:
+            return
+        action, path = result
+        users = self._worktree_users(path)
+        if action == "open":
+            if users:
+                self.switch_tab(users[0]["id"])
+            elif path.is_dir():
+                self.action_new_chat(directory=path)
+            else:
+                self.notify("Worktree no longer exists", severity="error")
+        else:
+            if users:
+                self.notify("Close tabs using this worktree before deleting it.", severity="warning")
+                return
+            answer = await self.push_screen_wait(self._make_ask_screen(
+                f"Delete {path}? The Git branch will be kept.", ["Delete worktree", "Cancel"]))
+            if answer == "Delete worktree":
+                try:
+                    remove_worktree(path)
+                except WorkspaceError as error:
+                    self.notify(str(error), severity="error")
+
+    def _name_tab_worktree(self, tab_id: str) -> None:
+        from remie.storage.chats import DEFAULT_CHAT_NAME
+
+        tab = next((item for item in self._tab_layout["tabs"] if item["id"] == tab_id), None)
+        runtime = self._runtimes.get(tab_id)
+        if not tab or not runtime or runtime.agent_running or tab.get("workspace_named"):
+            return
+        title = self._tab_title(tab_id)
+        if title.startswith(DEFAULT_CHAT_NAME):
+            return
+        old = self._tab_directory(tab)
+        item = linked_worktree(old)
+        if item and any(user["id"] != tab_id for user in self._worktree_users(item["path"])):
+            return
+        try:
+            directory = name_worktree(old, title)
+        except WorkspaceError as error:
+            self.notify(str(error), title="Worktree naming", severity="warning")
+            return
+        if directory == old:
+            return
+        tab["workspace_named"] = True
+        if directory != old:
+            tab["working_directory"] = str(directory)
+            runtime.working_directory = str(directory)
+            token = self._task_tab.set(tab_id)
+            try:
+                self._refresh_system_prompt()
+                self._save_current_chat()
+            finally:
+                self._task_tab.reset(token)
+        self._persist_tab_layout()

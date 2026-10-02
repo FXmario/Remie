@@ -373,6 +373,7 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
 
     async def _show_runtime(self, tab_id: str) -> None:
         runtime = self._runtimes[tab_id]
+        self._name_tab_worktree(tab_id)
         first_mount = runtime.pane is None
         if first_mount:
             pane = ChatTabPane(classes="chat-tab-pane")
@@ -864,6 +865,9 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
                 severity="warning",
             )
             return
+        if name in {"change worktree", "list worktree"}:
+            self.run_worker(self._pick_worktree(), exclusive=False)
+            return
         if name == "change dir":
             if not argument:
                 self.notify("Usage: /change dir <path>", title="Change directory", severity="warning")
@@ -883,6 +887,8 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
             self._runtime().working_directory = str(directory)
             for tab in self._tab_layout["tabs"]:
                 if tab["id"] == self._runtime().tab_id:
+                    if tab.get("working_directory") != str(directory):
+                        tab.pop("workspace_named", None)
                     tab["working_directory"] = str(directory)
                     if directory != path:
                         tab["workspace_source"] = str(path)
@@ -1404,6 +1410,9 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
             self._widget(ModelBadge).set_speed(None)
             self._runtime().current_activity = ""
             self._agent_running = False
+            self._name_tab_worktree(self._runtime().tab_id)
+            if self._runtime().tab_id == self._active_tab_id:
+                self.sub_title = self._tab_header_title(self._active_tab_id)
             if self._agent_task is current_task:
                 self._agent_task = None
             if completed:

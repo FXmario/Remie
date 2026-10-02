@@ -46,6 +46,8 @@ def test_slash_command_registry_filters_and_resolves_trailing_slash():
         "chats",
         "connect",
         "models",
+        "change worktree",
+        "list worktree",
         "change dir",
     ]
     assert [command.name for command in slash_command_matches("/change d")] == ["change dir"]

@@ -204,3 +204,177 @@ def test_workspace_failure_preserves_existing_directory(tmp_path, monkeypatch):
     (tmp_path / "remie-tab-duplicate-12345678").mkdir()
     with pytest.raises(WorkspaceError):
         separate_workspace(tmp_path, "duplicate")
+
+
+def make_repository(tmp_path):
+    root = tmp_path / "project with spaces"
+    root.mkdir()
+    git("init", "-q", cwd=root)
+    (root / "file.txt").write_text("initial")
+    git("add", ".", cwd=root)
+    git("-c", "user.name=Test", "-c", "user.email=test@example.com",
+        "commit", "-qm", "initial", cwd=root)
+    return root
+
+
+def test_worktree_listing_naming_and_safe_removal(tmp_path):
+    from remie.tui.workspaces import list_worktrees, name_worktree, remove_worktree
+
+    root = make_repository(tmp_path)
+    first = separate_workspace(root, "first")
+    branch = git("branch", "--show-current", cwd=first)
+    items = list_worktrees(first)
+    assert items[0]["main"] and items[0]["path"] == root
+    assert items[1]["path"] == first
+    renamed = name_worktree(first, "Fix / MODEL picker!")
+    assert renamed.name == "project with spaces-fix-model-picker"
+    assert not first.exists()
+    assert git("branch", "--show-current", cwd=renamed) == branch
+    second = name_worktree(separate_workspace(root, "second"), "Fix / MODEL picker!")
+    assert second.name.endswith("-2")
+    (renamed / "untracked").write_text("save me")
+    with pytest.raises(WorkspaceError):
+        remove_worktree(renamed)
+    with pytest.raises(WorkspaceError):
+        remove_worktree(root)
+    (renamed / "untracked").unlink()
+    remove_worktree(renamed)
+    assert not renamed.exists()
+    assert branch in git("branch", "--list", cwd=root)
+
+
+def test_worktree_commands_resolve_and_complete():
+    from remie.tui.slash_commands import resolve_slash_command, slash_command_matches
+
+    for name in ("change worktree", "list worktree"):
+        assert resolve_slash_command("/" + name).name == name
+        assert resolve_slash_command("/" + name + "/").name == name
+        assert name in {item.name for item in slash_command_matches("/" + name[:5])}
+
+
+def test_picker_opens_new_tab_and_names_once(tmp_path, monkeypatch):
+    from remie.storage.chats import rename_chat
+    from remie.tui.workspaces import list_worktrees
+
+    root = make_repository(tmp_path)
+    target = separate_workspace(root, "existing")
+    monkeypatch.chdir(root)
+
+    async def exercise():
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            original = app._active_tab_id
+            async def choose(screen):
+                return ("open", target)
+            monkeypatch.setattr(app, "push_screen_wait", choose)
+            await app._pick_worktree()
+            await pilot.pause()
+            second = app._active_tab_id
+            assert second != original
+            assert len(app._tab_layout["tabs"]) == 2
+            assert Path(app._runtime().working_directory) == target
+            rename_chat(app._runtime().chat_id, "Readable title", title_source="manual")
+            app._name_tab_worktree(second)
+            renamed = Path(app._runtime().working_directory)
+            assert renamed.name.endswith("readable-title")
+            rename_chat(app._runtime().chat_id, "Different title", title_source="manual")
+            app._name_tab_worktree(second)
+            assert Path(app._runtime().working_directory) == renamed
+            assert len(list_worktrees(root)) == 2
+            async def keep(screen):
+                return "Keep worktree and close tab"
+            monkeypatch.setattr(app, "push_screen_wait", keep)
+            await app._close_worktree_tab(second)
+            await pilot.pause()
+            assert renamed.exists()
+            assert second not in app._runtimes
+    asyncio.run(exercise())
+
+
+def test_close_worktree_cancel_dirty_and_delete(tmp_path, monkeypatch):
+    root = make_repository(tmp_path)
+    monkeypatch.chdir(root)
+
+    async def exercise():
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            app.action_new_chat()
+            await pilot.pause()
+            tab_id = app._active_tab_id
+            path = Path(app._runtime().working_directory)
+            async def cancel(screen):
+                return "Cancel"
+            monkeypatch.setattr(app, "push_screen_wait", cancel)
+            await app._close_worktree_tab(tab_id)
+            assert tab_id in app._runtimes
+            async def delete(screen):
+                return "Delete worktree and close tab"
+            monkeypatch.setattr(app, "push_screen_wait", delete)
+            (path / "untracked").write_text("keep")
+            await app._close_worktree_tab(tab_id)
+            assert tab_id in app._runtimes and path.exists()
+            (path / "untracked").unlink()
+            await app._close_worktree_tab(tab_id)
+            await pilot.pause()
+            assert tab_id not in app._runtimes and not path.exists()
+    asyncio.run(exercise())
+
+
+def test_worktree_picker_and_close_prompt_ui(tmp_path, monkeypatch):
+    from remie.tui.screens.worktrees import WorktreeScreen
+    from remie.tui.screens.ask_user import AskUserScreen
+    from textual.widgets import OptionList
+
+    root = make_repository(tmp_path)
+    separate_workspace(root, "existing")
+    monkeypatch.chdir(root)
+
+    async def exercise():
+        app = AgentApp()
+        async with app.run_test(size=(110, 40)) as pilot:
+            original = app._active_tab_id
+            app._dispatch_slash_command("list worktree")
+            await pilot.pause()
+            assert isinstance(app.screen, WorktreeScreen)
+            app.screen.query_one(OptionList).highlighted = 1
+            await pilot.press("enter")
+            await pilot.pause()
+            second = app._active_tab_id
+            assert second != original
+            assert len(app._tab_layout["tabs"]) == 2
+            assert not app.close_tab(second)
+            await pilot.pause()
+            assert isinstance(app.screen, AskUserScreen)
+            await pilot.press("escape")
+            await pilot.pause()
+            assert second in app._runtimes
+            app._dispatch_slash_command("change worktree")
+            await pilot.pause()
+            assert isinstance(app.screen, WorktreeScreen)
+            app.screen.query_one(OptionList).highlighted = 0
+            await pilot.press("enter")
+            await pilot.pause()
+            assert app._active_tab_id == original
+            assert len(app._tab_layout["tabs"]) == 2
+    asyncio.run(exercise())
+
+
+def test_delete_final_linked_tab_reopens_main(tmp_path, monkeypatch):
+    root = make_repository(tmp_path)
+    target = separate_workspace(root, "sole")
+    monkeypatch.chdir(root)
+
+    async def exercise():
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            app.on_prompt_submitted(PromptSubmitted(f"/change dir {target}"))
+            tab_id = app._active_tab_id
+            async def delete(screen):
+                return "Delete worktree and close tab"
+            monkeypatch.setattr(app, "push_screen_wait", delete)
+            await app._close_worktree_tab(tab_id)
+            await pilot.pause()
+            assert not target.exists()
+            assert len(app._tab_layout["tabs"]) == 1
+            assert Path(app._runtime().working_directory) == root
+    asyncio.run(exercise())

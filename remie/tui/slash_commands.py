@@ -20,6 +20,8 @@ SLASH_COMMANDS = (
     SlashCommand("chats", "Open saved chats"),
     SlashCommand("connect", "Configure a provider connection"),
     SlashCommand("models", "Switch the active model"),
+    SlashCommand("change worktree", "Open a worktree in a new tab"),
+    SlashCommand("list worktree", "List and manage Git worktrees"),
     SlashCommand("change dir", "Change this tab's working directory"),
 )
 
@@ -34,7 +36,7 @@ def slash_command_matches(text: str) -> tuple[SlashCommand, ...]:
     """
     if not text.startswith("/") or "\n" in text or "\r" in text:
         return ()
-    if any(character.isspace() for character in text) and not "/change dir".startswith(text.casefold()):
+    if any(character.isspace() for character in text) and not any(command.trigger.startswith(text.casefold()) for command in SLASH_COMMANDS):
         return ()
     query = text[1:].casefold()
     if query.endswith("/"):
@@ -49,7 +51,7 @@ def resolve_slash_command(text: str) -> SlashCommand | None:
     value = text.strip().casefold()
     if not value.startswith("/") or "\n" in value or "\r" in value:
         return None
-    if any(character.isspace() for character in value) and value != "/change dir":
+    if any(character.isspace() for character in value) and value.rstrip("/") not in {command.trigger for command in SLASH_COMMANDS}:
         return None
     name = value[1:]
     if name.endswith("/"):
