@@ -84,7 +84,7 @@ from remie.tui.helpers import (
     _should_update_stream,
     _supports_terminal_graphics,
 )
-from remie.tui.render import _render_diff, _render_tool_result
+from remie.tui.render import _render_diff, _render_tool_call, _render_tool_result
 from remie.tui.screens.ask_user import AskUserScreen
 from remie.tui.screens.chats import ChatScreen
 from remie.tui.screens.connection import ConnectionScreen
@@ -1298,16 +1298,7 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
                         )
                     )
                 for name, args in tool_invocations:
-                    if self.debug_mode:
-                        tool_line = (
-                            f"[bold cyan]Agent {escape(name)}"
-                            f"({escape(json.dumps(args))})[/]"
-                        )
-                    else:
-                        tool_line = (
-                            f"[bold cyan]Agent {escape(get_tool_summary(name))}[/]"
-                        )
-                    replacements.append(tool_line)
+                    replacements.append(_render_tool_call(name, args))
                 log.replace_stream(*replacements)
                 if native_tool_calling:
                     extra = self._agent_runner.assistant_metadata(

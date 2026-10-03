@@ -10,6 +10,27 @@ from rich.syntax import Syntax
 from rich.text import Text
 
 
+def _format_tool_call(name: str, args: dict[str, Any]) -> str:
+    """Show shell commands verbatim and other calls with named arguments."""
+    if name == "run_command" and isinstance(args.get("command"), str):
+        return args["command"]
+    parameters = [f"{key}: {value!r}" for key, value in args.items()]
+    inline = f"{name}({', '.join(parameters)})"
+    if len(inline) <= 88:
+        return inline
+    return f"{name}(\n" + ",\n".join(f"  {parameter}" for parameter in parameters) + "\n)"
+
+
+def _render_tool_call(name: str, args: dict[str, Any]) -> Panel:
+    """Use literal Text so argument contents cannot be interpreted as markup."""
+    return Panel(
+        Text(_format_tool_call(name, args), overflow="fold"),
+        title=Text(f"Tool call · {name}"),
+        border_style="cyan",
+        padding=(0, 1),
+    )
+
+
 class _PlainWrite:
     """Wrap a rich renderable so RichLog can still extract plain text for
     selection and tests, while the actual rendering stays highlighted."""
