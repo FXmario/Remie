@@ -28,7 +28,6 @@ from remie.agent import (
     get_full_system_prompt,
     get_max_output_tokens,
     get_model_context_limit,
-    load_agent_memory,
     load_config,
     load_provider_configs,
     render_assistant_message,
@@ -51,27 +50,18 @@ from remie.tools import (
     chat_file_path,
     chat_index_path,
     create_chat,
-    create_launch_memory,
-    create_memory,
     delete_chat,
-    delete_memory,
     edit_file_tool,
     find_chat_by_id,
-    find_memory_by_id,
-    find_memory_by_name,
-    get_active_memory_id,
     get_blocked_command_reason,
     get_custom_blocked_commands,
     get_tool_summary,
     glob_files_tool,
     list_chats,
     list_files_tool,
-    list_memories,
     load_chat,
     load_chat_index,
     load_latest_chat,
-    memory_file_path,
-    memory_tool,
     migrate_legacy_session,
     read_file_tool,
     rename_chat,
@@ -80,7 +70,6 @@ from remie.tools import (
     save_chat,
     save_chat_index,
     session_file_path,
-    set_active_memory_id,
     tree_files_tool,
 )
 
@@ -774,202 +763,6 @@ class TestSupportsReasoningEffort:
         assert supports_reasoning_effort("brand-new-model", "opencode-go") is True
 
 
-class TestMemoryTool:
-    def test_add_read_clear_roundtrip(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        assert memory_tool("read")["content"] == ""
-
-        result = memory_tool("add", "remember this fact")
-        assert result["action"] == "add"
-        assert result["name"] == "general"
-        assert "- [2" in result["content"] and "remember this fact" in result["content"]
-        assert memory_file_path(result["id"]).is_file()
-
-        content = memory_tool("read")["content"]
-        assert "remember this fact" in content
-        assert "[" in content and "]" in content
-
-        memory_tool("clear")
-        assert memory_tool("read")["content"] == ""
-
-    def test_add_appends_notes(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        memory_tool("add", "first")
-        memory_tool("add", "second")
-        content = memory_tool("read")["content"]
-        assert content.index("first") < content.index("second")
-
-    def test_unknown_action_reads(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        memory_tool("add", "note")
-        assert "note" in memory_tool("whatever")["content"]
-
-    def test_run_tool_dispatches_memory(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        result = run_tool("memory", {"action": "add", "text": "hi there"})
-        assert result["action"] == "add"
-        assert "hi there" in run_tool("memory", {"action": "read"})["content"]
-
-    def test_named_memory_is_isolated(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        result = memory_tool("add", "design note", name="design")
-        assert "design note" in memory_tool("read", name="design")["content"]
-        # A fresh named memory is distinct from the general memory.
-        assert memory_tool("read", name="general")["content"] == ""
-        memory = find_memory_by_name("design")
-        assert memory is not None
-        assert memory_file_path(memory["id"]).is_file()
-        assert result["id"] == memory["id"]
-
-    def test_named_memory_clear(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        memory_tool("add", "x", name="design")
-        memory_tool("clear", name="design")
-        assert memory_tool("read", name="design")["content"] == ""
-
-    def test_memory_tool_defaults_to_active(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        design = memory_tool("add", "active note", name="design")
-        set_active_memory_id(design["id"])
-        memory_tool("add", "more")
-        # Default id resolves to the active memory.
-        assert "more" in memory_tool("read")["content"]
-        assert "more" in memory_tool("read", name="design")["content"]
-        assert memory_tool("read", name="general")["content"] == ""
-
-    def test_list_action_returns_id_name(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        memory_tool("add", "a", name="design")
-        memory_tool("add", "b", name="papers")
-        memories = memory_tool("list")["memories"]
-        names = [memory["name"] for memory in memories]
-        assert "design" in names and "papers" in names
-        for memory in memories:
-            assert "id" in memory and "name" in memory and "chars" in memory
-
-    def test_create_memory_uses_uuid(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        memory = create_memory("Design Notes")
-        assert memory["name"] == "Design Notes"
-        assert find_memory_by_id(memory["id"])["name"] == "Design Notes"
-        import pytest
-
-        with pytest.raises(ValueError):
-            create_memory("design notes")  # case-insensitive duplicate
-
-    def test_create_launch_memory_is_blank_unique_and_active(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        existing = memory_tool("add", "keep this", name="design")
-
-        first = create_launch_memory()
-        assert first["name"] == "session 1"
-        assert get_active_memory_id() == first["id"]
-        assert not memory_file_path(first["id"]).exists()
-        assert find_memory_by_id(existing["id"]) is not None
-
-        second = create_launch_memory()
-        assert second["name"] == "session 2"
-        assert get_active_memory_id() == second["id"]
-        assert [memory["name"] for memory in list_memories()] == [
-            "design",
-            "session 1",
-            "session 2",
-        ]
-
-    def test_active_memory_get_set(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        assert get_active_memory_id() is None
-        memory = create_memory("design")
-        set_active_memory_id(memory["id"])
-        assert get_active_memory_id() == memory["id"]
-
-    def test_delete_removes_memory(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        design = memory_tool("add", "x", name="design")
-        result = memory_tool("delete", name="design")
-        assert result["action"] == "delete"
-        assert result["id"] == design["id"]
-        assert find_memory_by_name("design") is None
-        assert not memory_file_path(design["id"]).exists()
-
-    def test_delete_active_falls_back_to_general(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        design = memory_tool("add", "x", name="design")
-        set_active_memory_id(design["id"])
-        memory_tool("delete", name="design")
-        active = get_active_memory_id()
-        assert active is not None
-        assert find_memory_by_id(active)["name"] == "general"
-
-    def test_delete_missing_returns_error(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        result = memory_tool("delete", id="does-not-exist")
-        assert result["error"] == "memory not found"
-
-    def test_legacy_memory_migrates_on_first_use(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        legacy = tmp_path / ".remie" / "memory.md"
-        legacy.parent.mkdir(parents=True, exist_ok=True)
-        legacy.write_text("- [old] legacy note\n", encoding="utf-8")
-        content = memory_tool("read")["content"]
-        assert "legacy note" in content
-        assert not legacy.exists()
-        general = find_memory_by_name("general")
-        assert general is not None
-        assert memory_file_path(general["id"]).is_file()
-
-    def test_name_keyed_dir_migrates_to_uuid(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        memory_dir = tmp_path / ".remie" / "memory"
-        memory_dir.mkdir(parents=True, exist_ok=True)
-        (memory_dir / "design.md").write_text("- note\n", encoding="utf-8")
-        (tmp_path / ".remie" / "active_memory").write_text(
-            "design", encoding="utf-8"
-        )
-        memories = memory_tool("list")["memories"]
-        design = find_memory_by_name("design")
-        assert design is not None
-        assert memory_file_path(design["id"]).is_file()
-        assert any(m["name"] == "design" for m in memories)
-        assert get_active_memory_id() == design["id"]
-
-    def test_list_memories_helper(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        memory_tool("add", "a", name="design")
-        names = [memory["name"] for memory in list_memories()]
-        assert names == ["design"]
-
-
-class TestLoadAgentMemory:
-    def test_absent_returns_empty(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        assert load_agent_memory() == ""
-
-    def test_present_returns_section_with_name(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        memory_tool("add", "the project uses ruff")
-        section = load_agent_memory()
-        assert "## Agent memory" in section
-        assert "general" in section  # header shows the memory name label
-        assert "the project uses ruff" in section
-
-    def test_reads_active_memory_only(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        design = memory_tool("add", "active-memory fact", name="design")
-        set_active_memory_id(design["id"])
-        memory_tool("add", "general fact", name="general")
-        section = load_agent_memory()
-        assert "active-memory fact" in section
-        assert "general fact" not in section
-
-    def test_truncates_at_limit(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        memory_tool("add", "x" * 9000)
-        section = load_agent_memory()
-        assert "Memory truncated" in section
-        assert len(section) < 9000
-
-
 class TestChatStorage:
     def _context(self):
         return [
@@ -1102,15 +895,6 @@ class TestChatStorage:
         session_file_path().write_text("{not json", encoding="utf-8")
         assert migrate_legacy_session() is None
         assert session_file_path().exists()  # left alone, retried later
-
-    def test_memory_index_untouched_by_chats(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        memory_tool("add", "note", name="design")
-        before = Path(".remie/memory/index.json").read_text(encoding="utf-8")
-        chat = create_chat("chat")
-        save_chat(chat["id"], self._context(), [])
-        after = Path(".remie/memory/index.json").read_text(encoding="utf-8")
-        assert before == after
 
 
 class TestSummarizeMessages:

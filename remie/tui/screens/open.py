@@ -8,7 +8,6 @@ from textual.widgets import Input, TabbedContent, TabPane
 
 from remie.tui.screens.chats import ChatScreen
 from remie.tui.screens.connection import ConnectionScreen
-from remie.tui.screens.memory import MemoryScreen
 from remie.tui.screens.models import ModelScreen
 
 
@@ -23,12 +22,6 @@ class _ChatTab(_TabContent):
     def __init__(self) -> None:
         super().__init__(id="open-chat-content")
         ChatScreen._init_state(self)
-
-
-class _MemoryTab(_TabContent):
-    def __init__(self) -> None:
-        super().__init__(id="open-memory-content")
-        MemoryScreen._init_state(self)
 
 
 class _ProviderTab(_TabContent):
@@ -58,14 +51,12 @@ def _copy_screen_behavior(target: type[Widget], source: type[ModalScreen]) -> No
 
 
 _copy_screen_behavior(_ChatTab, ChatScreen)
-_copy_screen_behavior(_MemoryTab, MemoryScreen)
 _copy_screen_behavior(_ProviderTab, ConnectionScreen)
 _copy_screen_behavior(_ModelTab, ModelScreen)
 
 
 _TAB_CSS = (
     ChatScreen.CSS.replace("ChatScreen", "#open-chat-content")
-    + MemoryScreen.CSS.replace("MemoryScreen", "#open-memory-content")
     + ConnectionScreen.CSS.replace("ConnectionScreen", "#open-provider-content")
     + ModelScreen.CSS.replace("ModelScreen", "#open-model-content")
 )
@@ -75,7 +66,6 @@ _TAB_CSS = (
 # fill the pane without drawing a second modal shell.
 _FLAT_TAB_CSS = """
 #open-chat-content #chat-dialog,
-#open-memory-content #memory-dialog,
 #open-provider-content #connection-dialog,
 #open-model-content #model-dialog {
     width: 100%;
@@ -87,7 +77,6 @@ _FLAT_TAB_CSS = """
 }
 
 #open-chat-content #chat-dialog,
-#open-memory-content #memory-dialog,
 #open-model-content #model-dialog {
     padding: 1 2;
 }
@@ -117,7 +106,6 @@ class OpenScreen(ModalScreen):
         #open-tabs { width: 100%; height: 100%; }
         #open-tabs ContentSwitcher { height: 1fr; }
         #open-chats,
-        #open-memories,
         #open-providers,
         #open-models {
             width: 100%;
@@ -126,7 +114,6 @@ class OpenScreen(ModalScreen):
             align: center middle;
         }
         #open-chat-content,
-        #open-memory-content,
         #open-provider-content,
         #open-model-content { width: 100%; height: 100%; }
         """
@@ -136,7 +123,6 @@ class OpenScreen(ModalScreen):
 
     _TAB_CONTENT = {
         "open-chats": _ChatTab,
-        "open-memories": _MemoryTab,
         "open-providers": _ProviderTab,
         "open-models": _ModelTab,
     }
@@ -154,7 +140,6 @@ class OpenScreen(ModalScreen):
                     # layouts are relatively expensive and are mounted on
                     # first use by the activation handler below.
                     yield _ChatTab()
-                yield TabPane("Memories", id="open-memories")
                 yield TabPane("Providers", id="open-providers")
                 yield TabPane("Models", id="open-models")
 

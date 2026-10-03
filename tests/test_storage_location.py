@@ -32,12 +32,12 @@ def test_migrates_and_removes_legacy_project_state(tmp_path):
     destination = tmp_path / "home" / ".remie" / "projects" / "project-id"
     (legacy / "chats").mkdir(parents=True)
     (legacy / "chats" / "chat.json").write_text('{"messages": []}', encoding="utf-8")
-    (legacy / "active_memory").write_text("memory-id", encoding="utf-8")
+    (legacy / "state_marker").write_text("marker-id", encoding="utf-8")
 
     assert _migrate_project_state(legacy, destination) is True
     assert not legacy.exists()
     assert (destination / "chats" / "chat.json").read_text(encoding="utf-8") == '{"messages": []}'
-    assert (destination / "active_memory").read_text(encoding="utf-8") == "memory-id"
+    assert (destination / "state_marker").read_text(encoding="utf-8") == "marker-id"
     assert (destination / ".migrated-from-project-dir").is_file()
 
 
@@ -46,13 +46,13 @@ def test_migration_conflict_keeps_legacy_state(tmp_path):
     destination = tmp_path / "state" / "project-id"
     legacy.mkdir(parents=True)
     destination.mkdir(parents=True)
-    (legacy / "active_memory").write_text("old", encoding="utf-8")
-    (destination / "active_memory").write_text("new", encoding="utf-8")
+    (legacy / "state_marker").write_text("old", encoding="utf-8")
+    (destination / "state_marker").write_text("new", encoding="utf-8")
 
     assert _migrate_project_state(legacy, destination) is False
     assert legacy.is_dir()
-    assert (legacy / "active_memory").read_text(encoding="utf-8") == "old"
-    assert (destination / "active_memory").read_text(encoding="utf-8") == "new"
+    assert (legacy / "state_marker").read_text(encoding="utf-8") == "old"
+    assert (destination / "state_marker").read_text(encoding="utf-8") == "new"
 
 
 def test_remie_dir_uses_configured_home_and_migrates(tmp_path, monkeypatch):
@@ -64,7 +64,7 @@ def test_remie_dir_uses_configured_home_and_migrates(tmp_path, monkeypatch):
     (project / ".git").mkdir()
     legacy = project / ".remie"
     legacy.mkdir()
-    (legacy / "active_memory").write_text("abc", encoding="utf-8")
+    (legacy / "state_marker").write_text("abc", encoding="utf-8")
     state_home = tmp_path / "central-state"
     monkeypatch.chdir(project)
     monkeypatch.setenv("REMIE_HOME", str(state_home))
@@ -73,5 +73,5 @@ def test_remie_dir_uses_configured_home_and_migrates(tmp_path, monkeypatch):
     result = _remie_dir()
 
     assert result == state_home / "projects" / _project_id(project)
-    assert (result / "active_memory").read_text(encoding="utf-8") == "abc"
+    assert (result / "state_marker").read_text(encoding="utf-8") == "abc"
     assert not legacy.exists()

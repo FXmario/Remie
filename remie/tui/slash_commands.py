@@ -16,7 +16,6 @@ class SlashCommand:
 
 
 SLASH_COMMANDS = (
-    SlashCommand("memories", "Open the memory picker"),
     SlashCommand("chats", "Open saved chats"),
     SlashCommand("connect", "Configure a provider connection"),
     SlashCommand("models", "Switch the active model"),

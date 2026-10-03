@@ -65,7 +65,7 @@ _EXPORTS: dict[str, tuple[str, str]] = {
         for name in (
             "_coerce_model_info",
             "_detect_terminal_background",
-            "_fallback_memory_name",
+            "_fallback_chat_name",
             "_format_tokens",
             "_has_tool_call",
             "_is_tmux",
@@ -114,7 +114,6 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "AskUserScreen": ("remie.tui.screens", "AskUserScreen"),
     "ChatScreen": ("remie.tui.screens", "ChatScreen"),
     "ConnectionScreen": ("remie.tui.screens", "ConnectionScreen"),
-    "MemoryScreen": ("remie.tui.screens", "MemoryScreen"),
     "ModelScreen": ("remie.tui.screens", "ModelScreen"),
     "SlashCommandPopup": ("remie.tui.widgets", "SlashCommandPopup"),
 }

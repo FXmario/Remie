@@ -6,7 +6,10 @@ from typing import Any
 from rich.console import Group, RenderableType
 from rich.markup import escape
 from rich.panel import Panel
+from rich.style import Style
 from rich.syntax import Syntax
+
+from remie.tools.registry import get_tool_summary
 from rich.text import Text
 
 
@@ -21,14 +24,45 @@ def _format_tool_call(name: str, args: dict[str, Any]) -> str:
     return f"{name}(\n" + ",\n".join(f"  {parameter}" for parameter in parameters) + "\n)"
 
 
-def _render_tool_call(name: str, args: dict[str, Any]) -> Panel:
-    """Use literal Text so argument contents cannot be interpreted as markup."""
-    return Panel(
-        Text(_format_tool_call(name, args), overflow="fold"),
-        title=Text(f"Tool call · {name}"),
-        border_style="cyan",
-        padding=(0, 1),
-    )
+class ToolCallDisclosure:
+    """Compact tool summary with independently expandable invocation details."""
+
+    def __init__(self, name: str, args: dict[str, Any], code_theme: str = "ansi_dark") -> None:
+        self.code_theme = code_theme
+        self.name = name
+        self.args = dict(args)
+        self.expanded = False
+        self.token = id(self)
+
+    def __rich_console__(self, console, options):
+        header = Text(
+            f"{'▼' if self.expanded else '▶'} Agent {get_tool_summary(self.name)}",
+            style=Style(color="cyan", bold=True, meta={
+                "tool_toggle": self.token, "tool_block": self.token,
+            }),
+            overflow="fold",
+        )
+        yield header
+        if self.expanded:
+            code = _format_tool_call(self.name, self.args)
+            language = "bash" if self.name == "run_command" else "python"
+            try:
+                detail = Syntax(code, language, theme=self.code_theme).highlight(code)
+                # Highlight into Text rather than a Syntax block to preserve the
+                # exact command, wrapping, selection, and disclosure metadata.
+                detail.plain = code
+            except Exception:
+                detail = Text(code)
+            detail.no_wrap = False
+            detail.overflow = "fold"
+            detail.stylize(Style(meta={"tool_block": self.token}))
+            yield detail
+
+
+def _render_tool_call(
+    name: str, args: dict[str, Any], code_theme: str = "ansi_dark"
+) -> ToolCallDisclosure:
+    return ToolCallDisclosure(name, args, code_theme)
 
 
 class _PlainWrite:

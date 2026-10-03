@@ -60,12 +60,10 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     **{
         name: ("remie.prompts", name)
         for name in (
-            "MEMORY_MAX_CHARS",
             "PROJECT_CONTEXT_MAX_CHARS",
             "SYSTEM_PROMPT",
             "build_system_prompt",
             "get_full_system_prompt",
-            "load_agent_memory",
             "load_project_context",
         )
     },
@@ -350,7 +348,7 @@ async def stream_llm_call(
 async def summarize_messages(messages: list[dict[str, Any]]) -> str:
     """
     Ask the model to condense a list of conversation messages into a compact
-    "session memory" note. Returns "" when the call fails or yields nothing.
+    "session summary" note. Returns "" when the call fails or yields nothing.
     """
     if not messages:
         return ""
@@ -359,7 +357,7 @@ async def summarize_messages(messages: list[dict[str, Any]]) -> str:
             "role": "system",
             "content": (
                 "Condense the following conversation excerpt into a compact "
-                "'session memory' note. Preserve key facts, decisions, file "
+                "'session summary' note. Preserve key facts, decisions, file "
                 "paths, user preferences, and open tasks. Omit routine detail. "
                 "Return only the note, under 300 words, no markdown headers."
             ),

@@ -12,7 +12,6 @@ from remie.tools.files import (
     read_file_tool,
     tree_files_tool,
 )
-from remie.tools.memory import memory_tool
 from remie.tools.test_runner import run_test_shards_tool
 from remie.tools.tabs import tab_status_tool
 from remie.tools.web import web_fetch_tool, web_search_tool
@@ -27,7 +26,6 @@ TOOL_REGISTRY = {
     "glob_files": glob_files_tool,
     "tree_files": tree_files_tool,
     "ask_user": ask_user_tool,
-    "memory": memory_tool,
     "web_fetch": web_fetch_tool,
     "web_search": web_search_tool,
 }
@@ -42,7 +40,6 @@ TOOL_SUMMARIES = {
     "glob_files": "find files matching a glob pattern",
     "tree_files": "show the directory tree",
     "ask_user": "ask the user a question",
-    "memory": "saving or recalling a memory note",
     "web_fetch": "fetch a URL over HTTP(S) with curl",
     "web_search": "search the web with DuckDuckGo",
 }
@@ -160,23 +157,6 @@ TOOL_PARAMETERS = {
             },
         },
         "required": ["question"],
-    },
-    "memory": {
-        "type": "object",
-        "properties": {
-            "action": {
-                "type": "string",
-                "enum": ["add", "read", "clear", "delete", "list"],
-                "description": "'add' appends a note, 'read' returns it, 'clear' wipes it, 'delete' removes a memory, 'list' lists memories.",
-            },
-            "text": {"type": "string", "description": "Note text (action 'add' only)."},
-            "id": {"type": "string", "description": "Memory uuid; wins over name."},
-            "name": {
-                "type": "string",
-                "description": "Memory name to target or create.",
-            },
-        },
-        "required": ["action"],
     },
     "web_fetch": {
         "type": "object",

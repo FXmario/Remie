@@ -4,15 +4,11 @@ from pathlib import Path
 
 from remie.tools import (
     TOOL_REGISTRY,
-    find_memory_by_id,
-    get_active_memory_id,
     get_tool_str_representation,
-    memory_file_path,
 )
 
 PROJECT_CONTEXT_MAX_CHARS = 8000
 
-MEMORY_MAX_CHARS = 4000
 
 SYSTEM_PROMPT = """
 You are a coding assistant whose goal it is to help us solve coding tasks.
@@ -27,7 +23,6 @@ If no tool is needed, respond normally.
 When multiple valid approaches have meaningful tradeoffs or require a user preference, do not choose silently. Briefly explain the options and ask the user which they prefer. Continue autonomously for routine implementation details or when one option clearly dominates. Do not ask unnecessary confirmation questions.
 To ask the user a question, call the 'ask_user' tool and wait for its result instead of ending your turn.
 
-Use the 'memory' tool to persist durable facts, decisions, user preferences, and open tasks that should be remembered across chats. Add a note when you learn something that will matter later; do not log routine progress and do not use memory as a chat transcript. Remie keeps an active project memory, so use memory(action="add", text=...) without a name to append to it. Use memory(action="list") to see older memories (each with an id and a name), and target one by name or id only when needed; memory(action="delete", name=...) removes a memory entirely.
 
 When testing a project, use the 'run_test_shards' tool by default whenever the test suite can be discovered or split. Use 'run_command' only for focused checks, compilation, linting, or test commands that cannot be sharded.
 """
@@ -51,34 +46,6 @@ def load_project_context() -> str:
             + "\n\n(AGENTS.md truncated for context.)\n"
         )
     return f"\n\n## Project instructions (from AGENTS.md)\n{content}"
-
-
-def load_agent_memory() -> str:
-    """
-    Load the agent's active memory notes from .remie/memory/<uuid>.md in the
-    launch directory. Returns an empty string when there is no active memory.
-    """
-    memory_id = get_active_memory_id()
-    if not memory_id:
-        return ""
-    memory = find_memory_by_id(memory_id)
-    if memory is None:
-        return ""
-    memory_file = memory_file_path(memory_id)
-    if not memory_file.is_file():
-        return ""
-    try:
-        content = memory_file.read_text(encoding="utf-8")
-    except OSError, UnicodeError:
-        return ""
-    if not content.strip():
-        return ""
-    if len(content) > MEMORY_MAX_CHARS:
-        content = (
-            content[:MEMORY_MAX_CHARS].rstrip()
-            + "\n\n(Memory truncated for context.)\n"
-        )
-    return f'\n\n## Agent memory (from .remie/memory: "{memory["name"]}")\n{content}'
 
 
 def build_system_prompt(
@@ -143,7 +110,6 @@ def build_system_prompt(
     return (
         _compose_system_prompt(tool_list_repr, protocol)
         + load_project_context()
-        + load_agent_memory()
         + tabs
     )
 
@@ -168,18 +134,6 @@ _TESTING_PARAGRAPH = (
 )
 
 
-_MEMORY_PARAGRAPH = (
-    "Use the 'memory' tool to persist durable facts, decisions, user preferences, "
-    "and open tasks that should be remembered across chats. Add a note when you "
-    "learn something that will matter later; do not log routine progress and do "
-    "not use memory as a chat transcript. Remie keeps an active project memory, "
-    'so use memory(action="add", text=...) without a name to append to it. Use '
-    'memory(action="list") to see older memories (each with an id and a name), '
-    'and target one by name or id only when needed; memory(action="delete", '
-    "name=...) removes a memory entirely."
-)
-
-
 def _compose_system_prompt(tool_list_repr: str, protocol: str) -> str:
     return (
         f"You are a coding assistant whose goal it is to help us solve coding tasks. \n"
@@ -187,6 +141,5 @@ def _compose_system_prompt(tool_list_repr: str, protocol: str) -> str:
         f"{tool_list_repr}\n"
         f"{protocol}\n"
         f"{_ASK_USER_PARAGRAPH}\n"
-        f"{_MEMORY_PARAGRAPH}\n"
         f"{_TESTING_PARAGRAPH}"
     )

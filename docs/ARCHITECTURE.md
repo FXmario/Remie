@@ -25,11 +25,11 @@ Provider adapters         Tool executor
           |                   |
           v                   v
 Model APIs               Files, shell, web,
-                         questions, memory
+                         questions
 
 Cross-cutting services:
     remie/config.py       user-level configuration
-    remie/storage/        project-level chats and memories
+    remie/storage/        project-level chats
     remie/prompts.py      system prompt construction
     remie/protocol.py     textual tool-call parsing
     remie/tokens.py       token estimates
@@ -71,12 +71,11 @@ the same `run_tui` compatibility alias.
 `AgentApp.on_mount()` performs the project-level initialization:
 
 1. Load the active connection from `~/.config/remie/config.json`.
-2. Ensure the project has an active durable memory.
-3. Load the latest chat from `~/.remie/projects/<project-id>/chats/`, or create a new chat.
-4. Repair native tool calls that were interrupted before receiving a result.
-5. Rebuild the system prompt for the active provider.
-6. Restore the visible transcript, prompt history, and cumulative token usage.
-7. Prefetch OpenCode model metadata when needed.
+2. Load the latest chat from `~/.remie/projects/<project-id>/chats/`, or create a new chat.
+3. Repair native tool calls that were interrupted before receiving a result.
+4. Rebuild the system prompt for the active provider.
+5. Restore the visible transcript, prompt history, and cumulative token usage.
+6. Prefetch OpenCode model metadata when needed.
 
 Two forms of history are kept:
 
@@ -98,7 +97,6 @@ The result combines:
 2. Tool instructions.
 3. Textual tool descriptions for non-native providers.
 4. Root-level `AGENTS.md`, limited to a safe context size.
-5. The active project memory, also size-limited.
 
 For local and OpenCode connections, the prompt explains the textual protocol:
 
@@ -110,8 +108,8 @@ tool: read_file({"filename":"main.py"})
 For Codex and OpenRouter, tool schemas travel separately in the API request, so
 the prompt tells the model to use native function calls instead.
 
-The prompt is rebuilt before each user turn. It is also refreshed after the
-memory tool adds or clears a note.
+The prompt is rebuilt before each user turn. Project context comes from
+`AGENTS.md`; no separate persistent agent-note store is loaded into the prompt.
 
 ## 5. User-message flow
 
@@ -392,17 +390,9 @@ token usage. Index updates use atomic JSON writes where required.
 
 `remie/tools/chats.py` remains only as a compatibility re-export.
 
-### 10.3 Durable memories
-
-`remie/storage/memories.py` stores named UUID-backed memories under:
-
-```text
-~/.remie/projects/<project-id>/memory/
-```
-
-`remie/tools/memory.py` is the model-callable adapter around that storage. The
-active memory ID is stored separately and its content is injected into the next
-system prompt.
+Context-compaction summaries are part of a chat's context messages, not a
+separate note collection. Resuming a saved chat restores that context, while a
+new chat receives the current system prompt and project instructions.
 
 ## 11. TUI responsibilities
 
@@ -413,7 +403,7 @@ The Textual frontend is intentionally split by responsibility:
 - `streaming.py` — live reasoning and token-speed presentation.
 - `widgets.py` — prompt, status indicator, model badge, and streaming log.
 - `render.py` — tool-result and syntax-highlighted rendering.
-- `screens/` — connection, chat, memory, and user-question modals.
+- `screens/` — connection, chat, and user-question modals.
 - `contracts.py` — runtime-safe app identification without circular imports.
 
 `StreamingPresentationMixin` drains reasoning while normal content is silent.

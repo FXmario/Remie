@@ -32,6 +32,7 @@ from remie.agent import (
 from remie.tui.constants import STATUS_ANIMATION_MAX_FPS
 from remie.tui.contracts import is_agent_app
 from remie.tui.helpers import _format_tokens, _is_tmux, _supports_terminal_graphics
+from remie.tui.render import ToolCallDisclosure
 from remie.tui.slash_commands import (
     SlashCommand,
     resolve_slash_command,
@@ -79,6 +80,49 @@ class StreamingRichLog(RichLog):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self._stream_start: int | None = None
+        self._tool_calls: dict[int, ToolCallDisclosure] = {}
+
+    def clear(self):
+        self._tool_calls.clear()
+        self._stream_start = None
+        return super().clear()
+
+    def on_click(self, event: events.Click) -> None:
+        token = event.style.meta.get("tool_toggle")
+        if event.button == 1 and token in self._tool_calls:
+            event.stop()
+            self.toggle_tool_call(token)
+
+    def toggle_tool_call(self, token: int) -> None:
+        call = self._tool_calls.get(token)
+        if call is None:
+            return
+        rows = [
+            index for index, strip in enumerate(self.lines)
+            if any(segment.style and segment.style.meta.get("tool_block") == token
+                   for segment in strip)
+        ]
+        if not rows:
+            return
+        start, end = rows[0], rows[-1] + 1
+        call.expanded = not call.expanded
+        width = max(self.scrollable_content_region.width, 1)
+        segments = self.app.console.render(
+            call, self.app.console.options.update_width(width)
+        )
+        strips = Strip.from_lines(list(Segment.split_lines(segments)))
+        delta = len(strips) - (end - start)
+        self.lines[start:end] = strips
+        if self._stream_start is not None and self._stream_start >= end:
+            self._stream_start += delta
+        # Keep the same transcript row visible if the changed call is above it.
+        scroll_y = self.scroll_y
+        if start < scroll_y:
+            scroll_y = max(start, scroll_y + delta)
+        self._line_cache.clear()
+        self.virtual_size = Size(self._widest_line_width, len(self.lines))
+        self.scroll_to(y=scroll_y, animate=False, immediate=True)
+        self.refresh()
 
     def write(
         self,
@@ -95,6 +139,9 @@ class StreamingRichLog(RichLog):
         while the viewport is already at the end; once the user scrolls up,
         writes leave their position alone.
         """
+        if isinstance(content, ToolCallDisclosure):
+            self._tool_calls[content.token] = content
+            width = width or max(self.scrollable_content_region.width, 1)
         if scroll_end is None:
             scroll_end = self.is_vertical_scroll_end
         return super().write(

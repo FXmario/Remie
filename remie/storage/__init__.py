@@ -1,1 +1,1 @@
-"""Project-local persistence for chats and durable memories."""
+"""Project-local persistence for chats."""

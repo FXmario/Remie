@@ -19,7 +19,7 @@ from remie.tui.constants import (
     STREAM_UPDATE_MIN_INTERVAL_LARGE,
 )
 from remie.model_names import ModelInfo, prettify_model_id
-from remie.tools import MEMORY_NAME_MAX_CHARS
+from remie.storage.chats import CHAT_NAME_MAX_CHARS
 
 
 def _detect_terminal_background() -> str | None:
@@ -192,7 +192,7 @@ def _model_option(model: "str | ModelInfo") -> tuple[Text, str]:
     return label, info.id
 
 
-def _fallback_memory_name(task: str | list) -> str:
+def _fallback_chat_name(task: str | list) -> str:
     """Create a readable fallback title when model title generation fails."""
     if isinstance(task, str):
         text = task
@@ -205,5 +205,5 @@ def _fallback_memory_name(task: str | list) -> str:
     text = " ".join(text.split())
     if not text:
         return "general"
-    cut = text[:MEMORY_NAME_MAX_CHARS]
+    cut = text[:CHAT_NAME_MAX_CHARS]
     return (cut.rsplit(" ", 1)[0] if " " in cut else cut).rstrip()

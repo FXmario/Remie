@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Any
 
 from remie.tools.common import _remie_dir, _write_json_atomic
-from remie.storage.memories import MEMORY_NAME_MAX_CHARS
 
 
 def session_file_path() -> Path:
@@ -25,6 +24,8 @@ def session_file_path() -> Path:
 CHAT_INDEX_VERSION = 1
 CHAT_FILE_VERSION = 1
 LEGACY_SESSION_VERSION = 1
+CHAT_NAME_MAX_CHARS = 60
+
 DEFAULT_CHAT_NAME = "New chat"
 _CHAT_LOCK = threading.RLock()
 
@@ -116,7 +117,7 @@ def list_chats() -> list[dict[str, Any]]:
 @_locked
 def create_chat(name: str = DEFAULT_CHAT_NAME) -> dict[str, Any]:
     """Register a new chat and return its index entry (file written on save)."""
-    name = " ".join(name.split())[:MEMORY_NAME_MAX_CHARS].rstrip() or DEFAULT_CHAT_NAME
+    name = " ".join(name.split())[:CHAT_NAME_MAX_CHARS].rstrip() or DEFAULT_CHAT_NAME
     chat_id = str(uuid.uuid4())
     now = _dt.datetime.now().isoformat(timespec="seconds")
     chats = load_chat_index()
@@ -139,7 +140,7 @@ def rename_chat(
     chats = load_chat_index()
     if chat_id not in chats:
         return None
-    name = " ".join(name.split())[:MEMORY_NAME_MAX_CHARS].rstrip()
+    name = " ".join(name.split())[:CHAT_NAME_MAX_CHARS].rstrip()
     if not name:
         return _chat_metadata(chat_id, chats[chat_id])
     existing_names = {
@@ -155,7 +156,7 @@ def rename_chat(
             suffix += 1
             suffix_text = f" {suffix}"
             candidate = (
-                f"{base[: MEMORY_NAME_MAX_CHARS - len(suffix_text)].rstrip()}"
+                f"{base[: CHAT_NAME_MAX_CHARS - len(suffix_text)].rstrip()}"
                 f"{suffix_text}"
             )
         name = candidate
@@ -284,7 +285,7 @@ def migrate_legacy_session() -> str | None:
                 text = " ".join(content.split())
                 if text.startswith("tool_result("):
                     continue
-                return text[:MEMORY_NAME_MAX_CHARS].rstrip() or DEFAULT_CHAT_NAME
+                return text[:CHAT_NAME_MAX_CHARS].rstrip() or DEFAULT_CHAT_NAME
         return "Previous session"
 
     saved_at = str(

@@ -18,7 +18,6 @@ from remie.tools.files import (
     tree_files_tool,
 )
 from remie.tools.commands import get_blocked_command_reason, run_command_tool
-from remie.tools.memory import memory_tool
 from remie.tools.common import _project_root, resolve_abs_path, tool_working_directory
 
 
@@ -145,13 +144,6 @@ def execute_tool_call(name: str, args: dict[str, Any]) -> dict[str, Any]:
             )
         elif name == "ask_user":
             return {"action": "ask_user_interactive", "args": args}
-        elif name == "memory":
-            return memory_tool(
-                args.get("action", "read"),
-                args.get("text", ""),
-                args.get("id", ""),
-                args.get("name", ""),
-            )
         return TOOL_REGISTRY[name](**args)
     except (OSError, UnicodeError, TypeError, ValueError) as error:
         return {"error": f"{type(error).__name__}: {error}"}

@@ -31,7 +31,6 @@ from remie.tui import (
     AskUserScreen,
     ChatScreen,
     ConnectionScreen,
-    MemoryScreen,
     ModelBadge,
     PromptSubmitted,
     PromptTextArea,
@@ -47,16 +46,12 @@ from remie.tools import (
     create_chat,
     delete_chat,
     find_chat_by_id,
-    find_memory_by_id,
-    get_active_memory_id,
     list_chats,
     load_chat,
     load_chat_index,
     load_latest_chat,
-    memory_tool,
     save_chat,
     save_chat_index,
-    set_active_memory_id,
 )
 
 
@@ -1398,9 +1393,8 @@ def test_compaction_falls_back_when_summary_fails(monkeypatch):
     asyncio.run(exercise())
 
 
-def test_on_mount_resumes_latest_chat_and_preserves_memory(monkeypatch):
+def test_on_mount_resumes_latest_chat(monkeypatch):
     async def exercise():
-        old_memory = memory_tool("add", "keep this", name="old work")
         chat = create_chat("earlier work")
         save_chat(
             chat["id"],
@@ -1420,16 +1414,13 @@ def test_on_mount_resumes_latest_chat_and_preserves_memory(monkeypatch):
             assert len(app.conversation) == 3
             assert app.conversation[0]["role"] == "system"
             # The saved system prompt is replaced with the current one.
-            assert "Agent memory" in app.conversation[0]["content"]
+            assert "Agent memory" not in app.conversation[0]["content"]
             assert app._cached_conv_tokens == tui.estimate_conversation_tokens(
                 app.conversation
             )
             log_lines = [strip.text for strip in app.query_one("#log").lines]
             assert any("Resumed chat" in line for line in log_lines)
             assert any("hello there" in line for line in log_lines)
-            active = find_memory_by_id(get_active_memory_id())
-            assert active is not None
-            assert active["name"] == "old work"
 
     asyncio.run(exercise())
 
@@ -1442,9 +1433,6 @@ def test_on_mount_fresh_when_no_chats(monkeypatch):
             assert app.conversation[0]["role"] == "system"
             assert app._chat_id is not None
             assert find_chat_by_id(app._chat_id) is not None
-            active = find_memory_by_id(get_active_memory_id())
-            assert active is not None
-            assert active["name"] == "general"
 
     asyncio.run(exercise())
 
@@ -1476,7 +1464,9 @@ def test_action_new_chat_keeps_previous_chat(monkeypatch, tmp_path):
     asyncio.run(exercise())
 
 
-def test_closing_only_tab_creates_and_activates_replacement():
+def test_closing_only_tab_creates_and_activates_replacement(monkeypatch):
+    # Exercise idle-tab replacement, independently of checkout/worktree location.
+    monkeypatch.setattr("remie.tui.chat_session.linked_worktree", lambda _: None)
     async def exercise():
         app = AgentApp()
         async with app.run_test() as pilot:
@@ -1522,247 +1512,6 @@ def test_chat_saved_after_turn(monkeypatch):
                 str(m.get("content")) for m in data["transcript"]
             )
             assert "final reply" in transcript_joined
-
-    asyncio.run(exercise())
-
-
-def test_memory_tool_add_refreshes_system_prompt(monkeypatch):
-    async def exercise():
-        calls = 0
-
-        async def tool_stream(
-            _conversation, usage_box=None, reasoning_box=None, finish_box=None, **_kwargs
-        ):
-            nonlocal calls
-            calls += 1
-            if calls == 1:
-                yield 'tool: memory({"action": "add", "text": "remember X"})'
-            else:
-                yield "done"
-
-        monkeypatch.setattr(tui_app, "stream_llm_call", tool_stream)
-
-        app = AgentApp()
-        async with app.run_test() as pilot:
-            await app.run_agent_turn("save it")
-            await pilot.pause()
-            assert "remember X" in app.conversation[0]["content"]
-
-    asyncio.run(exercise())
-
-
-def test_memory_add_without_name_uses_active_memory(monkeypatch):
-    async def exercise():
-        calls = 0
-
-        async def tool_stream(
-            _conversation, usage_box=None, reasoning_box=None, finish_box=None, **_kwargs
-        ):
-            nonlocal calls
-            calls += 1
-            if calls == 1:
-                yield 'tool: memory({"action": "add", "text": "remember Y"})'
-            else:
-                yield "done"
-
-        monkeypatch.setattr(tui_app, "stream_llm_call", tool_stream)
-
-        app = AgentApp()
-        async with app.run_test() as pilot:
-            active_memory_id = get_active_memory_id()
-            await app.run_agent_turn("refactor the parser module")
-            await pilot.pause()
-
-            # The note goes to the still-active durable memory...
-            active = get_active_memory_id()
-            assert active == active_memory_id
-            assert find_memory_by_id(active)["name"] == "general"
-            assert "remember Y" in memory_tool("read")["content"]
-            assert "remember Y" in app.conversation[0]["content"]
-            # ...while the chat itself is auto-named after the task.
-            chat = find_chat_by_id(app._chat_id)
-            assert chat is not None
-            assert chat["name"] == "refactor the parser"
-            log_lines = [strip.text for strip in app.query_one("#log").lines]
-            assert not any("auto-named" in line for line in log_lines)
-
-    asyncio.run(exercise())
-
-
-def test_named_memory_add_is_not_renamed(monkeypatch):
-    async def exercise():
-        calls = 0
-
-        async def tool_stream(
-            _conversation, usage_box=None, reasoning_box=None, finish_box=None, **_kwargs
-        ):
-            nonlocal calls
-            calls += 1
-            if calls == 1:
-                yield (
-                    'tool: memory({"action": "add", "text": "design fact", '
-                    '"name": "design"})'
-                )
-            else:
-                yield "done"
-
-        monkeypatch.setattr(tui_app, "stream_llm_call", tool_stream)
-
-        app = AgentApp()
-        async with app.run_test() as pilot:
-            await app.run_agent_turn("refactor the parser module")
-            await pilot.pause()
-
-            # Explicitly named notes remain isolated from the active memory,
-            # which keeps its default name now that chats are named instead.
-            assert find_memory_by_id(get_active_memory_id())["name"] == "general"
-            assert "design fact" in memory_tool("read", name="design")["content"]
-
-    asyncio.run(exercise())
-
-
-def test_open_memory_action_opens_picker(monkeypatch):
-    async def exercise():
-        app = AgentApp()
-        async with app.run_test() as pilot:
-            await app.action_open_memory()
-            await pilot.pause()
-            assert len(app.screen_stack) == 2
-            assert isinstance(app.screen, MemoryScreen)
-            # Memories are picked from a dropdown, not an option list.
-            assert app.screen.query_one("#memory-select", Select)
-            assert not app.screen.query("#memory-list")
-            assert not app.screen.query("#memory-switch")
-            assert not app.screen.query("#new-memory-input")
-            # Closing is done via the ✕ button in the dialog header.
-            assert not app.screen.query("#memory-cancel")
-            assert app.screen.query_one("#memory-close", Button)
-            assert app.screen.query_one("#memory-delete")
-
-    asyncio.run(exercise())
-
-
-def test_memory_picker_switch_updates_active(monkeypatch):
-    async def exercise():
-        memory_tool("add", "base note")  # activates 'general'
-        design = memory_tool("add", "design fact", name="design")
-
-        app = AgentApp()
-        async with app.run_test() as pilot:
-            await app.action_open_memory()
-            await pilot.pause()
-            screen = app.screen
-            assert isinstance(screen, MemoryScreen)
-            assert get_active_memory_id() != design["id"]
-            memory_select = screen.query_one("#memory-select", Select)
-            memory_select.value = design["id"]
-            await pilot.pause()
-            assert get_active_memory_id() == design["id"]
-            assert "design fact" in app.conversation[0]["content"]
-
-    asyncio.run(exercise())
-
-
-def test_memory_picker_selects_active_memory(monkeypatch):
-    async def exercise():
-        app = AgentApp()
-        async with app.run_test() as pilot:
-            await app.action_open_memory()
-            await pilot.pause()
-            screen = app.screen
-            assert isinstance(screen, MemoryScreen)
-            active_memory = find_memory_by_id(get_active_memory_id())
-            assert active_memory is not None
-            assert active_memory["name"] == "general"
-            memory_select = screen.query_one("#memory-select", Select)
-            assert memory_select.value == active_memory["id"]
-
-    asyncio.run(exercise())
-
-def test_memory_picker_switch_to_existing_memory(monkeypatch):
-    async def exercise():
-        notes = memory_tool("add", "standalone notes", name="notes")
-
-        app = AgentApp()
-        async with app.run_test() as pilot:
-            await app.action_open_memory()
-            await pilot.pause()
-            screen = app.screen
-            assert isinstance(screen, MemoryScreen)
-            screen._switch(notes["id"])
-            await pilot.pause()
-            assert get_active_memory_id() == notes["id"]
-            assert find_memory_by_id(notes["id"])["name"] == "notes"
-            assert "standalone notes" in memory_tool("read", name="notes")["content"]
-            assert len(app.screen_stack) == 1
-
-    asyncio.run(exercise())
-
-
-def test_memory_picker_deletes_memory(monkeypatch):
-    async def exercise():
-        design = memory_tool("add", "to be deleted", name="design")
-
-        app = AgentApp()
-        async with app.run_test() as pilot:
-            set_active_memory_id(design["id"])
-            app._refresh_system_prompt()
-            await app.action_open_memory()
-            await pilot.pause()
-            screen = app.screen
-            assert isinstance(screen, MemoryScreen)
-
-            # Delete is immediate and does not open a confirmation modal.
-            screen.query_one("#memory-delete", Button).press()
-            await pilot.pause()
-            await pilot.pause()
-
-            assert find_memory_by_id(design["id"]) is None
-            memory_select = screen.query_one("#memory-select", Select)
-            assert memory_select.value != design["id"]
-            # Deleting the active memory falls back to 'general'.
-            assert find_memory_by_id(get_active_memory_id())["name"] == "general"
-
-    asyncio.run(exercise())
-
-
-def test_memory_picker_delete_is_immediate(monkeypatch):
-    async def exercise():
-        design = memory_tool("add", "keep me", name="design")
-
-        app = AgentApp()
-        async with app.run_test() as pilot:
-            await app.action_open_memory()
-            await pilot.pause()
-            screen = app.screen
-            assert isinstance(screen, MemoryScreen)
-
-            memory_select = screen.query_one("#memory-select", Select)
-            memory_select.value = design["id"]
-            await pilot.pause()
-            await screen._delete_current()
-            await pilot.pause()
-
-            assert find_memory_by_id(design["id"]) is None
-
-    asyncio.run(exercise())
-
-
-def test_memory_picker_blocked_while_agent_running(monkeypatch):
-    async def exercise():
-        async def endless_stream(_conversation, usage_box=None, reasoning_box=None, finish_box=None, **_kwargs):
-            while True:
-                yield "chunk"
-                await asyncio.sleep(0)
-
-        monkeypatch.setattr(tui_app, "stream_llm_call", endless_stream)
-
-        app = AgentApp()
-        async with app.run_test() as pilot:
-            app._agent_running = True
-            await app.action_open_memory()
-            await pilot.pause()
-            assert len(app.screen_stack) == 1
 
     asyncio.run(exercise())
 
@@ -3681,37 +3430,6 @@ def test_chat_picker_search_filters(monkeypatch):
     asyncio.run(exercise())
 
 
-def test_memory_picker_search_filters(monkeypatch):
-    async def exercise():
-        memory_tool("add", "base note")  # activates 'general'
-        memory_tool("add", "design fact", name="design-notes")
-
-        app = AgentApp()
-        async with app.run_test() as pilot:
-            await app.action_open_memory()
-            await pilot.pause()
-            screen = app.screen
-            assert isinstance(screen, MemoryScreen)
-
-            search = screen.query_one("#memory-search", Input)
-            search.value = "design"
-            await pilot.pause()
-
-            memory_select = screen.query_one("#memory-select", Select)
-            names = [name for name, _ in memory_select._options]
-            assert names == ["design-notes"]
-            from remie.tools import find_memory_by_name as _find_by_name
-
-            assert memory_select.value == _find_by_name("design-notes")["id"]
-
-            search.value = ""
-            await pilot.pause()
-            names = [name for name, _ in memory_select._options]
-            assert "general" in names
-
-    asyncio.run(exercise())
-
-
 def test_adaptive_title_updates_after_completed_turn(monkeypatch):
     """A completed turn re-titles an auto-managed chat and records it as auto."""
     async def reply_stream(_c, usage_box=None, reasoning_box=None, finish_box=None, **_kw):
@@ -3888,7 +3606,6 @@ def test_ctrl_p_tabs_render_existing_modal_layouts():
             tabs = screen.query_one("#open-tabs")
             expected = {
                 "open-chats": "chat-dialog",
-                "open-memories": "memory-dialog",
                 "open-providers": "connection-dialog",
                 "open-models": "model-dialog",
             }

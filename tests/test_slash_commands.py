@@ -13,7 +13,6 @@ from remie.tui import (
     AgentApp,
     ChatScreen,
     ConnectionScreen,
-    MemoryScreen,
     ModelBadge,
     ModelScreen,
     PromptTextArea,
@@ -42,7 +41,6 @@ def _isolated_config(tmp_path, monkeypatch):
 
 def test_slash_command_registry_filters_and_resolves_trailing_slash():
     assert [command.name for command in slash_command_matches("/")] == [
-        "memories",
         "chats",
         "connect",
         "models",
@@ -71,13 +69,13 @@ def test_slash_popup_highlights_first_and_enter_runs_selection():
 
             popup = app.query_one(SlashCommandPopup)
             assert popup.display is True
-            assert popup.highlighted_command.name == "memories"
+            assert popup.highlighted_command.name == "chats"
 
             await pilot.press("down")
-            assert popup.highlighted_command.name == "chats"
+            assert popup.highlighted_command.name == "connect"
             await pilot.press("enter")
             await pilot.pause()
-            assert isinstance(app.screen, ChatScreen)
+            assert isinstance(app.screen, ConnectionScreen)
 
     asyncio.run(exercise())
 
@@ -127,7 +125,7 @@ def test_mouse_hover_changes_highlighted_command():
             await pilot.pause()
 
             popup = app.query_one(SlashCommandPopup)
-            await pilot.hover(popup, offset=(3, 3))
+            await pilot.hover(popup, offset=(3, 2))
             await pilot.pause()
             assert popup.highlighted_command.name == "connect"
 
@@ -137,7 +135,6 @@ def test_mouse_hover_changes_highlighted_command():
 @pytest.mark.parametrize(
     ("command", "screen_type"),
     [
-        ("/memories", MemoryScreen),
         ("/chats", ChatScreen),
         ("/connect", ConnectionScreen),
         ("/models", ModelScreen),

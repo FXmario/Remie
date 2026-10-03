@@ -54,3 +54,27 @@ uv run main.py
 ```
 
 That always uses the current code. Use the global `remie` install only when you want a stable snapshot available everywhere.
+
+
+## Upgrading from a version with persistent agent notes
+
+The persistent memory feature has been removed. The `memory` tool,
+`/memories` command, and Memories management tab are no longer available, and
+saved notes are no longer injected into the system prompt. Reinstall the global
+tool as described above and restart running Remie processes to use the new code.
+
+Chat history, tab layouts, connection settings, and `AGENTS.md` project
+instructions remain supported. Context compaction still summarizes older
+messages within the current chat; it does not create a separate durable note
+collection.
+
+Existing note files are ignored by the new version. Upgrading alone does not
+erase them. If you want to remove old notes, delete only `memory/`, `memory.md`,
+and `active_memory` inside the relevant Remie state directory:
+
+- `~/.remie/projects/<project-id>/` (or `$REMIE_HOME/projects/<project-id>/`);
+- the legacy project-local `.remie/` directory, if it still exists;
+- the legacy `~/.remie/` root, if it contains those entries.
+
+Do not delete the entire state directory: its `chats/` and tab-layout files
+contain unrelated saved history and workspace settings.

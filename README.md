@@ -21,12 +21,12 @@ The Local connector targets an OpenAI-compatible `/chat/completions` server. Man
 - The model name is shown on the top-right of the input box border
 - Three theme modes: **System** uses terminal-native ANSI colors and preserves transparency, while **Light** and **Dark** use full Textual palettes; `Ctrl+T` cycles between them
 - Async agent loop — the UI stays responsive while the LLM responds and tools run
-- Tools: `read_file`, `list_files`, `glob_files`, `tree_files`, `edit_file`, `run_command`, `ask_user`, `memory`, `web_fetch`, `web_search`
+- Tools: `read_file`, `list_files`, `glob_files`, `tree_files`, `edit_file`, `run_command`, `ask_user`, `web_fetch`, `web_search`
 - **Web access via curl** — `web_fetch` fetches any http(s) URL (custom method, headers, body; HTML is reduced to readable text, other types returned raw, or saved to disk with `save_to`), and `web_search` searches DuckDuckGo's HTML endpoint with automatic Bing fallback when DuckDuckGo is unreachable — both no API key needed. Responses are size-capped and truncated before they reach the context window; timeout configurable with `REMIE_WEB_TIMEOUT`
 - **Outside-project permissions** — file operations, download destinations, command working directories, and explicit paths in shell commands require one-time approval when they resolve outside the active project. Every outside-project operation prompts separately.
-- **Agent memory (durable notes)** — the agent can append durable facts, decisions, user preferences, and open tasks to the active memory with the `memory` tool; `/memories` opens the picker to switch to or delete an older memory. The active memory is remembered across launches and injected into the system prompt. When a long task nears the context window, dropped messages are summarized into a compact note instead of being silently truncated.
+- **Context compaction** — when a long task nears the context window, dropped messages are summarized into a compact summary in the current conversation instead of being silently truncated. This summary belongs to the chat; there is no separate persistent agent-note store.
 - **Chat history** — every conversation is saved per project under `~/.remie/projects/<project-id>/chats/`. Launching Remie restores the persisted tab layout or latest chat; `/chats` opens a picker to switch, create, or delete chats. A chat is adaptively auto-titled after completed tasks; `Ctrl+L` opens a new chat while keeping previous chats. Existing project-local `.remie` data is migrated automatically on first launch. Set `REMIE_HOME` to override `~/.remie`.
-- **Slash commands** — type `/` to open an anchored command menu for `/memories`, `/chats`, `/connect`, `/models`, `/change dir`, `/change worktree`, and `/list worktree`. The first match is highlighted automatically; use Up/Down, Tab, Enter, hover, or click to choose. Commands are handled locally rather than sent to the model.
+- **Slash commands** — type `/` to open an anchored command menu for `/chats`, `/connect`, `/models`, `/change dir`, `/change worktree`, and `/list worktree`. The first match is highlighted automatically; use Up/Down, Tab, Enter, hover, or click to choose. Commands are handled locally rather than sent to the model.
 - **Codex (ChatGPT Plus/Pro)** — sign in with a ChatGPT subscription via the native OAuth flow and use the models available to your account without an API key, Codex CLI installation, or local Node.js runtime. Remie dynamically uses the current official Codex client version when requesting the live catalog so newly released models are not hidden by stale discovery metadata.
 - **OpenRouter** — connect with an OpenRouter API key to any model in their catalog; native function calling over plain httpx streaming
 - **Command safety** — `run_command` blocks destructive commands before they execute (`rm -rf /`, `rm -rf ~`, disk formatting/partitioning, shutdown/reboot, `chmod -R`/`chown -R` on `/` or `~`, fork bombs, `curl | sh`, `dd` to raw block devices, ...) and shows a `Blocked command` line in the log with the reason
@@ -36,9 +36,9 @@ The Local connector targets an OpenAI-compatible `/chat/completions` server. Man
 - Multiline input — `Shift+Enter` or `Ctrl+J` for a new line, `Enter` to send
 - Prompt history — `Up`/`Down` arrows recall previous prompts, like a shell
 - Paste images from the clipboard with `Ctrl+V` and send them to vision-capable models
-- Thinking step before every tool call; tool calls are announced as `Agent calling <tool>`, kept in the conversation history
+- Thinking step before every tool call; tool calls show a compact `▶ Agent …` summary. Click the arrow or summary to expand/collapse the actual invocation: shell commands are shown verbatim with Bash highlighting, and other tools show named arguments with Python-style highlighting. Details use the current code theme and wrap to fit the log; calls remain in the conversation history.
 - Tool results are shown as readable `Tool result` panels in the log after each call — JSON results are pretty-printed and syntax-highlighted, file contents (`read_file`) are highlighted by extension, and `run_command` output is smart-highlighted when it looks like JSON, a unified diff, or a Python traceback (raw JSON still available with `REMIE_DEBUG=1`)
-- **Unified management screen** — press `Ctrl+P` to open the existing Chats, Memories, Providers, and Models interfaces together as tabs; the standalone slash-command modals remain available
+- **Unified management screen** — press `Ctrl+P` to open the existing Chats, Providers, and Models interfaces together as tabs; the standalone slash-command modals remain available
 
 ## Requirements
 
@@ -89,7 +89,7 @@ The following environment variables control runtime behavior and storage
 | `REMIE_COMMAND_TIMEOUT` | Default timeout in seconds for `run_command` | `180` |
 | `REMIE_BLOCKED_COMMANDS` | Comma-separated extra command substrings that are always blocked (e.g. `git push --force,aws s3 rm`) | (unset) |
 | `REMIE_WEB_TIMEOUT` | Seconds before a `web_fetch`/`web_search` request is killed | `20` |
-| `REMIE_HOME` | Root directory for project-scoped chats, memories, and tab layouts | `~/.remie` |
+| `REMIE_HOME` | Root directory for project-scoped chats and tab layouts | `~/.remie` |
 | `REMIE_CONFIG_DIR` | Directory containing the shared connection configuration | `~/.config/remie` |
 
 ### OpenCode Go
@@ -115,11 +115,11 @@ name.
 as "GLM 5.3" with a dimmed vendor label, catalogs that ship display metadata
 (OpenRouter, Codex) use it directly, `:free` ids get a green **Free** badge,
 and the stored value stays the raw id. Provider, model, reasoning-effort,
-chat (`/chats`), and memory (`/memories`) pickers include filtering; type to
+and chat (`/chats`) pickers include filtering; type to
 narrow by name or id. Use `/models` for a dedicated model-only picker that
 preserves the active provider and connection settings; it also shows reasoning
 effort whenever the highlighted model supports it. Press `Ctrl+P` to access the
-same Chats, Memories, Providers, and Models layouts in one tabbed modal.
+same Chats, Providers, and Models layouts in one tabbed modal.
 
 Remie remembers each provider's last-used values. Reopening the connection picker
 preselects the active provider, and switching providers restores that provider's
@@ -267,7 +267,6 @@ not added to chat history or sent to the model.
 
 | Command | Action |
 | ------- | ------ |
-| `/memories` | Open the memory picker |
 | `/chats` | Open the saved-chat picker |
 | `/connect` | Open provider and connection settings (`/connect/` also works) |
 | `/models` | Open the dedicated model picker for the active provider |
@@ -281,7 +280,7 @@ not added to chat history or sent to the model.
 | --------- | ----------- |
 | `Ctrl+C`  | Copy selected text, or quit if nothing is selected |
 | `Ctrl+L`  | Start a new chat (the previous one is kept in history) |
-| `Ctrl+P`  | Open Chats, Memories, Providers, and Models in tabs |
+| `Ctrl+P`  | Open Chats, Providers, and Models in tabs |
 | `Ctrl+B`  | Show or hide the chat-tab sidebar |
 | `Ctrl+G`  | Show or hide the status image |
 | `Ctrl+T`  | Cycle System → Light → Dark themes |
@@ -311,12 +310,12 @@ extension guide, see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 - `remie/config.py` — connection profiles and path-injected configuration storage
 - `remie/core/` — headless provider-independent agent loop, events, interrupted-call repair, and tool orchestration
 - `remie/providers/` — provider-neutral stream events, provider routing, and model catalogs
-- `remie/prompts.py` — system prompt, `AGENTS.md`, and durable-memory context construction
+- `remie/prompts.py` — system prompt construction and `AGENTS.md` project context
 - `remie/protocol.py` — parser for text-based tool calls used by compatible providers
 - `remie/tokens.py` — token estimation helpers
 - `remie/codex_auth.py` — ChatGPT OAuth (PKCE) sign-in, token storage in `~/.codex/auth.json`, and refresh
 - `remie/codex_client.py` — streaming client for the ChatGPT-subscription Codex Responses backend
 - `remie/openrouter_client.py` — httpx streaming client for OpenRouter with native function calling
 - `remie/tools/` — model-callable tools, schemas, command safety, and the injected tool executor
-- `remie/storage/` — project-local chat and durable-memory persistence
+- `remie/storage/` — project-local chat persistence
 - `remie/tui/` — the Textual frontend, rendering, widgets, and modal screens

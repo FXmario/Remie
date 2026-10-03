@@ -50,6 +50,7 @@ from remie.tokens import (
     estimate_tokens,
 )
 from remie.storage.chats import (
+    CHAT_NAME_MAX_CHARS,
     DEFAULT_CHAT_NAME,
     create_chat,
     find_chat_by_id,
@@ -57,7 +58,6 @@ from remie.storage.chats import (
     load_latest_chat,
     rename_chat,
 )
-from remie.storage.memories import MEMORY_NAME_MAX_CHARS, ensure_active_memory
 from remie.storage.tabs import load_tab_layout, new_tab, save_tab_layout
 from remie.tools.common import tool_working_directory
 from remie.tools.executor import ToolExecutor, execute_tool_call
@@ -76,7 +76,7 @@ from remie.tui.constants import (
 from remie.tui.css import CSS
 from remie.tui.helpers import (
     _detect_terminal_background,
-    _fallback_memory_name,
+    _fallback_chat_name,
     _has_tool_call,
     _preview_window,
     _safe_reasoning_markdown,
@@ -88,7 +88,6 @@ from remie.tui.render import _render_diff, _render_tool_call, _render_tool_resul
 from remie.tui.screens.ask_user import AskUserScreen
 from remie.tui.screens.chats import ChatScreen
 from remie.tui.screens.connection import ConnectionScreen
-from remie.tui.screens.memory import MemoryScreen
 from remie.tui.screens.models import ModelScreen
 from remie.tui.screens.open import OpenScreen
 from remie.tui.slash_commands import is_slash_command_token, resolve_slash_command
@@ -438,7 +437,6 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
 
     def on_mount(self) -> None:
         self.sub_title = ""
-        ensure_active_memory()
         # Keep only tabs whose project-local chats still exist. Prefer the
         # persisted active tab, then another open tab, then the latest history.
         valid_tabs = []
@@ -661,7 +659,7 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
         return get_config().provider in {"codex", "openrouter"}
 
     def _refresh_system_prompt(self) -> None:
-        """Rebuild the system message from the current prompt (incl. memory) and
+        """Rebuild the system message from the current prompt and
         keep the conversation token cache in sync."""
         new_system = {
             "role": "system",
@@ -703,9 +701,9 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
             ]
         )
         if title:
-            name = title[:MEMORY_NAME_MAX_CHARS].rstrip()
+            name = title[:CHAT_NAME_MAX_CHARS].rstrip()
         elif current_name.startswith(DEFAULT_CHAT_NAME):
-            name = _fallback_memory_name(user_content)
+            name = _fallback_chat_name(user_content)
         else:
             return
         if not name or name.casefold() == current_name.casefold():
@@ -902,7 +900,6 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
             self.notify(f"Working directory: {directory}", title="Change directory")
             return
         screens = {
-            "memories": MemoryScreen,
             "chats": ChatScreen,
             "connect": ConnectionScreen,
             "models": ModelScreen,
@@ -981,7 +978,7 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
         """Trim old context when the window is nearly full so long tasks continue.
 
         The messages being dropped are summarized into a compact "session
-        memory" note that stays in the conversation; the terse omitted-note
+        summary" note that stays in the conversation; the terse omitted-note
         fallback is used when the summary call fails or yields nothing.
         """
         if len(self.conversation) <= 2:
@@ -1298,7 +1295,7 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
                         )
                     )
                 for name, args in tool_invocations:
-                    replacements.append(_render_tool_call(name, args))
+                    replacements.append(_render_tool_call(name, args, self._code_theme()))
                 log.replace_stream(*replacements)
                 if native_tool_calling:
                     extra = self._agent_runner.assistant_metadata(
@@ -1340,12 +1337,6 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
                         log.write(
                             f"[bold magenta]tool_result:[/] {escape(result_json)}"
                         )
-                    if (
-                        name == "memory"
-                        and isinstance(result, dict)
-                        and (result.get("action") in {"add", "clear"})
-                    ):
-                        self._refresh_system_prompt()
                     call_id = call.id
                     if call_id:
                         # Codex native tool calling: results replay as
@@ -1451,7 +1442,7 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
                 self._agent_task.cancel()
 
     async def action_open_management(self) -> None:
-        """Open Chats, Memories, Providers, and Models in one tabbed modal."""
+        """Open Chats, Providers, and Models in one tabbed modal."""
         if self._agent_running:
             return
         await self.push_screen(OpenScreen())
@@ -1462,11 +1453,6 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
             return
         await self.push_screen(ConnectionScreen())
 
-    async def action_open_memory(self) -> None:
-        """Open the memory picker. Ignored while the agent is busy."""
-        if self._agent_running:
-            return
-        await self.push_screen(MemoryScreen())
 
     async def action_open_chats(self) -> None:
         """Open the chat history picker. Ignored while the agent is busy."""
