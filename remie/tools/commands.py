@@ -7,6 +7,7 @@ from typing import Any
 
 import remie.tools as _tools_pkg
 from remie.tools.common import resolve_abs_path
+from remie.tools.sandbox import SandboxError
 
 def _env_int(name: str, default: int) -> int:
     try:
@@ -150,10 +151,15 @@ def run_command_tool(
             "truncated": False,
         }
     try:
+        from remie.tools.sandbox import command_launch
+
+        launch, environment = command_launch(command, full_path)
+        launch_options = {} if environment is None else {"env": environment}
         result = subprocess.run(
-            command,
+            launch,
             cwd=str(full_path),
-            shell=True,
+            shell=isinstance(launch, str),
+            **launch_options,
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -162,6 +168,12 @@ def run_command_tool(
         exit_code = result.returncode
         stdout, stderr = result.stdout, result.stderr
         timed_out = False
+    except (SandboxError, OSError) as error:
+        return {
+            "command": command, "cwd": str(full_path), "exit_code": None,
+            "stdout": "", "stderr": f"Command launch failed: {error}",
+            "timed_out": False, "truncated": False,
+        }
     except subprocess.TimeoutExpired as error:
         exit_code = TIMED_OUT_EXIT_CODE
         stdout = error.stdout or ""

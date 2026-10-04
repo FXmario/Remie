@@ -319,3 +319,39 @@ extension guide, see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 - `remie/tools/` — model-callable tools, schemas, command safety, and the injected tool executor
 - `remie/storage/` — project-local chat persistence
 - `remie/tui/` — the Textual frontend, rendering, widgets, and modal screens
+
+### Linux command sandbox
+
+On Linux, `run_command` and all `run_test_shards` command workers run inside
+Bubblewrap by default. Install it with `sudo apt install bubblewrap` (Debian/Ubuntu)
+or your distribution's equivalent. The host must permit Bubblewrap namespaces;
+launch failures are returned without an unsandboxed retry.
+
+The active tab's project root is writable, system executables/libraries are
+read-only, and temporary storage, home, process namespace, and devices are
+private. Host home files and inherited credentials are not exposed. Only PATH,
+HOME, TMPDIR, and LANG are passed to commands. Tools installed only in your home
+(e.g. rustup/nvm) and virtualenvs linked to interpreters outside the exposed
+system directories may therefore be unavailable. Project files—including any
+secrets stored inside the project—remain accessible. External Git worktree
+metadata is mounted read-only: status works, but commits and other metadata
+writes can fail. Symlinks do not grant access to unmounted host paths.
+
+Networking is blocked by default. To allow command networking explicitly:
+
+```sh
+REMIE_SANDBOX_NETWORK=on remie
+```
+
+To explicitly disable command sandboxing (removes this security boundary):
+
+```sh
+REMIE_SANDBOX=off remie
+```
+
+This is **command isolation, not full-agent isolation**. Python file tools,
+web tools (including curl), and internal workspace-management Git operations
+run outside this sandbox and retain their existing permission behavior.
+macOS and Windows continue using the existing unsandboxed command runner.
+The sandbox is not a VM or a resource quota and does not prevent destructive
+changes within the project. Existing destructive-command checks still apply.

@@ -280,7 +280,8 @@ class TestRunCommandTool:
         assert result["stderr"].strip() == "oops"
         assert result["stdout"] == ""
 
-    def test_runs_in_given_cwd(self, tmp_path):
+    def test_runs_in_given_cwd(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)  # Establish the active sandbox workspace.
         (tmp_path / "marker.txt").write_text("x", encoding="utf-8")
         result = run_command_tool("ls marker.txt", cwd=str(tmp_path))
         assert result["exit_code"] == 0
