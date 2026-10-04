@@ -898,6 +898,52 @@ def test_truncation_continuation_limit(monkeypatch):
     asyncio.run(exercise())
 
 
+@pytest.mark.parametrize("key, expected", [("1", "yes"), ("escape", None)])
+def test_background_question_on_tab_switch(tmp_path, monkeypatch, key, expected):
+    monkeypatch.chdir(tmp_path)
+
+    async def exercise():
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            original = app._active_tab_id
+            app.action_new_chat()
+            await pilot.pause()
+            foreground = app._active_tab_id
+            runtime = app._runtimes[original]
+
+            async def ask_in_background():
+                token = app._task_tab.set(original)
+                try:
+                    return await app._ask_user_for_tool("Continue?", ["yes", "no"])
+                finally:
+                    app._task_tab.reset(token)
+
+            task = asyncio.create_task(ask_in_background())
+            try:
+                await pilot.pause()
+                assert app._active_tab_id == foreground
+                assert not isinstance(app.screen, AskUserScreen)
+                assert runtime.status == "waiting_for_user"
+                assert runtime.pending_question == ("Continue?", ["yes", "no"])
+                assert app.switch_tab(original)
+                await pilot.pause()
+                assert isinstance(app.screen, AskUserScreen)
+                assert runtime.pending_question is None
+                assert not task.done()
+                await pilot.press(key)
+                await pilot.pause()
+                assert await asyncio.wait_for(task, 2) == expected
+                assert runtime.pending_answer is None
+                assert not isinstance(app.screen, AskUserScreen)
+                assert app._runtimes[foreground].pending_answer is None
+            finally:
+                if not task.done():
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+
+    asyncio.run(exercise())
+
+
 def test_ask_user_modal_renders_question_and_options():
     async def exercise():
         app = AgentApp()

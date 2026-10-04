@@ -407,12 +407,24 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
         self.sub_title = self._tab_header_title(tab_id)
         if runtime.pending_question and runtime.pending_answer:
             question, options = runtime.pending_question
-            answer = await self.push_screen_wait(AskUserScreen(question, options))
-            if not runtime.pending_answer.done():
-                runtime.pending_answer.set_result(answer)
+            pending_answer = runtime.pending_answer
+            # Tab switches run in a message callback, not a Textual worker.
+            # Claim the question before pushing so another switch cannot show
+            # the same dialog while this one is awaiting dismissal.
             runtime.pending_question = None
-            runtime.pending_answer = None
-            runtime.status = "working"
+
+            def answer_pending_question(answer: str | None) -> None:
+                if runtime.pending_answer is not pending_answer:
+                    return
+                runtime.pending_answer = None
+                if not pending_answer.done():
+                    runtime.status = "working"
+                    pending_answer.set_result(answer)
+                self._refresh_tabs()
+
+            self.push_screen(
+                AskUserScreen(question, options), answer_pending_question
+            )
         self._refresh_tabs()
 
     def _code_theme(self) -> str:
