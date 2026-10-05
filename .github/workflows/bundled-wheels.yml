@@ -1,0 +1,41 @@
+name: Build bundled Linux wheels
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha256:
+        description: Independently reviewed SHA-256 of Bubblewrap 0.11.0 release tarball
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  wheel:
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build static helper and platform wheel
+        env:
+          BWRAP_SHA256: ${{ inputs.source_sha256 }}
+        run: |
+          docker run --rm -e BWRAP_SHA256 -v "$PWD:/src" -w /src alpine:3.22 sh scripts/build-bubblewrap.sh
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - name: Verify installed wheel without system Bubblewrap
+        run: |
+          python -m venv /tmp/remie-wheel
+          /tmp/remie-wheel/bin/pip install dist/*.whl pytest
+          cp scripts/check-installed-sandbox.py /tmp/check-installed-sandbox.py
+          cd /tmp
+          /tmp/remie-wheel/bin/python /tmp/check-installed-sandbox.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: remie-linux-${{ matrix.arch }}
+          path: dist/*.whl

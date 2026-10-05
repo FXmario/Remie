@@ -1,6 +1,7 @@
 """Linux command sandbox. This does not sandbox Python tools or the agent."""
 
 import os
+import platform
 from pathlib import Path
 import shutil
 import sys
@@ -10,6 +11,22 @@ from remie.tools.common import _project_root, tool_working_directory
 
 class SandboxError(RuntimeError):
     pass
+
+
+_VENDOR_ROOT = Path(__file__).resolve().parents[1] / "_vendor" / "bubblewrap"
+
+
+def find_bubblewrap() -> str | None:
+    """Prefer the packaged helper; never bypass a broken bundled helper."""
+    architecture = {"amd64": "x86_64", "x86_64": "x86_64",
+                    "arm64": "aarch64", "aarch64": "aarch64"}.get(platform.machine().lower())
+    if architecture:
+        bundled = _VENDOR_ROOT / f"linux-{architecture}" / "bwrap"
+        if os.path.lexists(bundled):
+            if not bundled.is_file() or not os.access(bundled, os.X_OK):
+                raise SandboxError(f"Bundled Bubblewrap is not executable: {bundled}")
+            return str(bundled)
+    return shutil.which("bwrap")
 
 
 def command_launch(command: str, cwd: Path) -> tuple[str | list[str], dict[str, str] | None]:
@@ -22,7 +39,7 @@ def command_launch(command: str, cwd: Path) -> tuple[str | list[str], dict[str, 
     network = os.environ.get("REMIE_SANDBOX_NETWORK", "off").lower()
     if network not in {"on", "off"}:
         raise SandboxError("REMIE_SANDBOX_NETWORK must be 'on' or 'off'")
-    executable = shutil.which("bwrap")
+    executable = find_bubblewrap()
     if not executable:
         raise SandboxError("Linux sandbox requires bubblewrap (bwrap). Install it or explicitly set REMIE_SANDBOX=off.")
     root = _project_root(tool_working_directory.get() or Path.cwd()).resolve()

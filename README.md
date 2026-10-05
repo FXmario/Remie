@@ -336,8 +336,10 @@ extension guide, see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 ### Linux command sandbox
 
 On Linux, `run_command` and all `run_test_shards` command workers run inside
-Bubblewrap by default. Install it with `sudo apt install bubblewrap` (Debian/Ubuntu)
-or your distribution's equivalent. The host must permit Bubblewrap namespaces;
+Bubblewrap by default. Bundled Linux release wheels include a static Bubblewrap
+helper for x86-64 or ARM64, preferred over the system executable. Source installs
+and unbundled wheels use system `bwrap`: install it with
+`sudo apt install bubblewrap` (Debian/Ubuntu) or your distribution's equivalent. The host must permit Bubblewrap namespaces;
 launch failures are returned without an unsandboxed retry.
 
 The active tab's project root is writable, system executables/libraries are
@@ -368,3 +370,27 @@ run outside this sandbox and retain their existing permission behavior.
 macOS and Windows continue using the existing unsandboxed command runner.
 The sandbox is not a VM or a resource quota and does not prevent destructive
 changes within the project. Existing destructive-command checks still apply.
+
+### Building bundled Linux wheels
+
+Run the **Build bundled Linux wheels** GitHub Actions workflow manually with an
+independently reviewed SHA-256 for the upstream Bubblewrap 0.11.0 release tarball.
+The workflow verifies the download, builds a non-setuid static helper in Alpine
+for native x86-64 and ARM64 runners, includes its license/source provenance, and
+uploads platform-specific wheels. It does not publish them automatically.
+Review and test artifacts before publishing; bundling does not bypass host
+namespace restrictions. Maintain the pinned Bubblewrap version and checksum as
+part of security updates. No binary is committed to this repository.
+
+For a local build on a supported Linux architecture:
+
+```sh
+BWRAP_SHA256=<reviewed-sha256> docker run --rm \
+  -e BWRAP_SHA256 -v "$PWD:/src" -w /src alpine:3.22 \
+  sh scripts/build-bubblewrap.sh
+```
+
+The build requires Docker and network access. Wheels are tagged `linux_x86_64`
+or `linux_aarch64`, not manylinux: only the helper is statically linked. Keep
+source distributions free of staged vendor binaries. A broken bundled helper
+fails closed rather than silently switching to a different executable.

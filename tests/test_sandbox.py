@@ -62,3 +62,39 @@ def test_real_isolation(workspace, monkeypatch):
     assert result["exit_code"] == 0, result
     assert (workspace / "allowed").read_text() == "ok\n"
     assert run_command_tool("sleep 10", str(workspace), 1)["timed_out"]
+
+
+def test_bundled_discovery(tmp_path, monkeypatch):
+    from remie.tools import sandbox
+    monkeypatch.setattr(sandbox, "_VENDOR_ROOT", tmp_path)
+    monkeypatch.setattr(sandbox.platform, "machine", lambda: "AMD64")
+    monkeypatch.setattr(shutil, "which", lambda _: "/system/bwrap")
+    assert sandbox.find_bubblewrap() == "/system/bwrap"
+    helper = tmp_path / "linux-x86_64" / "bwrap"
+    helper.parent.mkdir()
+    helper.write_text("helper")
+    helper.chmod(0o755)
+    assert sandbox.find_bubblewrap() == str(helper)
+    helper.chmod(0o644)
+    with pytest.raises(SandboxError, match="not executable"):
+        sandbox.find_bubblewrap()
+
+
+def test_unknown_arch_uses_system(tmp_path, monkeypatch):
+    from remie.tools import sandbox
+    monkeypatch.setattr(sandbox, "_VENDOR_ROOT", tmp_path)
+    monkeypatch.setattr(sandbox.platform, "machine", lambda: "unknown")
+    monkeypatch.setattr(shutil, "which", lambda _: None)
+    assert sandbox.find_bubblewrap() is None
+
+
+def test_broken_bundled_symlink_fails_closed(tmp_path, monkeypatch):
+    from remie.tools import sandbox
+    monkeypatch.setattr(sandbox, "_VENDOR_ROOT", tmp_path)
+    monkeypatch.setattr(sandbox.platform, "machine", lambda: "aarch64")
+    monkeypatch.setattr(shutil, "which", lambda _: "/system/bwrap")
+    helper = tmp_path / "linux-aarch64" / "bwrap"
+    helper.parent.mkdir()
+    helper.symlink_to(tmp_path / "missing")
+    with pytest.raises(SandboxError, match="not executable"):
+        sandbox.find_bubblewrap()
