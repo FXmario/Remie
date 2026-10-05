@@ -246,8 +246,10 @@ outside Git), so you can see which workspace the tab uses.
   current tab's workspace.
 - **Close or delete:** closing a linked-worktree tab offers **Keep**, **Delete**,
   or **Cancel**. The picker also offers **Delete worktree** for unused linked
-  worktrees. Deletion preserves the Git branch and refuses dirty or locked
-  worktrees. The main worktree and any worktree containing Remie's launch
+  worktrees. Deletion removes the entire linked-worktree folder (including
+  when the tab is in a subdirectory) and its Git worktree registration, but
+  preserves the Git branch. **Keep** leaves the folder intact. Deletion refuses
+  dirty or locked worktrees. The main worktree and any worktree containing Remie's launch
   directory are protected; to delete the latter, restart Remie from the main
   worktree first.
 - **Readable folder names:** generated worktree folders initially have temporary

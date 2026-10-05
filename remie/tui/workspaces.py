@@ -29,7 +29,8 @@ def separate_workspace(directory: Path, tab_id: str) -> Path:
     Git worktrees use a branch from HEAD (uncommitted changes are not copied).
     Worktrees live beside the repository rather than inside its working tree.
     Paths and branch names include the tab UUID so existing directories are
-    never reused or overwritten; closing a tab does not delete its files.
+    never reused or overwritten; closing a tab keeps its files unless the user
+    explicitly chooses to delete the linked worktree.
     """
     directory = directory.resolve()
     workspace_id = f"{tab_id}-{uuid.uuid4().hex[:8]}"
@@ -117,6 +118,7 @@ def linked_worktree(directory: Path) -> dict | None:
 
 
 def remove_worktree(directory: Path) -> None:
+    """Delete a linked worktree and its root folder, never the main worktree."""
     item = linked_worktree(directory)
     if item is None:
         raise WorkspaceError("Only linked worktrees can be deleted; the main worktree is protected.")
@@ -126,6 +128,11 @@ def remove_worktree(directory: Path) -> None:
         raise WorkspaceError("Worktree has uncommitted/untracked files or is locked. Save or clean it first.")
     main = list_worktrees(directory)[0]["path"]
     _git(main, "worktree", "remove", str(item["path"]))
+    if item["path"].exists() or item["path"].is_symlink():
+        raise WorkspaceError(
+            f"Git worktree removal left its folder behind: {item['path']}. "
+            "Check the folder before removing it manually."
+        )
 
 
 def name_worktree(directory: Path, title: str) -> Path:

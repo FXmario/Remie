@@ -305,6 +305,7 @@ class ChatSessionMixin:
             return
         answer = await self.push_screen_wait(self._make_ask_screen(
             f'Close this tab in {item["path"]}? Committed work stays on its Git branch. '
+            'Delete removes the entire worktree folder; Keep leaves it intact. '
             'Use /list worktree to reopen or delete kept worktrees later.',
             ["Keep worktree and close tab", "Delete worktree and close tab", "Cancel"]))
         if answer == "Keep worktree and close tab":
@@ -353,7 +354,7 @@ class ChatSessionMixin:
                 self.notify("Close tabs using this worktree before deleting it.", severity="warning")
                 return
             answer = await self.push_screen_wait(self._make_ask_screen(
-                f"Delete {path}? The Git branch will be kept.", ["Delete worktree", "Cancel"]))
+                f"Delete {path} and its entire folder? The Git branch will be kept.", ["Delete worktree", "Cancel"]))
             if answer == "Delete worktree":
                 try:
                     remove_worktree(path)

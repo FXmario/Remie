@@ -378,3 +378,41 @@ def test_delete_final_linked_tab_reopens_main(tmp_path, monkeypatch):
             assert len(app._tab_layout["tabs"]) == 1
             assert Path(app._runtime().working_directory) == root
     asyncio.run(exercise())
+
+
+def test_delete_from_subdirectory_removes_entire_linked_folder(tmp_path):
+    from remie.tui.workspaces import list_worktrees, remove_worktree
+
+    root = make_repository(tmp_path)
+    (root / "sub").mkdir()
+    (root / "sub" / "nested.txt").write_text("committed")
+    git("add", ".", cwd=root)
+    git("-c", "user.name=Test", "-c", "user.email=test@example.com",
+        "commit", "-qm", "nested file", cwd=root)
+    linked = separate_workspace(root, "delete-nested")
+    other = separate_workspace(root, "keep-other")
+    remove_worktree(linked / "sub")
+    assert not linked.exists()
+    assert {item["path"] for item in list_worktrees(root)} == {root, other}
+    assert (root / "sub" / "nested.txt").read_text() == "committed"
+    with pytest.raises(WorkspaceError, match="main worktree is protected"):
+        remove_worktree(root / "sub")
+    assert root.is_dir() and other.is_dir()
+
+
+def test_delete_reports_folder_left_by_git(tmp_path, monkeypatch):
+    import remie.tui.workspaces as workspaces
+
+    root = make_repository(tmp_path)
+    linked = separate_workspace(root, "leftover")
+    real_git = workspaces._git
+
+    def leave_folder(directory, *args):
+        if args[:2] == ("worktree", "remove"):
+            return ""
+        return real_git(directory, *args)
+
+    monkeypatch.setattr(workspaces, "_git", leave_folder)
+    with pytest.raises(WorkspaceError, match="left its folder behind"):
+        workspaces.remove_worktree(linked)
+    assert linked.is_dir() and root.is_dir()
