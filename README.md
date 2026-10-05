@@ -78,9 +78,15 @@ model’s live catalog metadata, falling back to 32,768 when unavailable. OpenCo
 Go and local servers retain their built-in limits; Codex leaves the limit to its
 backend.
 
-The following environment variables control runtime behavior and storage.
-Remie does not load `.env` files. Set these variables in your shell or process
-environment before launching Remie, for example:
+### Environment variables (no `.env` support)
+
+Remie no longer loads `.env` files. Configure provider connections through
+`/connect`; those settings are saved in `~/.config/remie/config.json`, not in a
+`.env` file.
+
+The following environment variables control runtime behavior and storage. Set
+them directly in your shell or process environment before launching Remie, for
+example:
 
 ```bash
 REMIE_DEBUG=1 remie
