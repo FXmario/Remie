@@ -1,7 +1,6 @@
 """Backward-compatible facade over Remie's focused core modules."""
 
 # Imports in this facade intentionally re-export the historical public API.
-# dotenv must load before config.py evaluates environment-backed defaults.
 # ruff: noqa: E402, F401
 
 import json
@@ -10,10 +9,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
-from dotenv import load_dotenv
 from remie.model_names import ModelInfo
-
-load_dotenv()
 
 from remie.config import (
     CONFIG_DIR,
