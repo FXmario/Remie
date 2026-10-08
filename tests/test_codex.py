@@ -1110,7 +1110,7 @@ def test_agent_routes_codex_provider_through_codex_stream(monkeypatch):
         assert calls["model"] == "gpt-5.5"
         assert calls["effort"] == "high"
         tool_names = [tool["name"] for tool in calls["tools"]]
-        assert "read_file" in tool_names and "memory" not in tool_names
+        assert "read_file" in tool_names and "memory" in tool_names
         assert all(tool["type"] == "function" for tool in calls["tools"])
         assert box == [{"id": "c9", "name": "list_files", "arguments": "{}"}]
         assert agent.get_full_system_prompt(native_tools=True).count("'thinking:'") == 0

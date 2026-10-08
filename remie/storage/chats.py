@@ -192,6 +192,7 @@ def save_chat(
     token_usage: dict[str, int] | None = None,
     *,
     keep_empty: bool = False,
+    memory_scope: dict[str, str] | None = None,
 ) -> dict[str, Any] | None:
     """Persist a chat's resumable context and visible transcript.
 
@@ -216,6 +217,20 @@ def save_chat(
         "context_messages": context_messages,
         "transcript": transcript,
     }
+    if memory_scope is not None:
+        payload["memory_scope"] = memory_scope
+        # Keep per-message ownership when a tab changes projects mid-chat.
+        payload["transcript"] = [
+            {**message, "memory_scope": message.get("memory_scope", memory_scope)}
+            for message in transcript
+        ]
+    elif path.is_file():
+        try:
+            previous = json.loads(path.read_text(encoding="utf-8"))
+            if "memory_scope" in previous:
+                payload["memory_scope"] = previous["memory_scope"]
+        except (OSError, UnicodeError, ValueError):
+            pass
     if token_usage is not None:
         payload["token_usage"] = token_usage
     _write_json_atomic(path, payload)

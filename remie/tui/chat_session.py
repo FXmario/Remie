@@ -32,6 +32,9 @@ class ChatSessionMixin:
             # Never persist an unanswered tool call: a resumed chat would then
             # replay a dangling function_call forever (persistent 400).
             self._close_dangling_tool_calls()
+            memory_scope = self._tab_prompt_context()["memory_scope"]
+            for message in self._transcript:
+                message.setdefault("memory_scope", memory_scope)
             save_chat(
                 self._chat_id,
                 self.conversation,
@@ -41,6 +44,7 @@ class ChatSessionMixin:
                     "output_tokens": self._total_output_tokens,
                 },
                 keep_empty=True,
+                memory_scope=memory_scope,
             )
 
     def on_unmount(self) -> None:

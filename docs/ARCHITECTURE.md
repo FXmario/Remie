@@ -109,7 +109,9 @@ For Codex and OpenRouter, tool schemas travel separately in the API request, so
 the prompt tells the model to use native function calls instead.
 
 The prompt is rebuilt before each user turn. Project context comes from
-`AGENTS.md`; no separate persistent agent-note store is loaded into the prompt.
+`AGENTS.md`, plus a frozen scoped Markdown memory snapshot. Ordinary prompt
+refreshes do not reload memory; `/memory reload` invalidates the active runtime's
+snapshot cache. Scope keys combine project identity and chat identity.
 
 ## 5. User-message flow
 
@@ -535,3 +537,35 @@ Persistence
 
 Start from the first incorrect boundary rather than patching the final visible
 symptom. Add a regression test at that boundary before changing behavior.
+
+
+## Scoped memory and FTS5 recall (Plan A)
+
+`remie/storage/memory.py` owns Markdown persistence, canonical project identities,
+and SQLite FTS5 indexing. `remie/tools/memory.py` supplies lazy registry adapters
+for `memory` and `history_search` (avoiding registry/storage import cycles).
+`ToolExecutor` gates all model-requested memory writes with user approval.
+
+Global notes are in `$REMIE_HOME/memory/USER.md`; project notes and tab notes are
+under `memory/projects/<project-id>/`. Limits are configurable per scope. Writes
+use unique temporary files and atomic replacement, with thread locking and Unix
+advisory process locking. Non-Unix platforms currently provide thread locking
+only. Linked Git worktrees share the common repository's identity; generated
+non-Git workspaces inherit their source project's identity.
+
+`TabRuntime.memory_snapshots` keeps prompt memory stable across turns.
+`message_worker` binds project/tab/chat identity through a ContextVar, which
+propagates through `asyncio.to_thread`, so background tools never use the
+foreground tab's scope. Transcript messages carry scope metadata separately
+from model context. JSON chats remain authoritative and retain existing
+save/restore/compaction behavior. Existing chat format versions remain readable.
+
+Search rebuilds only the selected project's FTS5 rows from saved JSON transcripts
+inside a SQLite transaction. The index is disposable, supports legacy backfill,
+and reflects deletions on the next search. Default filtering is the current tab;
+project-wide search is explicit and cross-project search is unavailable. Literal
+keyword queries, BM25 ranking, bounded snippets, and source metadata are exposed
+to the model. FTS5 failures do not affect chat saving or Markdown memory.
+
+See the README's **Memory and history search** section for user examples,
+configuration, privacy boundaries, and recovery instructions.

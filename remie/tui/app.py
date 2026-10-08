@@ -152,6 +152,7 @@ class TabRuntime:
     tab_id: str
     chat_id: str | None = None
     working_directory: str | None = None
+    memory_snapshots: dict[str, str] = field(default_factory=dict)
     conversation: list[dict[str, Any]] = field(default_factory=list)
     transcript: list[dict[str, Any]] = field(default_factory=list)
     cached_conv_tokens: int = 0
@@ -605,6 +606,17 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
         }
 
     def _tab_prompt_context(self) -> dict[str, object]:
+        from remie.storage.memory import scope_context, memory_snapshot
+
+        runtime = self._runtime()
+        directory = Path(runtime.working_directory or Path.cwd())
+        tab = next((item for item in self._tab_layout.get("tabs", []) if item["id"] == runtime.tab_id), {})
+        source = Path(tab.get("workspace_source") or directory)
+        memory_scope = scope_context(source, runtime.tab_id, runtime.chat_id or "")
+        key = memory_scope["project_id"] + ":" + (runtime.chat_id or "")
+        if key not in runtime.memory_snapshots:
+            runtime.memory_snapshots[key] = memory_snapshot(memory_scope)
+        snapshot = runtime.memory_snapshots[key]
         tabs = self._tab_layout.get("tabs", [])
         index = next(
             (i for i, tab in enumerate(tabs, 1) if tab["id"] == self._runtime().tab_id),
@@ -624,6 +636,8 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
             })
         return {
             "working_directory": self._runtime().working_directory or str(Path.cwd().resolve()),
+            "memory_scope": memory_scope,
+            "memory_snapshot": snapshot,
             "tab_count": max(1, len(tabs)),
             "active_index": index,
             "active_title": self._tab_title(self._runtime().tab_id),
@@ -875,6 +889,12 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
                 severity="warning",
             )
             return
+        if name == "memory reload":
+            self._runtime().memory_snapshots.clear()
+            self._refresh_system_prompt()
+            self._save_current_chat()
+            self.notify("Memory snapshot refreshed for this tab", title="Memory")
+            return
         if name in {"change worktree", "list worktree"}:
             self.run_worker(self._pick_worktree(), exclusive=False)
             return
@@ -894,6 +914,7 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
             except WorkspaceError as error:
                 self.notify(str(error), title="Change directory", severity="error")
                 return
+            self._save_current_chat()  # preserve old scope before changing projects
             self._runtime().working_directory = str(directory)
             for tab in self._tab_layout["tabs"]:
                 if tab["id"] == self._runtime().tab_id:
@@ -929,6 +950,8 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
         token = self._task_tab.set(tab_id)
         directory = self._runtime().working_directory
         directory_token = tool_working_directory.set(Path(directory) if directory else None)
+        from remie.storage.memory import memory_context
+        memory_token = memory_context.set(self._tab_prompt_context()["memory_scope"])
         try:
             while True:
                 user_content = await self._input_queue.get()
@@ -948,6 +971,7 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
                     self._widget(PromptTextArea).focus()
             except Exception:
                 pass
+            memory_context.reset(memory_token)
             tool_working_directory.reset(directory_token)
             self._task_tab.reset(token)
 
@@ -972,7 +996,7 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
             message.update(extra)
         self.conversation.append(message)
         if role != "system":
-            self._transcript.append(message)
+            self._transcript.append({**message, "memory_scope": self._tab_prompt_context()["memory_scope"]})
         self._cached_conv_tokens += estimate_message_tokens(message)
         self._widget(ModelBadge).set_context(
             self._cached_conv_tokens, self._context_limit()

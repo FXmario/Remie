@@ -563,7 +563,7 @@ def test_agent_routes_openrouter_with_native_tools(monkeypatch):
         assert calls["effort"] == "medium"
         assert calls["max_tokens"] == 128000
         names = [tool["name"] for tool in calls["tools"]]
-        assert "read_file" in names and "memory" not in names
+        assert "read_file" in names and "memory" in names
         assert box == [{"id": "c1", "name": "read_file", "arguments": "{}"}]
 
         # Live context windows feed compaction.

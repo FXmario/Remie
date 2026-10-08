@@ -16,7 +16,11 @@ from remie.tools.test_runner import run_test_shards_tool
 from remie.tools.tabs import tab_status_tool
 from remie.tools.web import web_fetch_tool, web_search_tool
 
+from remie.tools.memory import memory_tool, history_search_tool
+
 TOOL_REGISTRY = {
+    "memory": memory_tool,
+    "history_search": history_search_tool,
     "read_file": read_file_tool,
     "list_files": list_files_tool,
     "edit_file": edit_file_tool,
@@ -31,6 +35,8 @@ TOOL_REGISTRY = {
 }
 
 TOOL_SUMMARIES = {
+    "memory": "inspect or update scoped memory",
+    "history_search": "search saved conversation history",
     "read_file": "read a file",
     "list_files": "list the files in a directory",
     "edit_file": "edit a file",
@@ -64,6 +70,24 @@ def get_tool_str_representation(tool_name: str) -> str:
 # JSON Schema for each tool's arguments, used for native function calling
 # (Responses API) where the model receives structured tool definitions.
 TOOL_PARAMETERS = {
+    "memory": {
+        "type": "object",
+        "properties": {
+            "action": {"type": "string", "enum": ["read", "add", "replace", "remove"]},
+            "scope": {"type": "string", "enum": ["global", "project", "tab"]},
+            "content": {"type": "string", "description": "Complete entry for add/replace."},
+            "old_text": {"type": "string", "description": "Unique substring identifying an entry for replace/remove."},
+        },
+    },
+    "history_search": {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string"},
+            "scope": {"type": "string", "enum": ["tab", "project"]},
+            "limit": {"type": "integer"},
+        },
+        "required": ["query"],
+    },
     "read_file": {
         "type": "object",
         "properties": {

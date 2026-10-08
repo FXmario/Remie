@@ -24,7 +24,8 @@ The Local connector targets an OpenAI-compatible `/chat/completions` server. Man
 - Tools: `read_file`, `list_files`, `glob_files`, `tree_files`, `edit_file`, `run_command`, `ask_user`, `web_fetch`, `web_search`
 - **Web access via curl** — `web_fetch` fetches any http(s) URL (custom method, headers, body; HTML is reduced to readable text, other types returned raw, or saved to disk with `save_to`), and `web_search` searches DuckDuckGo's HTML endpoint with automatic Bing fallback when DuckDuckGo is unreachable — both no API key needed. Responses are size-capped and truncated before they reach the context window; timeout configurable with `REMIE_WEB_TIMEOUT`
 - **Outside-project permissions** — file operations, download destinations, command working directories, and explicit paths in shell commands require one-time approval when they resolve outside the active project. Every outside-project operation prompts separately.
-- **Context compaction** — when a long task nears the context window, dropped messages are summarized into a compact summary in the current conversation instead of being silently truncated. This summary belongs to the chat; there is no separate persistent agent-note store.
+- **Context compaction** — when a long task nears the context window, dropped messages are summarized into a compact summary in the current conversation instead of being silently truncated. This summary belongs to the chat and remains separate from durable memory.
+- **Scoped memory and recall** — small Markdown memories for global preferences, shared project knowledge, and private tab notes. The `memory` tool asks approval before writing; `history_search` uses SQLite FTS5 over saved JSON chats, defaults to the current tab, and supports explicitly requested project-wide recall. `/memory reload` refreshes the active tab’s frozen memory snapshot. See [Memory and history search](#memory-and-history-search).
 - **Chat history** — every conversation is saved per project under `~/.remie/projects/<project-id>/chats/`. Launching Remie restores the persisted tab layout or latest chat; `/chats` opens a picker to switch, create, or delete chats. A chat is adaptively auto-titled after completed tasks; `Ctrl+L` opens a new chat while keeping previous chats. Existing project-local `.remie` data is migrated automatically on first launch. Set `REMIE_HOME` to override `~/.remie`.
 - **Slash commands** — type `/` to open an anchored command menu for `/chats`, `/connect`, `/models`, `/change dir`, `/change worktree`, and `/list worktree`. The first match is highlighted automatically; use Up/Down, Tab, Enter, hover, or click to choose. Commands are handled locally rather than sent to the model.
 - **Codex (ChatGPT Plus/Pro)** — sign in with a ChatGPT subscription via the native OAuth flow and use the models available to your account without an API key, Codex CLI installation, or local Node.js runtime. Remie dynamically uses the current official Codex client version when requesting the live catalog so newly released models are not hidden by stale discovery metadata.
@@ -394,3 +395,82 @@ The build requires Docker and network access. Wheels are tagged `linux_x86_64`
 or `linux_aarch64`, not manylinux: only the helper is statically linked. Keep
 source distributions free of staged vendor binaries. A broken bundled helper
 fails closed rather than silently switching to a different executable.
+
+
+## Memory and history search
+
+Remie keeps existing JSON chat storage as the source of truth (Plan A).
+Markdown memories supplement conversation context, compaction, and `AGENTS.md`;
+SQLite is only a disposable keyword-search index, not a vector database.
+
+### Scopes and storage
+
+Under `~/.remie` (or `$REMIE_HOME`):
+
+```text
+memory/USER.md                                # global preferences
+memory/projects/<project-id>/MEMORY.md        # shared project facts
+memory/projects/<project-id>/tabs/<tab-id>/MEMORY.md
+history.sqlite                               # rebuildable FTS5 index
+projects/<project-id>/chats/*.json            # authoritative chats, unchanged format version
+```
+
+Projects use canonical path identities. Linked Git worktrees share their main
+repository's memory identity, and generated non-Git tab workspaces use their
+source project's identity. Unrelated projects remain isolated. Moving a project
+to a different absolute path creates a different identity. Tabs use persistent
+UUIDs, not their visible positions. Closing a tab does not delete its note file.
+
+### Usage
+
+Ask Remie, for example:
+
+- “Remember for this project that tests run with pytest.”
+- “Remember only in this tab that this investigation concerns staging.”
+- “Show my project memory.”
+- “Search this tab's history for Podman.”
+- “Search all tabs in this project for Podman.”
+
+The `memory` tool supports `read`, `add`, `replace`, and `remove` with scopes
+`global`, `project`, and `tab` (default). Each write requires approval in a user
+modal showing the operation and proposed text. `old_text` must uniquely identify
+one whole entry for replace/remove; replacement is not a substring patch.
+Entries are separated by a Markdown horizontal rule surrounded by blank lines.
+You can also inspect, edit, or remove the Markdown files directly.
+
+Each scope defaults to **2,200 characters**. Override with
+`REMIE_MEMORY_GLOBAL_LIMIT`, `REMIE_MEMORY_PROJECT_LIMIT`, or
+`REMIE_MEMORY_TAB_LIMIT`. Overflow writes are rejected; manually oversized files
+are truncated when loaded into the prompt. Keep notes compact. Do not store
+secrets, transcripts, temporary TODOs, or detailed procedures in memory.
+
+A tab loads a frozen memory snapshot when its conversation is initialized or
+restored. Writes persist immediately but do not silently change an existing
+prompt snapshot. Run **`/memory reload`** while the tab is idle to reload all
+three scopes for that tab. Other tabs must reload separately. Changing projects
+selects that project's snapshot and private tab notes; notes are not promoted
+between scopes automatically. Scope isolation is a retrieval boundary, not
+filesystem encryption or isolation from the user running Remie.
+
+### Search behavior and recovery
+
+`history_search(query, scope="tab", limit=5)` uses literal keyword terms combined
+with AND, with BM25 ranking. It returns bounded excerpts with chat/tab IDs,
+title, role, and the chat's update timestamp. `scope="project"` includes other
+tabs only when explicitly requested; there is no cross-project search option.
+This is word-based search, not semantic embedding search.
+
+The first implementation rebuilds the requested project's index slice from
+saved JSON files on each search. This backfills older chats and reflects edits
+and deletions without a second authoritative store. Only saved user/assistant
+text is indexed (not system prompts, images, or structured tool outputs).
+Legacy chats without tab metadata are searchable project-wide; tab-only search
+includes such a chat only if it is the current chat. Messages saved by the new
+version carry their own project/tab scope, so changing a tab's directory does
+not reassign earlier messages to the new project.
+
+The index can be deleted while Remie is stopped; the next search rebuilds it.
+If SQLite lacks FTS5 or the index is corrupt, the tool reports an error and JSON
+chats remain intact. Larger archives may benefit from incremental indexing in a
+future version. Existing legacy unscoped memory collections are **not** imported
+automatically; copy only reviewed durable facts into the appropriate new scope.

@@ -47,6 +47,7 @@ def test_slash_command_registry_filters_and_resolves_trailing_slash():
         "change worktree",
         "list worktree",
         "change dir",
+        "memory reload",
     ]
     assert [command.name for command in slash_command_matches("/change d")] == ["change dir"]
     assert slash_command_matches("/change dir /tmp") == ()

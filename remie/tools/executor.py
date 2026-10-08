@@ -171,6 +171,40 @@ class ToolExecutor:
     async def execute(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
         if name == "tab_status" and self.tab_status is not None:
             return self.tab_status()
+        if name == "memory" and (args.get("action") or "read") != "read":
+            from remie.storage.memory import memory_context
+
+            scope = args.get("scope") or "tab"
+            current = await asyncio.to_thread(self.run, "memory", {"scope": scope})
+            if "error" in current:
+                return current
+            action = args.get("action")
+            entry = ""
+            if action in {"replace", "remove"}:
+                old_text = args.get("old_text") or ""
+                matches = [part for part in current["content"].split("\n\n---\n\n")
+                           if old_text and old_text in part]
+                if len(matches) != 1:
+                    return {"error": "old_text must identify exactly one entry"}
+                entry = matches[0]
+            answer = await self.ask_user(
+                f"Approve {action} in {scope} memory?\n"
+                f"Existing whole entry: {entry}\n"
+                f"New content: {args.get('content') or ''}\nDo not save secrets.",
+                ["Save memory", "Cancel"],
+            )
+            if answer != "Save memory":
+                return {"error": "Memory update cancelled"}
+            # The entry may change while approval is open in another tab.
+            # Refuse rather than applying approval to content not reviewed.
+            context = memory_context.get()
+            if context is None:
+                return {"error": "No active memory scope"}
+            token = memory_context.set({**context, "expected_memory": current["content"]})
+            try:
+                return await asyncio.to_thread(self.run, name, args)
+            finally:
+                memory_context.reset(token)
         if name == "ask_user":
             answer = await self.ask_user(
                 str(args.get("question", "")), list(args.get("options") or [])

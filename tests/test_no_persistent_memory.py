@@ -1,4 +1,4 @@
-"""Regression checks for removal of persistent agent notes."""
+"""Compatibility checks: legacy unscoped notes are not auto-imported."""
 
 from remie.prompts import build_system_prompt
 from remie.tools import TOOL_PARAMETERS, TOOL_REGISTRY, get_tool_schemas
@@ -7,11 +7,11 @@ from remie.tui.screens.open import OpenScreen
 from remie.tui.slash_commands import resolve_slash_command
 
 
-def test_memory_is_not_a_callable_tool():
-    assert "memory" not in TOOL_REGISTRY
-    assert "memory" not in TOOL_PARAMETERS
-    assert all(schema["name"] != "memory" for schema in get_tool_schemas())
-    assert run_tool("memory", {"action": "add", "text": "note"})["action"] == "unknown_tool_memory"
+def test_memory_is_a_scoped_callable_tool():
+    assert "memory" in TOOL_REGISTRY
+    assert "history_search" in TOOL_PARAMETERS
+    assert any(schema["name"] == "memory" for schema in get_tool_schemas())
+    assert "error" in run_tool("memory", {"action": "add", "content": "note"})
 
 
 def test_prompt_ignores_existing_memory_files(tmp_path, monkeypatch):
