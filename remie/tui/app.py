@@ -289,6 +289,7 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
             ask_user=self._ask_user_for_tool,
             run=execute_tool_call,
             tab_status=self._tab_status_tool,
+            permission_scope=lambda: self._runtime().tab_id,
         )
         self._agent_runner = AgentRunner(self._tool_executor)
 

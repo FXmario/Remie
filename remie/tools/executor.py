@@ -166,6 +166,8 @@ class ToolExecutor:
     run: ToolFunction = execute_tool_call
     project_root: Path = field(default_factory=_project_root)
     tab_status: TabStatus | None = None
+    permission_scope: Callable[[], str] | None = None
+    _allowed_directories: dict[str, set[Path]] = field(default_factory=dict, init=False)
     _edit_locks: dict[Path, asyncio.Lock] = field(default_factory=dict, init=False)
 
     async def execute(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
@@ -223,14 +225,30 @@ class ToolExecutor:
 
         project_root = tool_working_directory.get() or self.project_root
         outside = _outside_project_paths(name, args, project_root)
+        scope = self.permission_scope() if self.permission_scope is not None else "session"
+        allowed = self._allowed_directories.setdefault(scope, set())
+        outside = [path for path in outside
+                   if not any(_is_within(path, directory) for directory in allowed)]
         if outside:
+            directory_tool = name in {"list_files", "glob_files", "tree_files", "run_test_shards"}
+            command_cwd = (resolve_abs_path(str(args.get("cwd", ".")))
+                           if name == "run_command" else None)
+            directories = {
+                path if directory_tool or path.is_dir() or path == command_cwd else path.parent
+                for path in outside
+            }
             paths = "\n".join(f"• {path}" for path in outside)
             answer = await self.ask_user(
                 f"The agent wants to access path(s) outside the current project "
-                f"({project_root}):\n\n{paths}\n\nAllow this operation once?",
-                ["Allow once", "Deny"],
+                f"({project_root}):\n\n{paths}\n\n"
+                "Allow once, or always allow these directories and their descendants "
+                "for this tab/session:\n"
+                + "\n".join(f"• {directory}" for directory in sorted(directories)),
+                ["Allow once", "Always allow", "Deny"],
             )
-            if answer != "Allow once":
+            if answer == "Always allow":
+                allowed.update(directories)
+            elif answer != "Allow once":
                 return {
                     "error": "Permission denied: outside-project access was not approved",
                     "paths": [str(path) for path in outside],

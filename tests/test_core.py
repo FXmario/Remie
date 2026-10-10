@@ -86,7 +86,7 @@ def test_tool_executor_requires_permission_outside_project(tmp_path):
 
     assert result["error"].startswith("Permission denied")
     assert result["paths"] == [str(outside)]
-    assert prompts and prompts[0][1] == ["Allow once", "Deny"]
+    assert prompts and prompts[0][1] == ["Allow once", "Always allow", "Deny"]
 
 
 def test_tool_executor_allows_approved_outside_access_once(tmp_path):
@@ -283,3 +283,63 @@ def test_headless_runner_preserves_native_tool_pairing():
     assert assistant_call["tool_calls"][0]["id"] == "call-1"
     assert assistant_call["codex_reasoning"][0]["id"] == "reason-1"
     assert tool_result["tool_call_id"] == "call-1"
+
+
+def test_always_allow_is_directory_and_tab_scoped(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    external = tmp_path / "external"
+    external.mkdir()
+    prompts = []
+    tab = "first"
+
+    async def approve(question, options):
+        prompts.append(question)
+        assert "Always allow" in options
+        return "Always allow"
+
+    executor = ToolExecutor(approve, project_root=project,
+                            permission_scope=lambda: tab,
+                            run=lambda name, args: {"ok": True})
+
+    async def exercise():
+        nonlocal tab
+        await executor.execute("read_file", {"filename": str(external / "new.txt")})
+        await executor.execute("edit_file", {"path": str(external / "nested" / "new.txt")})
+        assert len(prompts) == 1
+        await executor.execute("list_files", {"path": str(tmp_path / "external-other")})
+        assert len(prompts) == 2
+        tab = "second"
+        await executor.execute("list_files", {"path": str(external)})
+        assert len(prompts) == 3
+        tab = "first"
+        await executor.execute("run_command", {"command": "ls", "cwd": str(external)})
+        assert len(prompts) == 3
+
+    asyncio.run(exercise())
+
+
+def test_always_allow_does_not_follow_symlink_escape(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    external = tmp_path / "external"
+    external.mkdir()
+    other = tmp_path / "other"
+    other.mkdir()
+    (external / "escape").symlink_to(other, target_is_directory=True)
+    prompts = []
+
+    async def approve(question, options):
+        prompts.append(question)
+        return "Always allow" if len(prompts) == 1 else "Deny"
+
+    executor = ToolExecutor(approve, project_root=project,
+                            run=lambda name, args: {"ok": True})
+
+    async def exercise():
+        await executor.execute("list_files", {"path": str(external)})
+        result = await executor.execute("read_file", {"filename": str(external / "escape" / "file")})
+        assert "error" in result
+        assert len(prompts) == 2
+
+    asyncio.run(exercise())
