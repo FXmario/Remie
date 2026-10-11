@@ -5,7 +5,8 @@ from pathlib import Path
 from typing import Any
 
 from remie.tui.workspaces import (WorkspaceError, linked_worktree, list_worktrees,
-                                  remove_worktree, name_worktree)
+                                  remove_worktree, name_worktree, ensure_merge_ready,
+                                  worktree_dirty, commit_worktree, merge_worktree)
 
 from remie.prompts import build_system_prompt
 from remie.protocol import strip_protocol_lines
@@ -244,7 +245,7 @@ class ChatSessionMixin:
             self.run_worker(self._confirm_close_tab(tab_id), exclusive=False)
             return False
         tab = next((item for item in self._tab_layout["tabs"] if item["id"] == tab_id), None)
-        if tab and linked_worktree(self._tab_directory(tab)):
+        if tab:
             self.run_worker(self._close_worktree_tab(tab_id), exclusive=False)
             return False
         return self._close_tab_now(tab_id)
@@ -305,15 +306,28 @@ class ChatSessionMixin:
             return
         item = linked_worktree(self._tab_directory(tab))
         if item is None:
-            self._close_tab_now(tab_id)
+            answer = await self.push_screen_wait(self._make_ask_screen(
+                "Close this tab? This is not a linked worktree, so merging is not applicable.",
+                ["Close without merging", "Cancel"]))
+            if answer == "Close without merging":
+                self._close_tab_now(tab_id)
             return
+        main = list_worktrees(item["path"])[0]["path"]
+        blocked = self._merge_agents_running(item["path"], main)
+        options = ["Close without merging"]
+        if not blocked:
+            options.append("Close with merging to master worktree")
+        options.extend(["Delete worktree and close tab", "Cancel"])
         answer = await self.push_screen_wait(self._make_ask_screen(
             f'Close this tab in {item["path"]}? Committed work stays on its Git branch. '
-            'Delete removes the entire worktree folder; Keep leaves it intact. '
-            'Use /list worktree to reopen or delete kept worktrees later.',
-            ["Keep worktree and close tab", "Delete worktree and close tab", "Cancel"]))
-        if answer == "Keep worktree and close tab":
+            'Close without merging keeps the worktree intact. Delete removes its entire folder. '
+            'Use /list worktree to reopen or delete kept worktrees later.'
+            + (" Merge is unavailable while an agent is running in this or the master worktree." if blocked else ""),
+            options))
+        if answer in ("Close without merging", "Keep worktree and close tab"):
             self._close_tab_now(tab_id)
+        elif answer == "Close with merging to master worktree":
+            await self._merge_and_close_tab(tab_id, item["path"], main)
         elif answer == "Delete worktree and close tab":
             try:
                 users = self._worktree_users(item["path"])
@@ -331,6 +345,53 @@ class ChatSessionMixin:
             if len(self._tab_layout["tabs"]) == 1:
                 self.action_new_chat(directory=main)
             self._close_tab_now(tab_id)
+
+    def _merge_agents_running(self, source: Path, main: Path) -> bool:
+        return any(self._runtimes.get(tab["id"]) and
+                   self._runtimes[tab["id"]].agent_running
+                   for root in (source, main) for tab in self._worktree_users(root))
+
+    async def _merge_and_close_tab(self, tab_id: str, source: Path, main: Path) -> None:
+        # Hold the reservation across prompts; another close operation cannot
+        # commit or merge this repository while the user is deciding.
+        busy = getattr(self, "_merge_close_busy", set())
+        self._merge_close_busy = busy
+        if main in busy:
+            self.notify("Another merge is already in progress for this repository.", severity="warning")
+            return
+        busy.add(main)
+        try:
+            def check_agents():
+                if tab_id not in self._runtimes:
+                    raise WorkspaceError("The source tab is no longer open.")
+                if self._merge_agents_running(source, main):
+                    raise WorkspaceError("Stop agents in the source and master worktrees before merging.")
+
+            check_agents()
+            for directory, label in ((main, "master"), (source, "this")):
+                ensure_merge_ready(directory)
+                if not worktree_dirty(directory):
+                    continue
+                choice = "Commit this worktree first" if label == "this" else "Commit the master worktree first"
+                answer = await self.push_screen_wait(self._make_ask_screen(
+                    f"{directory} has uncommitted changes. Commit all changes, including "
+                    "non-ignored untracked files, before merging?", [choice, "Cancel"]))
+                if answer != choice:
+                    return
+                message = await self.push_screen_wait(self._make_ask_screen(
+                    f"Enter a commit message for {directory}.", []))
+                if not message or not message.strip():
+                    return
+                check_agents()
+                commit_worktree(directory, message)
+            check_agents()
+            merge_worktree(source, main)
+            self._close_tab_now(tab_id)
+            self.notify("Merged into the master worktree. Source worktree and branch kept.")
+        except WorkspaceError as error:
+            self.notify(str(error), severity="error")
+        finally:
+            busy.discard(main)
 
     async def _pick_worktree(self) -> None:
         from remie.tui.screens.worktrees import WorktreeScreen

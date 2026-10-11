@@ -282,7 +282,7 @@ def test_picker_opens_new_tab_and_names_once(tmp_path, monkeypatch):
             assert Path(app._runtime().working_directory) == renamed
             assert len(list_worktrees(root)) == 2
             async def keep(screen):
-                return "Keep worktree and close tab"
+                return "Close without merging"
             monkeypatch.setattr(app, "push_screen_wait", keep)
             await app._close_worktree_tab(second)
             await pilot.pause()
@@ -368,6 +368,7 @@ def test_delete_final_linked_tab_reopens_main(tmp_path, monkeypatch):
         app = AgentApp()
         async with app.run_test() as pilot:
             app.on_prompt_submitted(PromptSubmitted(f"/change dir {target}"))
+            await pilot.pause()
             tab_id = app._active_tab_id
             async def delete(screen):
                 return "Delete worktree and close tab"
@@ -416,3 +417,113 @@ def test_delete_reports_folder_left_by_git(tmp_path, monkeypatch):
     with pytest.raises(WorkspaceError, match="left its folder behind"):
         workspaces.remove_worktree(linked)
     assert linked.is_dir() and root.is_dir()
+
+
+@pytest.mark.parametrize("outcome", ["merge", "cancel", "running", "conflict", "commit_failure", "running_after_prompt"])
+def test_merge_close_flow(tmp_path, monkeypatch, outcome):
+    from remie.tui.workspaces import worktree_dirty
+
+    root = make_repository(tmp_path)
+    git("config", "user.name", "Test", cwd=root)
+    git("config", "user.email", "test@example.com", cwd=root)
+    monkeypatch.chdir(root)
+
+    async def exercise():
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            original = app._active_tab_id
+            app.action_new_chat()
+            await pilot.pause()
+            source_id = app._active_tab_id
+            source = Path(app._runtime().working_directory)
+            (root / "main-new.txt").write_text("main work")
+            (source / "source-new.txt").write_text("source work")
+            if outcome == "conflict":
+                (root / "file.txt").write_text("main edit")
+                (source / "file.txt").write_text("source edit")
+            if outcome == "commit_failure":
+                hook = root / ".git" / "hooks" / "pre-commit"
+                hook.write_text("#!/bin/sh\nexit 1\n")
+                hook.chmod(0o755)
+            questions = []
+            async def choose(screen):
+                questions.append(screen)
+                if outcome == "cancel":
+                    return None
+                if not screen.options:
+                    if outcome == "running_after_prompt":
+                        app._runtimes[original].agent_running = True
+                    return "Save before merge"
+                return screen.options[0]
+            monkeypatch.setattr(app, "push_screen_wait", choose)
+            if outcome == "running":
+                app._runtimes[original].agent_running = True
+            await app._merge_and_close_tab(source_id, source, root)
+            app._runtimes[original].agent_running = False
+            await pilot.pause()
+            assert source.exists()
+            if outcome == "merge":
+                assert source_id not in app._runtimes
+                assert (root / "source-new.txt").read_text() == "source work"
+                assert not worktree_dirty(root)
+                assert not worktree_dirty(source)
+                assert questions[0].options[0] == "Commit the master worktree first"
+                assert questions[2].options[0] == "Commit this worktree first"
+            else:
+                assert source_id in app._runtimes
+                if outcome != "conflict":
+                    assert not (root / "source-new.txt").exists()
+                if outcome == "running":
+                    assert questions == []
+                if outcome == "conflict":
+                    assert (root / ".git" / "MERGE_HEAD").exists()
+                    git("merge", "--abort", cwd=root)
+            assert not app._merge_close_busy
+    asyncio.run(exercise())
+
+
+def test_close_merge_option_blocked_and_rechecked(tmp_path, monkeypatch):
+    root = make_repository(tmp_path)
+    monkeypatch.chdir(root)
+
+    async def exercise():
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            original = app._active_tab_id
+            app.action_new_chat()
+            await pilot.pause()
+            source_id = app._active_tab_id
+            screens = []
+            async def choose(screen):
+                screens.append(screen)
+                return "Cancel"
+            monkeypatch.setattr(app, "push_screen_wait", choose)
+            app._runtimes[original].agent_running = True
+            await app._close_worktree_tab(source_id)
+            assert "Close with merging to master worktree" not in screens[-1].options
+            assert "Close without merging" in screens[-1].options
+            app._runtimes[original].agent_running = False
+            await app._close_worktree_tab(source_id)
+            assert "Close with merging to master worktree" in screens[-1].options
+            assert source_id in app._runtimes
+    asyncio.run(exercise())
+
+
+def test_commit_message_prompt_opens_input(tmp_path, monkeypatch):
+    from textual.widgets import Input
+    monkeypatch.chdir(tmp_path)
+
+    async def exercise():
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            answers = []
+            async def ask():
+                answers.append(await app.push_screen_wait(
+                    app._make_ask_screen("Enter a commit message", [])))
+            app.run_worker(ask())
+            await pilot.pause()
+            assert app.screen.query_one(Input).has_focus
+            await pilot.press("s", "a", "v", "e", "enter")
+            await pilot.pause()
+            assert answers == ["save"]
+    asyncio.run(exercise())

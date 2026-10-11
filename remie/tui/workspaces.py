@@ -155,3 +155,44 @@ def name_worktree(directory: Path, title: str) -> Path:
         number += 1
     _git(main, "worktree", "move", str(root), str(target))
     return target / directory.relative_to(root)
+
+
+def ensure_merge_ready(directory: Path) -> None:
+    """Refuse detached HEADs and unfinished Git operations."""
+    _git(directory, "symbolic-ref", "--quiet", "HEAD")
+    for marker in ("MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply"):
+        path = Path(_git(directory, "rev-parse", "--git-path", marker).strip())
+        if not path.is_absolute():
+            path = directory / path
+        if path.exists():
+            raise WorkspaceError(f"Finish the existing Git operation in {directory} first.")
+
+
+def worktree_dirty(directory: Path) -> bool:
+    return bool(_git(directory, "status", "--porcelain", "--untracked-files=all").strip())
+
+
+def commit_worktree(directory: Path, message: str) -> None:
+    """Explicitly approved snapshot, including non-ignored untracked files."""
+    if not message.strip():
+        raise WorkspaceError("A commit message is required.")
+    ensure_merge_ready(directory)
+    _git(directory, "add", "--all")
+    _git(directory, "commit", "-m", message.strip())
+
+
+def merge_worktree(source: Path, main: Path) -> None:
+    """Merge a clean source HEAD into the main worktree's current branch."""
+    for directory in (source, main):
+        ensure_merge_ready(directory)
+        if worktree_dirty(directory):
+            raise WorkspaceError(f"Commit changes in {directory} before merging.")
+    revision = _git(source, "rev-parse", "HEAD").strip()
+    try:
+        _git(main, "merge", "--no-edit", revision)
+    except WorkspaceError as error:
+        raise WorkspaceError(
+            f"Merge failed in {main}: {error}\n"
+            "The tab and worktree were kept. If Git reports conflicts, resolve and "
+            "commit them there, or run git merge --abort before retrying."
+        ) from error

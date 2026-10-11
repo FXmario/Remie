@@ -161,7 +161,10 @@ class AskUserScreen(ModalScreen):
             )
 
     def on_mount(self) -> None:
-        self.query_one("#ask-options", OptionList).focus()
+        if not self.options:
+            self._show_custom_answer()
+        else:
+            self.query_one("#ask-options", OptionList).focus()
 
     def _show_custom_answer(self) -> None:
         """Replace the choices with the free-form answer controls."""

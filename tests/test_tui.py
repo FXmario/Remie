@@ -1521,7 +1521,9 @@ def test_closing_only_tab_creates_and_activates_replacement(monkeypatch):
 
             assert old_tab_id is not None
             assert len(app._tab_layout["tabs"]) == 1
-            assert app.close_tab(old_tab_id) is True
+            assert app.close_tab(old_tab_id) is False
+            await pilot.pause()
+            await pilot.press("1")
             await pilot.pause()
 
             assert len(app._tab_layout["tabs"]) == 1
