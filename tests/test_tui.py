@@ -3794,3 +3794,26 @@ def test_tab_prompt_context_reports_other_runtime_status():
             "activity": "editing files",
         }
     ]
+
+
+@pytest.mark.parametrize("initial", [None, "on", "off", "OFF"])
+def test_ctrl_s_toggles_sandbox(monkeypatch, initial):
+    if initial is None:
+        monkeypatch.delenv("REMIE_SANDBOX", raising=False)
+    else:
+        monkeypatch.setenv("REMIE_SANDBOX", initial)
+    notifications = []
+
+    async def exercise():
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            monkeypatch.setattr(app, "notify", lambda message, **kw: notifications.append((message, kw)))
+            app.query_one(PromptTextArea).focus()
+            expected = "on" if initial and initial.lower() == "off" else "off"
+            await pilot.press("ctrl+s")
+            assert tui_app.os.environ["REMIE_SANDBOX"] == expected
+            assert notifications[-1][1]["severity"] == ("warning" if expected == "off" else "information")
+            await pilot.press("ctrl+s")
+            assert tui_app.os.environ["REMIE_SANDBOX"] == ("off" if expected == "on" else "on")
+
+    asyncio.run(exercise())

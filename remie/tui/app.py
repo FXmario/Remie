@@ -225,6 +225,7 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
         ("ctrl+l", "new_chat", "New chat"),
         ("ctrl+g", "toggle_status_image", "Toggle status image"),
         ("ctrl+t", "toggle_theme", "Toggle theme"),
+        ("ctrl+s", "toggle_sandbox", "Toggle sandbox"),
         ("ctrl+b", "toggle_tabs", "Toggle tabs"),
         ("escape", "stop_agent", "Stop agent"),
     ]
@@ -1451,6 +1452,17 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
             self.notify("Copied to clipboard", title="Selection")
             return
         self.exit()
+
+    def action_toggle_sandbox(self) -> None:
+        """Toggle sandboxing for future commands across all tabs."""
+        enabled = os.environ.get("REMIE_SANDBOX", "on").lower() == "off"
+        os.environ["REMIE_SANDBOX"] = "on" if enabled else "off"
+        self.notify(
+            "Command sandbox enabled" if enabled else
+            "Command sandbox disabled — commands now run without sandbox isolation",
+            title="Sandbox (all tabs)",
+            severity="information" if enabled else "warning",
+        )
 
     def action_toggle_theme(self) -> None:
         modes = ("system", "light", "dark")

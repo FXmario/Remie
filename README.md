@@ -298,6 +298,7 @@ not added to chat history or sent to the model.
 | `Ctrl+B`  | Show or hide the chat-tab sidebar |
 | `Ctrl+G`  | Show or hide the status image |
 | `Ctrl+T`  | Cycle System → Light → Dark themes |
+| `Ctrl+S`  | Toggle command sandboxing for the session (all tabs) |
 | `Esc`     | Stop the agent while it is running |
 | `Enter`   | Send the message |
 | `Shift+Enter` / `Ctrl+J` | Insert a new line |
@@ -359,7 +360,12 @@ Networking is blocked by default. To allow command networking explicitly:
 REMIE_SANDBOX_NETWORK=on remie
 ```
 
-To explicitly disable command sandboxing (removes this security boundary):
+Press `Ctrl+S` to toggle command sandboxing for the running session across all
+tabs. This affects newly launched commands, not commands already running, and
+is not saved between sessions. Disabling it removes this security boundary.
+Sandbox isolation is supported only on Linux.
+
+To explicitly disable command sandboxing at startup (removes this security boundary):
 
 ```sh
 REMIE_SANDBOX=off remie
