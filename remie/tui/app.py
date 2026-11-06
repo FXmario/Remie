@@ -94,6 +94,8 @@ from remie.tui.slash_commands import is_slash_command_token, resolve_slash_comma
 from remie.tui.streaming import StreamingPresentationMixin
 from remie.tui.workspaces import WorkspaceError, separate_workspace, workspace_label
 from remie.tui.widgets import (
+    SandboxHeader,
+    SandboxIndicator,
     ImageAttachmentBar,
     InputRow,
     ModelBadge,
@@ -295,7 +297,7 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
         self._agent_runner = AgentRunner(self._tool_executor)
 
     def compose(self) -> ComposeResult:
-        yield Header()
+        yield SandboxHeader()
         with Horizontal(id="workspace"):
             yield TabSidebar()
             with Vertical(id="chat-pane"):
@@ -1457,6 +1459,7 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
         """Toggle sandboxing for future commands across all tabs."""
         enabled = os.environ.get("REMIE_SANDBOX", "on").lower() == "off"
         os.environ["REMIE_SANDBOX"] = "on" if enabled else "off"
+        self.query_one(SandboxIndicator).refresh_status()
         self.notify(
             "Command sandbox enabled" if enabled else
             "Command sandbox disabled — commands now run without sandbox isolation",

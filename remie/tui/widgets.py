@@ -2,6 +2,8 @@
 
 # import os
 import re
+import os
+import sys
 from pathlib import Path
 
 from PIL import Image as PILImage
@@ -17,7 +19,7 @@ from textual.containers import Horizontal, HorizontalScroll, Vertical
 from textual.css.query import NoMatches
 from textual.geometry import Size
 from textual.message import Message
-from textual.widgets import Button, Label, OptionList, RichLog, TextArea
+from textual.widgets import Button, Header, Label, OptionList, RichLog, TextArea
 from textual.widgets.option_list import Option
 from textual_image.widget import SixelImage as TerminalImage
 
@@ -38,6 +40,53 @@ from remie.tui.slash_commands import (
     resolve_slash_command,
     slash_command_matches,
 )
+
+
+class SandboxIndicator(Label):
+    """Configured shell-command isolation, not a sandbox health guarantee."""
+
+    DEFAULT_CSS = """
+    SandboxIndicator {
+        dock: right;
+        width: auto;
+        height: 1;
+        padding: 0 1;
+        text-wrap: nowrap;
+    }
+    SandboxIndicator.enabled { color: $success; }
+    SandboxIndicator.disabled, SandboxIndicator.unavailable, SandboxIndicator.invalid {
+        color: $warning;
+    }
+    """
+
+    def on_mount(self) -> None:
+        self.refresh_status()
+
+    def refresh_status(self) -> None:
+        mode = os.environ.get("REMIE_SANDBOX", "on").lower()
+        if mode not in {"on", "off"}:
+            state, label = "invalid", "⚠ Sandbox INVALID"
+        elif sys.platform != "linux":
+            state, label = "unavailable", "⚠ Sandbox unavailable"
+        elif mode == "off":
+            state, label = "disabled", "🔓 Sandbox OFF"
+        else:
+            state, label = "enabled", "🔒 Sandbox ON"
+        self.set_classes(state)
+        self.update(label)
+        self.tooltip = (
+            "Command sandbox — Ctrl+S to toggle (all tabs). "
+            "Applies to future shell commands, not Python tools or the agent. "
+            "ON indicates configuration, not verified sandbox availability."
+        )
+
+
+class SandboxHeader(Header):
+    """Standard header with persistent command-sandbox status."""
+
+    def compose(self):
+        yield SandboxIndicator(id="sandbox-status")
+        yield from super().compose()
 
 
 class StreamingRichLog(RichLog):

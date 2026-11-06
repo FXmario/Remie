@@ -3802,6 +3802,8 @@ def test_tab_prompt_context_reports_other_runtime_status():
 
 @pytest.mark.parametrize("initial", [None, "on", "off", "OFF"])
 def test_ctrl_s_toggles_sandbox(monkeypatch, initial):
+    from remie.tui.widgets import SandboxIndicator
+    monkeypatch.setattr("remie.tui.widgets.sys.platform", "linux")
     if initial is None:
         monkeypatch.delenv("REMIE_SANDBOX", raising=False)
     else:
@@ -3816,6 +3818,8 @@ def test_ctrl_s_toggles_sandbox(monkeypatch, initial):
             expected = "on" if initial and initial.lower() == "off" else "off"
             await pilot.press("ctrl+s")
             assert tui_app.os.environ["REMIE_SANDBOX"] == expected
+            badge = app.query_one(SandboxIndicator)
+            assert badge.has_class("enabled" if expected == "on" else "disabled")
             assert notifications[-1][1]["severity"] == ("warning" if expected == "off" else "information")
             await pilot.press("ctrl+s")
             assert tui_app.os.environ["REMIE_SANDBOX"] == ("off" if expected == "on" else "on")

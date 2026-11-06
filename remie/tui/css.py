@@ -5,6 +5,10 @@ Screen {
     layout: vertical;
 }
 
+SandboxHeader HeaderClockSpace {
+    display: none;
+}
+
 HeaderIcon {
     display: none;
 }
