@@ -36,7 +36,7 @@ def test_git_worktree_starts_at_head_and_preserves_original(tmp_path, monkeypatc
         async with app.run_test() as pilot:
             original = app._active_tab_id
             assert app.sub_title.endswith(" · " + git("branch", "--show-current", cwd=root))
-            app.action_new_chat()
+            app._create_new_chat()
             await pilot.pause()
             second = app._active_tab_id
             target = Path(app._runtime().working_directory)
@@ -131,7 +131,7 @@ def test_non_git_tabs_and_change_dir_get_empty_unique_directories(tmp_path, monk
         app = AgentApp()
         async with app.run_test() as pilot:
             original = app._active_tab_id
-            app.action_new_chat()
+            app._create_new_chat()
             await pilot.pause()
             second = app._active_tab_id
             workspace = Path(app._runtime().working_directory)
@@ -163,7 +163,7 @@ def test_restoring_legacy_duplicate_tabs_isolates_second(tmp_path, monkeypatch):
         app = AgentApp()
         async with app.run_test() as pilot:
             original = app._active_tab_id
-            app.action_new_chat()
+            app._create_new_chat()
             await pilot.pause()
             second = app._active_tab_id
             for tab in app._tab_layout["tabs"]:
@@ -191,7 +191,7 @@ def test_workspace_creation_error_does_not_switch_tabs(tmp_path, monkeypatch):
         app = AgentApp()
         async with app.run_test():
             original = app._active_tab_id
-            app.action_new_chat()
+            app._create_new_chat()
             assert app._active_tab_id == original
             assert len(app._tab_layout["tabs"]) == 1
             assert app._tab_prompt_context()["working_directory"] == str(tmp_path)
@@ -298,7 +298,7 @@ def test_close_worktree_cancel_dirty_and_delete(tmp_path, monkeypatch):
     async def exercise():
         app = AgentApp()
         async with app.run_test() as pilot:
-            app.action_new_chat()
+            app._create_new_chat()
             await pilot.pause()
             tab_id = app._active_tab_id
             path = Path(app._runtime().working_directory)
@@ -432,7 +432,7 @@ def test_merge_close_flow(tmp_path, monkeypatch, outcome):
         app = AgentApp()
         async with app.run_test() as pilot:
             original = app._active_tab_id
-            app.action_new_chat()
+            app._create_new_chat()
             await pilot.pause()
             source_id = app._active_tab_id
             source = Path(app._runtime().working_directory)
@@ -490,7 +490,7 @@ def test_close_merge_option_blocked_and_rechecked(tmp_path, monkeypatch):
         app = AgentApp()
         async with app.run_test() as pilot:
             original = app._active_tab_id
-            app.action_new_chat()
+            app._create_new_chat()
             await pilot.pause()
             source_id = app._active_tab_id
             screens = []
@@ -526,4 +526,37 @@ def test_commit_message_prompt_opens_input(tmp_path, monkeypatch):
             await pilot.press("s", "a", "v", "e", "enter")
             await pilot.pause()
             assert answers == ["save"]
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("key", ["1", "2", "3", "escape"])
+def test_new_tab_asks_before_creating_workspace(tmp_path, monkeypatch, key):
+    from remie.tui.screens.ask_user import AskUserScreen
+
+    monkeypatch.chdir(tmp_path)
+
+    async def exercise():
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            original = app._active_tab_id
+            original_count = len(app._tab_layout["tabs"])
+            app.action_new_chat()
+            await pilot.pause()
+            assert isinstance(app.screen, AskUserScreen)
+            assert app._active_tab_id == original
+            assert len(app._tab_layout["tabs"]) == original_count
+            assert not list(tmp_path.glob("remie-tab-*"))
+            await pilot.press(key)
+            await pilot.pause()
+            if key in ("3", "escape"):
+                assert app._active_tab_id == original
+                assert len(app._tab_layout["tabs"]) == original_count
+                assert not list(tmp_path.glob("remie-tab-*"))
+            else:
+                assert len(app._tab_layout["tabs"]) == original_count + 1
+                directory = Path(app._runtime().working_directory)
+                assert (directory != tmp_path) == (key == "1")
+                assert directory.is_dir()
+                assert bool(list(tmp_path.glob("remie-tab-*"))) == (key == "1")
+
     asyncio.run(exercise())

@@ -1,3 +1,4 @@
+from pathlib import Path
 """Modal to switch between, create, or delete saved chats."""
 
 from textual.app import ComposeResult
@@ -154,10 +155,9 @@ class ChatScreen(ModalScreen):
 
     def _new_chat(self) -> None:
         app = self.app
-        if is_agent_app(app):
-            app.action_new_chat()
-            app.notify("Started a new chat", title="Chats")
         self.dismiss()
+        if is_agent_app(app):
+            app.call_later(app.action_new_chat)
 
     def _delete_current(self) -> None:
         chat_id = self._selected_id()
@@ -187,7 +187,7 @@ class ChatScreen(ModalScreen):
                     app._load_chat_into_ui(latest["id"])
                 else:
                     app._active_tab_id = None
-                    app.action_new_chat()
+                    app.action_new_chat(directory=Path(app._tab_prompt_context()["working_directory"]))
             elif removed_tabs:
                 app._persist_tab_layout()
                 app._refresh_tabs()

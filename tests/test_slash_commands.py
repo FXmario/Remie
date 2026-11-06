@@ -204,7 +204,7 @@ def test_change_dir_is_tab_local_persistent_and_used_by_tools(tmp_path, monkeypa
             assert str(target) in app.conversation[0]["content"]
             assert app._input_queue.empty()
             assert app._prompt_history == []
-            app.action_new_chat()
+            app._create_new_chat()
             await pilot.pause()
             second = app._active_tab_id
             second_dir = Path(app._tab_prompt_context()["working_directory"])

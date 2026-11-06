@@ -906,7 +906,7 @@ def test_background_question_on_tab_switch(tmp_path, monkeypatch, key, expected)
         app = AgentApp()
         async with app.run_test() as pilot:
             original = app._active_tab_id
-            app.action_new_chat()
+            app._create_new_chat()
             await pilot.pause()
             foreground = app._active_tab_id
             runtime = app._runtimes[original]
@@ -1500,6 +1500,8 @@ def test_action_new_chat_keeps_previous_chat(monkeypatch, tmp_path):
             app._transcript.append({"role": "user", "content": "hello"})
             await pilot.press("ctrl+l")
             await pilot.pause()
+            await pilot.press("2")
+            await pilot.pause()
             assert app._chat_id != first_id
             assert len(app.conversation) == 1
             assert app.conversation[0]["role"] == "system"
@@ -1655,6 +1657,8 @@ def test_chat_picker_new_starts_fresh_chat(monkeypatch):
             screen = app.screen
             assert isinstance(screen, ChatScreen)
             screen.query_one("#chat-new", Button).press()
+            await pilot.pause()
+            await pilot.press("2")
             await pilot.pause()
             assert len(app.screen_stack) == 1
             assert app._chat_id != original_id
@@ -3742,7 +3746,7 @@ def test_tabs_run_agent_turns_concurrently(monkeypatch, tmp_path):
             await pilot.pause()
             await asyncio.wait_for(started["one"].wait(), 2)
 
-            app.action_new_chat()
+            app._create_new_chat()
             await pilot.pause()
             second_tab = app._active_tab_id
             app.on_prompt_submitted(PromptSubmitted("two"))

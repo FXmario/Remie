@@ -64,7 +64,7 @@ cd ~/Projects/my-other-project
 remie
 ```
 
-The first tab starts in the directory where `remie` was launched unless a saved tab layout is restored. New tabs use the active tab's directory as their starting point and receive an isolated workspace if that directory is already in use (see [Tabs and Git worktrees](#tabs-and-git-worktrees)). To work elsewhere in one tab, enter `/change dir <path>`; relative paths are resolved from that tab's working directory. A relative `<path>` is resolved from the tab's current directory, and paths containing spaces are accepted as entered (no quoting needed). Other tabs remain unchanged. The tab's directory is saved across launches.
+The first tab starts in the directory where `remie` was launched unless a saved tab layout is restored. New tabs ask whether to create an isolated workspace or share the active tab's directory (see [Tabs and Git worktrees](#tabs-and-git-worktrees)). To work elsewhere in one tab, enter `/change dir <path>`; relative paths are resolved from that tab's working directory. A relative `<path>` is resolved from the tab's current directory, and paths containing spaces are accepted as entered (no quoting needed). Other tabs remain unchanged. The tab's directory is saved across launches.
 
 ### Project context
 
@@ -239,8 +239,9 @@ The left sidebar lists open chats and their `ready`, `working`, `waiting for use
 The top bar shows the active chat title and its Git branch (or directory name
 outside Git), so you can see which workspace the tab uses.
 
-- **Automatic isolation:** new tabs start from the active tab's directory. If
-  another tab already uses it, Remie creates a separate Git worktree and
+- **Choose isolation:** before creating a new tab, Remie asks whether to create
+  a new worktree, use the current directory (sharing files), or cancel.
+  Choosing a new worktree creates a separate Git worktree and
   `remie/tab-…` branch next to the repository. Outside Git, it creates an
   **empty** `remie-tab-…` subdirectory instead. `/change dir <path>` also isolates
   the tab when the target directory is already occupied.

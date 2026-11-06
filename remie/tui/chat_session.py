@@ -141,8 +141,29 @@ class ChatSessionMixin:
         self._history_draft = ""
 
     def action_new_chat(self, replacing_tab_id: str | None = None, *, directory: Path | None = None) -> None:
+        """Ask before allocating a workspace for a new tab."""
+        if directory is not None or replacing_tab_id is not None:
+            self._create_new_chat(replacing_tab_id, directory=directory)
+            return
+        source = Path(self._tab_prompt_context()["working_directory"])
+
+        def selected(answer: str | None) -> None:
+            if answer == "Create new worktree":
+                self._create_new_chat(source=source)
+            elif answer == "Use current directory":
+                self._create_new_chat(directory=source)
+
+        self.push_screen(self._make_ask_screen(
+            "Create a new worktree for this tab? A new worktree starts from "
+            "committed HEAD without uncommitted changes. Outside Git, this creates "
+            "an empty separate directory. Using the current directory shares files "
+            "with the existing tab.",
+            ["Create new worktree", "Use current directory", "Cancel"]), selected)
+
+    def _create_new_chat(self, replacing_tab_id: str | None = None, *,
+                         directory: Path | None = None, source: Path | None = None) -> None:
         """Create and activate a tab without stopping background agents."""
-        source = self._tab_prompt_context()["working_directory"]
+        source = str(source or self._tab_prompt_context()["working_directory"])
         tab = new_tab("")
         try:
             # Replacing the sole closing tab doesn't create a concurrent tab.

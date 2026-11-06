@@ -121,7 +121,7 @@ def test_tab_prompt_snapshot_and_reload(tmp_path, monkeypatch):
             assert "Shared project fact" not in app._tab_prompt_context()["memory_snapshot"]
             app._dispatch_slash_command("memory reload")
             assert "Private tab fact" in app.conversation[0]["content"]
-            app.action_new_chat()
+            app._create_new_chat()
             await pilot.pause()
             assert "Shared project fact" in app.conversation[0]["content"]
             assert "Private tab fact" not in app.conversation[0]["content"]
