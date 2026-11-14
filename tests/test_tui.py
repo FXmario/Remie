@@ -1783,6 +1783,24 @@ def test_prompt_ctrl_a_selects_all_text():
     asyncio.run(exercise())
 
 
+def test_title_click_does_not_resize_workspace():
+    async def exercise():
+        app = AgentApp()
+        async with app.run_test(size=(114, 46)) as pilot:
+            await pilot.pause()
+            header = app.query_one("SandboxHeader")
+            workspace = app.query_one("#workspace")
+            initial_region = workspace.region
+            for selector in ("HeaderTitle", "#sandbox-status", "HeaderTitle"):
+                await pilot.click(selector)
+                await pilot.pause()
+                assert not header.has_class("-tall")
+                assert header.region.height == 1
+                assert workspace.region == initial_region
+
+    asyncio.run(exercise())
+
+
 def test_prompt_grows_and_shrinks_with_multiline_input():
     async def exercise():
         app = AgentApp()

@@ -82,7 +82,12 @@ class SandboxIndicator(Label):
 
 
 class SandboxHeader(Header):
-    """Standard header with persistent command-sandbox status."""
+    """Fixed-height header with persistent command-sandbox status."""
+
+    def _on_click(self, event: events.Click) -> None:
+        # Header's default handler toggles -tall, moving the workspace by two
+        # rows. Prevent the base handler as well as leaving our height alone.
+        event.prevent_default()
 
     def compose(self):
         yield SandboxIndicator(id="sandbox-status")
