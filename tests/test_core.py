@@ -114,6 +114,9 @@ def test_tool_executor_prompts_for_outside_path_in_shell_command(tmp_path):
         return "Deny"
 
     executor = ToolExecutor(deny, project_root=project)
+    # This test exercises path permission after todo approval.
+    executor.plan().items = [{"title": "Inspect external file", "status": "pending"}]
+    executor.plan().approved = True
     result = asyncio.run(
         executor.execute(
             "run_command", {"command": "cat ../secret.txt", "cwd": str(project)}
@@ -304,6 +307,8 @@ def test_always_allow_is_directory_and_tab_scoped(tmp_path):
 
     async def exercise():
         nonlocal tab
+        executor.plan().items = [{"title": "Work on external directory", "status": "pending"}]
+        executor.plan().approved = True
         await executor.execute("read_file", {"filename": str(external / "new.txt")})
         await executor.execute("edit_file", {"path": str(external / "nested" / "new.txt")})
         assert len(prompts) == 1

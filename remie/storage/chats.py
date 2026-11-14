@@ -8,7 +8,16 @@ from functools import wraps
 from pathlib import Path
 from typing import Any
 
-from remie.tools.common import _remie_dir, _write_json_atomic
+# Resolve tool-package helpers lazily: tools.chats re-exports this module,
+# so eagerly importing tools here creates an import-order-dependent cycle.
+def _remie_dir() -> Path:
+    from remie.tools.common import _remie_dir as directory
+    return directory()
+
+
+def _write_json_atomic(path: Path, data: Any) -> None:
+    from remie.tools.common import _write_json_atomic as write
+    write(path, data)
 
 
 def session_file_path() -> Path:
@@ -193,6 +202,7 @@ def save_chat(
     *,
     keep_empty: bool = False,
     memory_scope: dict[str, str] | None = None,
+    todo: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Persist a chat's resumable context and visible transcript.
 
@@ -231,12 +241,36 @@ def save_chat(
                 payload["memory_scope"] = previous["memory_scope"]
         except (OSError, UnicodeError, ValueError):
             pass
+    if todo is not None:
+        payload["todo"] = todo
+    elif path.is_file():
+        try:
+            previous = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(previous.get("todo"), dict):
+                payload["todo"] = previous["todo"]
+        except (OSError, UnicodeError, ValueError):
+            pass
     if token_usage is not None:
         payload["token_usage"] = token_usage
     _write_json_atomic(path, payload)
     chats[chat_id]["updated_at"] = _dt.datetime.now().isoformat(timespec="seconds")
     save_chat_index(chats)
     return _chat_metadata(chat_id, chats[chat_id])
+
+
+@_locked
+def save_chat_todo(chat_id: str, todo: dict[str, Any]) -> None:
+    """Update only UI plan state, without repairing/mutating live tool calls."""
+    if chat_id not in load_chat_index():
+        return
+    path = chat_file_path(chat_id)
+    if path.is_file():
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    else:
+        payload = {"version": CHAT_FILE_VERSION, "id": chat_id,
+                   "context_messages": [], "transcript": []}
+    payload["todo"] = todo
+    _write_json_atomic(path, payload)
 
 
 def load_chat(chat_id: str) -> dict[str, Any] | None:
@@ -258,6 +292,7 @@ def load_chat(chat_id: str) -> dict[str, Any] | None:
     transcript = data.get("transcript")
     if not isinstance(context, list) or not isinstance(transcript, list):
         return None
+    chat["todo"] = data.get("todo") if isinstance(data.get("todo"), dict) else {}
     chat["context_messages"] = context
     chat["transcript"] = transcript
     usage = data.get("token_usage")

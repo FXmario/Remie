@@ -136,6 +136,7 @@ class AgentRunner:
         if self.provider is None:
             raise RuntimeError("AgentRunner.run_turn requires a provider")
 
+        self.tool_executor.plan().revoke()
         conversation.append({"role": "user", "content": user_content})
         empty_retries = 0
         continuations = 0

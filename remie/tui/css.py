@@ -23,6 +23,28 @@ HeaderIcon {
     width: 1fr;
 }
 
+#todo-sidebar {
+    display: none;
+    width: 28;
+    height: 1fr;
+    padding: 1;
+    border-left: solid $primary;
+}
+#todo-header { width: 100%; height: 2; }
+#todo-title { text-style: bold; height: 1; width: 1fr; }
+#todo-hide, #todo-show {
+    width: 10;
+    min-width: 10;
+    height: 1;
+    min-height: 1;
+    border: none;
+}
+#todo-hide { width: 8; min-width: 8; text-align: right; }
+#todo-show { display: none; align-horizontal: right; margin-right: 1; }
+#todo-approval { width: 100%; height: auto; margin-bottom: 1; color: $text-muted; }
+#todo-list { height: 1fr; overflow-y: auto; }
+.todo-item { width: 100%; height: auto; margin-bottom: 1; }
+
 #tab-sidebar {
     width: 26;
     height: 1fr;

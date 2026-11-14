@@ -3,6 +3,7 @@
 import inspect
 from typing import Any
 
+from remie.tools.todo import todo_tool
 from remie.tools.ask_user import ask_user_tool
 from remie.tools.commands import run_command_tool
 from remie.tools.files import (
@@ -19,6 +20,7 @@ from remie.tools.web import web_fetch_tool, web_search_tool
 from remie.tools.memory import memory_tool, history_search_tool
 
 TOOL_REGISTRY = {
+    "todo": todo_tool,
     "memory": memory_tool,
     "history_search": history_search_tool,
     "read_file": read_file_tool,
@@ -35,6 +37,7 @@ TOOL_REGISTRY = {
 }
 
 TOOL_SUMMARIES = {
+    "todo": "create or update the task plan",
     "memory": "inspect or update scoped memory",
     "history_search": "search saved conversation history",
     "read_file": "read a file",
@@ -70,6 +73,18 @@ def get_tool_str_representation(tool_name: str) -> str:
 # JSON Schema for each tool's arguments, used for native function calling
 # (Responses API) where the model receives structured tool definitions.
 TOOL_PARAMETERS = {
+    "todo": {
+        "type": "object",
+        "properties": {
+            "items": {"type": "array", "items": {"type": "object", "properties": {
+                "title": {"type": "string"},
+                "status": {"type": "string", "enum": ["pending", "in_progress", "completed"]},
+                "evidence": {"type": "string", "description": "Required for completed steps: explain what was done and checked."},
+                "check_id": {"type": "string", "description": "Optional ID returned by a passing run_test_shards call in this tab and plan."}
+            }, "required": ["title", "status"], "additionalProperties": False}},
+            "confirm": {"type": "boolean", "description": "Ask the user to approve a new or revised plan."}
+        }, "required": ["items"]
+    },
     "memory": {
         "type": "object",
         "properties": {

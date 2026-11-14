@@ -67,3 +67,7 @@ def test_startup_ignores_dotenv_files(tmp_path, shell_config):
         env=env,
         check=True,
     )
+
+
+def test_chat_storage_can_be_imported_before_tool_package():
+    _run_isolated("import remie.storage.chats; import remie.tools; import remie.tui.app")

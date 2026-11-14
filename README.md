@@ -21,7 +21,7 @@ The Local connector targets an OpenAI-compatible `/chat/completions` server. Man
 - The model name is shown on the top-right of the input box border
 - Three theme modes: **System** uses terminal-native ANSI colors and preserves transparency, while **Light** and **Dark** use full Textual palettes; `Ctrl+T` cycles between them
 - Async agent loop — the UI stays responsive while the LLM responds and tools run
-- Tools: `read_file`, `list_files`, `glob_files`, `tree_files`, `edit_file`, `run_command`, `ask_user`, `web_fetch`, `web_search`
+- Tools: `todo`, `read_file`, `list_files`, `glob_files`, `tree_files`, `edit_file`, `run_command`, `ask_user`, `web_fetch`, `web_search`
 - **Web access via curl** — `web_fetch` fetches any http(s) URL (custom method, headers, body; HTML is reduced to readable text, other types returned raw, or saved to disk with `save_to`), and `web_search` searches DuckDuckGo's HTML endpoint with automatic Bing fallback when DuckDuckGo is unreachable — both no API key needed. Responses are size-capped and truncated before they reach the context window; timeout configurable with `REMIE_WEB_TIMEOUT`
 - **Outside-project permissions** — file operations, download destinations, command working directories, and explicit paths in shell commands require approval when they resolve outside the active project. Choose **Allow once**, **Always allow**, or **Deny**. Always allow approves the displayed directories (the containing directory for a file) and their descendants for the current tab/session only; approvals are not saved across restarts. Other external directories still prompt.
 - **Context compaction** — when a long task nears the context window, dropped messages are summarized into a compact summary in the current conversation instead of being silently truncated. This summary belongs to the chat and remains separate from durable memory.
@@ -233,6 +233,58 @@ including on a Linux TTY. When the slash-command popup is open, `Tab` still
 completes its highlighted command.
 
 The left sidebar lists open chats and their `ready`, `working`, `waiting for user`, or `done` state. Select a tab to switch without stopping work in the others. Use the sidebar buttons to create tabs and hide the sidebar; `Ctrl+B` toggles it from anywhere. Background tabs can finish or request an answer without taking focus from the active tab.
+
+### Todo plans, approval, and completion evidence
+
+For work requests the agent writes its own steps with `todo`, asks you to
+approve the plan, and updates steps as `pending`, `in_progress`, or `completed`.
+The right sidebar displays the active tab's plan and whether approval is
+required. Each tab has independent items, evidence, approval, and show/hide
+state. **Hide >** collapses it; **< Todo** opens it again. An empty plan hides
+both controls. Below 120 terminal columns the default is collapsed, unless you
+have explicitly chosen a visibility setting for that tab.
+
+Approval is enforced in the shared tool executor, for both native and text
+protocols—not just requested in the model prompt:
+
+- Before approval, the agent can read/list/find files, inspect memory, search
+  saved history, check tab status, search the web, and ask questions.
+- Edits, shell commands, test commands, HTTP fetches (including GET), memory
+  writes, and unclassified tools are blocked until that tab's plan is approved.
+  Shell commands are not guessed to be read-only. Existing outside-project,
+  memory-write, destructive-command, and sandbox restrictions still apply.
+- Rejecting/cancelling a plan leaves implementation blocked. Adding, removing,
+  renaming, or reordering steps revokes approval. Progress/evidence updates do
+  not require a new approval. Clearing the plan revokes approval too.
+- Every new user request requires renewed approval before implementation;
+  internal model continuations within the same request do not.
+
+A completed step requires a non-empty `evidence` explanation. Without a recorded
+check it is labelled **Agent-reported complete**. `run_test_shards` results also
+return a tab/plan-local `check_id`; the agent may cite a passing result when
+completing a step. The executor checks the actual recorded status, exit codes,
+and timeout flags rather than trusting a model-supplied "verified" flag. Unknown,
+failed, and other-tab check IDs cannot establish a passing check. Linked steps
+are labelled **Passing check recorded**, and show the explanation and command.
+
+**This is not automatic proof that a task is correct.** Test commands are
+model-selected and can be incomplete or even run something other than tests.
+A recorded pass proves successful execution of that command at that time, not
+that the command covers the step, the code is still unchanged, or a subjective
+requirement was met. Check history is not a source-content attestation. The
+agent must report failures honestly; steps without a passing check can still
+be completed with an explicit agent-reported explanation (for example, a
+manual review or an account of failed checks).
+
+Todo items, linked evidence, and explicit visibility settings are saved in the
+chat JSON. Restarts and reopening saved history restore this information, but
+**never restore approval** or make old check IDs eligible for new completion
+claims. Existing linked passing evidence remains historical on its completed
+step. The agent must request approval again before continuing implementation.
+
+Plan approval is a workflow gate, not a replacement for a command sandbox or
+an authorization system that proves every approved operation matches the plan.
+It applies to model tool execution, not user-operated workspace management.
 
 ### Tabs and Git worktrees
 

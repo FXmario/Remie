@@ -905,6 +905,40 @@ class ImageAttachmentBar(HorizontalScroll):
             app.remove_pending_image(index)
 
 
+class TodoSidebar(Vertical):
+    """Progress for the currently visible tab."""
+
+    def __init__(self) -> None:
+        super().__init__(id="todo-sidebar")
+
+    def compose(self):
+        with Horizontal(id="todo-header"):
+            yield Label("Todo", id="todo-title")
+            yield Button("Hide >", id="todo-hide")
+        yield Label("Approval required", id="todo-approval", markup=False)
+        yield Vertical(id="todo-list")
+
+    async def set_items(self, items: list[dict], *, approved: bool = False) -> None:
+        self.query_one("#todo-approval", Label).update("Approved" if approved else "Approval required")
+        container = self.query_one("#todo-list", Vertical)
+        await container.remove_children()
+        for item in items:
+            symbol = {"pending": "○", "in_progress": "◐", "completed": "✓"}[item["status"]]
+            text = f"{symbol} {item['title']}"
+            if item["status"] == "completed":
+                verified = item.get("verification") == "check_passed"
+                text += "\nPassing check recorded" if verified else "\nAgent-reported complete"
+                if item.get("evidence"):
+                    text += "\n" + item["evidence"]
+                if verified:
+                    check = item.get("check", {})
+                    text += "\nCheck: " + str(check.get("command", "run_test_shards"))
+            label = Label(text, markup=False, classes="todo-item")
+            if item["status"] == "completed":
+                label.tooltip = "A recorded passing check confirms execution succeeded, not that this task is semantically correct. Saved checks are historical."
+            await container.mount(label)
+
+
 class TabSidebar(Vertical):
     """Left-side list of the project's open chat tabs."""
 
