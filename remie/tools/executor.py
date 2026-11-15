@@ -180,7 +180,12 @@ class ToolExecutor:
                 return {"command": args.get("command", ""), "blocked": True,
                         "reason": reason, "exit_code": None, "stdout": "",
                         "stderr": f"Command blocked: {reason}", "timed_out": False}
-        return await self._execute(name, args)
+        from remie.storage.todo import begin_output, finish_output
+
+        ticket = begin_output(name, args)
+        result = await self._execute(name, args)
+        finish_output(ticket, result)
+        return result
 
     async def _execute(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
         if name == "tab_status" and self.tab_status is not None:

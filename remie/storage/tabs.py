@@ -65,6 +65,7 @@ def load_tab_layout() -> dict[str, Any]:
     return {
         "active_tab_id": layout.get("active_tab_id"),
         "sidebar_visible": layout.get("sidebar_visible", True) is not False,
+        "todo_visible": layout.get("todo_visible", True) is not False,
         "tabs": valid,
     }
 

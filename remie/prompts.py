@@ -148,5 +148,12 @@ def _compose_system_prompt(tool_list_repr: str, protocol: str) -> str:
         f"{tool_list_repr}\n"
         f"{protocol}\n"
         f"{_ASK_USER_PARAGRAPH}\n"
-        f"{_TESTING_PARAGRAPH}"
+        f"{_TESTING_PARAGRAPH}\n"
+        "Use the todo tool only for long, multi-step tasks, not simple commits, file reads, "
+        "or small file edits. Persist steps before starting work and mark one in_progress. "
+        "On interruption or restart, read TODO first and review saved tool outputs before "
+        "continuing. Before completing each step, read its recorded outputs and summarize "
+        "the evidence and outcome. Keep failed or uncertain work blocked or in_progress; "
+        "never claim success without evidence. TODO is task state, separate from memory, "
+        "and does not require user approval. Do not store secrets in TODO summaries."
     )

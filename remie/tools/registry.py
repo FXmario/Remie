@@ -18,7 +18,10 @@ from remie.tools.web import web_fetch_tool, web_search_tool
 
 from remie.tools.memory import memory_tool, history_search_tool
 
+from remie.tools.todo import todo_tool
+
 TOOL_REGISTRY = {
+    "todo": todo_tool,
     "memory": memory_tool,
     "history_search": history_search_tool,
     "read_file": read_file_tool,
@@ -35,6 +38,7 @@ TOOL_REGISTRY = {
 }
 
 TOOL_SUMMARIES = {
+    "todo": "save or resume long-task checkpoints",
     "memory": "inspect or update scoped memory",
     "history_search": "search saved conversation history",
     "read_file": "read a file",
@@ -70,6 +74,16 @@ def get_tool_str_representation(tool_name: str) -> str:
 # JSON Schema for each tool's arguments, used for native function calling
 # (Responses API) where the model receives structured tool definitions.
 TOOL_PARAMETERS = {
+    "todo": {
+        "type": "object",
+        "properties": {
+            "action": {"type": "string", "enum": ["read", "add", "update"]},
+            "title": {"type": "string"},
+            "item_id": {"type": "string"},
+            "status": {"type": "string", "enum": ["pending", "in_progress", "completed", "blocked"]},
+            "summary": {"type": "string", "description": "Evidence and outcome from saved tool outputs; required for completion."},
+        },
+    },
     "memory": {
         "type": "object",
         "properties": {

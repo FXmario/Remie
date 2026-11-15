@@ -533,3 +533,25 @@ If SQLite lacks FTS5 or the index is corrupt, the tool reports an error and JSON
 chats remain intact. Larger archives may benefit from incremental indexing in a
 future version. Existing legacy unscoped memory collections are **not** imported
 automatically; copy only reviewed durable facts into the appropriate new scope.
+
+### Persistent TODO checkpoints
+
+For long, multi-step work the agent can use the `todo` tool (`read`, `add`,
+`update`). Small actions such as a commit, reading a file, or a simple edit do
+not need a TODO or planning approval.
+
+Steps have `pending`, `in_progress`, `blocked`, or `completed` status. While a
+step is in progress, tool arguments are checkpointed before execution and tool
+results are saved when execution returns. Before completing a step, the agent
+must read the saved outputs and provide an evidence/outcome summary. Completed
+steps and their outputs are retained.
+
+Checkpoints live under `~/.remie/todos/<project>/<tab>/tasks.json` (or
+`REMIE_HOME/todos/...`), separate from approved long-term memory. Unfinished
+checkpoints are included in the tab's prompt context after restart. Reopen the
+same tab/project to resume; other tabs have independent task lists.
+
+A force-close during a tool call can leave an attempt without a result. This
+means its outcome is **unknown**, not that the action failed or should be
+repeated. The agent must verify side effects before continuing. Tool outputs
+are retained locally, so avoid running commands that print secrets.

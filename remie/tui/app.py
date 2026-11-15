@@ -106,6 +106,7 @@ from remie.tui.widgets import (
     StreamingRichLog,
     ThinkingIndicator,
     TabSidebar,
+    TodoSidebar,
 )
 
 
@@ -301,9 +302,12 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
         with Horizontal(id="workspace"):
             yield TabSidebar()
             with Vertical(id="chat-pane"):
-                yield Button("> Tabs", id="tabs-show")
+                with Horizontal(id="sidebar-controls"):
+                    yield Button("> Tabs", id="tabs-show")
+                    yield Button("TODO <", id="todo-show")
                 with Vertical(id="tab-stack"):
                     yield ChatTabPane(id="initial-tab-pane", classes="chat-tab-pane")
+            yield TodoSidebar()
         yield CopyableFooter()
 
     def query_one(self, selector, expect_type=None):
@@ -562,6 +566,8 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
             self._refresh_image_attachments()
         self._persist_tab_layout()
         self._apply_sidebar_visibility()
+        self._refresh_todo()
+        self.set_interval(0.75, self._refresh_todo)
         self._refresh_tabs()
         prompt.focus()
         self._prefetch_model_context()
@@ -620,7 +626,8 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
         key = memory_scope["project_id"] + ":" + (runtime.chat_id or "")
         if key not in runtime.memory_snapshots:
             runtime.memory_snapshots[key] = memory_snapshot(memory_scope)
-        snapshot = runtime.memory_snapshots[key]
+        from remie.storage.todo import todo_snapshot
+        snapshot = runtime.memory_snapshots[key] + todo_snapshot(memory_scope)
         tabs = self._tab_layout.get("tabs", [])
         index = next(
             (i for i, tab in enumerate(tabs, 1) if tab["id"] == self._runtime().tab_id),
@@ -664,11 +671,52 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
         await self.query_one(TabSidebar).set_tabs(tabs, self._active_tab_id)
     def _refresh_tabs(self) -> None:
         self.call_later(self._refresh_tabs_async)
+        self._refresh_todo()
+
+    def _refresh_todo(self) -> None:
+        from remie.storage.memory import scope_context
+        from remie.storage.todo import todo_view
+
+        runtime = self._runtime()
+        tab = next((t for t in self._tab_layout.get("tabs", []) if t["id"] == runtime.tab_id), {})
+        source = Path(tab.get("workspace_source") or runtime.working_directory or Path.cwd())
+        try:
+            key = (str(source), runtime.tab_id)
+            if getattr(self, "_todo_scope_key", None) != key:
+                self._todo_scope = scope_context(source, runtime.tab_id)
+                self._todo_scope_key = key
+            data = todo_view(self._todo_scope)
+            self._todo_has_items = bool(data["items"])
+            self.query_one(TodoSidebar).set_items(data["items"])
+        except (OSError, UnicodeError, ValueError, KeyError, TypeError):
+            self._todo_has_items = False
+            self.query_one(TodoSidebar).set_items([], "Unable to read TODO checkpoints.")
+        self._apply_sidebar_visibility()
+
+    def on_resize(self, event) -> None:
+        self._todo_narrow = event.size.width < 110
+        if self.is_mounted:
+            self._apply_sidebar_visibility()
+
+    def action_toggle_todo(self) -> None:
+        if getattr(self, "_todo_narrow", False):
+            self._todo_narrow = False
+            self._tab_layout["todo_visible"] = False
+        self._tab_layout["todo_visible"] = not bool(self._tab_layout.get("todo_visible", True))
+        self._apply_sidebar_visibility()
+        self._persist_tab_layout()
 
     def _apply_sidebar_visibility(self) -> None:
         visible = bool(self._tab_layout.get("sidebar_visible", True))
         self.query_one(TabSidebar).display = visible
         self.query_one("#tabs-show", Button).display = not visible
+        has_todos = getattr(self, "_todo_has_items", False)
+        todo_visible = has_todos and bool(self._tab_layout.get("todo_visible", True)) and not getattr(
+            self, "_todo_narrow", self.size.width < 110
+        )
+        self.query_one(TodoSidebar).display = todo_visible
+        self.query_one("#todo-show", Button).display = has_todos and not todo_visible
+        self.query_one("#sidebar-controls").display = not visible or (has_todos and not todo_visible)
 
     def action_toggle_tabs(self) -> None:
         self._tab_layout["sidebar_visible"] = not bool(
@@ -678,7 +726,10 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
         self._persist_tab_layout()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "tabs-show":
+        if event.button.id == "todo-show":
+            event.stop()
+            self.action_toggle_todo()
+        elif event.button.id == "tabs-show":
             event.stop()
             self.action_toggle_tabs()
 

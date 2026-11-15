@@ -23,6 +23,51 @@ HeaderIcon {
     width: 1fr;
 }
 
+#todo-sidebar {
+    width: 30;
+    height: 1fr;
+    padding: 1;
+    border-left: solid $primary;
+}
+
+#todo-header {
+    width: 100%;
+    height: 2;
+}
+
+#todo-title {
+    width: 1fr;
+    text-style: bold;
+}
+
+#todo-list {
+    height: 1fr;
+    overflow-y: auto;
+}
+
+#todo-content {
+    width: 100%;
+    height: auto;
+}
+
+#todo-hide, #todo-show {
+    width: 8;
+    min-width: 8;
+    height: 1;
+    min-height: 1;
+    border: none;
+    margin: 0;
+}
+
+#todo-show {
+    display: none;
+}
+
+#sidebar-controls {
+    height: auto;
+    display: none;
+}
+
 #tab-sidebar {
     width: 26;
     height: 1fr;

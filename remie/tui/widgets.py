@@ -954,6 +954,44 @@ class TabSidebar(Vertical):
             app.switch_tab(tab_id)
 
 
+class TodoSidebar(Vertical):
+    """Read-only checkpoints for the active tab, including completion evidence."""
+
+    def __init__(self) -> None:
+        super().__init__(id="todo-sidebar")
+        self._rendered = None
+
+    def compose(self):
+        with Horizontal(id="todo-header"):
+            yield Label("TODO", id="todo-title")
+            yield Button("Hide >", id="todo-hide")
+        with Vertical(id="todo-list"):
+            yield Label("No TODO steps yet.", id="todo-content", markup=False)
+
+    def set_items(self, items: list[dict], error: str = "") -> None:
+        lines = []
+        symbols = {"pending": "○", "in_progress": "◉", "completed": "✓", "blocked": "!"}
+        for item in items:
+            status = str(item.get("status", "pending"))
+            lines.append(f"{symbols.get(status, '○')} {item.get('title', '')}")
+            lines.append("  " + status.replace("_", " "))
+            if item.get("summary"):
+                lines.append("  " + str(item["summary"]))
+            outputs = item.get("outputs", [])
+            if any("result" not in output for output in outputs):
+                lines.append("  ⚠ Tool outcome unknown; verification needed")
+            lines.append("")
+        text = error or "\n".join(lines).rstrip() or "No TODO steps yet."
+        if text != self._rendered:
+            self.query_one("#todo-content", Label).update(text)
+            self._rendered = text
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "todo-hide":
+            event.stop()
+            self.app.action_toggle_todo()
+
+
 class InputRow(Horizontal):
     def compose(self):
         yield StatusIndicator()
