@@ -61,10 +61,12 @@ HeaderIcon {
 
 #todo-show {
     display: none;
+    dock: right;
+    margin-right: 1;
 }
 
 #sidebar-controls {
-    height: auto;
+    height: 1;
     display: none;
 }
 

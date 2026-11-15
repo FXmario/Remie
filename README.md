@@ -505,7 +505,10 @@ secrets, transcripts, temporary TODOs, or detailed procedures in memory.
 
 A tab loads a frozen memory snapshot when its conversation is initialized or
 restored. Writes persist immediately but do not silently change an existing
-prompt snapshot. Run **`/memory reload`** while the tab is idle to reload all
+prompt snapshot. Use **`/memory`** to open a scrollable memory manager showing the full saved global, project, and
+current-tab memories and their file locations without sending them to the model.
+Create notes by scope, edit one checked note, or delete checked notes after confirmation.
+Run **`/memory reload`** while the tab is idle to reload all
 three scopes for that tab. Other tabs must reload separately. Changing projects
 selects that project's snapshot and private tab notes; notes are not promoted
 between scopes automatically. Scope isolation is a retrieval boundary, not

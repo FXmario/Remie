@@ -47,6 +47,7 @@ def test_slash_command_registry_filters_and_resolves_trailing_slash():
         "change worktree",
         "list worktree",
         "change dir",
+        "memory",
         "memory reload",
     ]
     assert [command.name for command in slash_command_matches("/change d")] == ["change dir"]
@@ -331,5 +332,35 @@ def test_model_popup_filters_remote_model_catalog(monkeypatch):
             screen.query_one("#model-picker-search", Input).value = "beta"
             await pilot.pause()
             assert [option.id for option in model_list.options] == ["vendor/beta"]
+
+    asyncio.run(exercise())
+
+
+def test_memory_command_shows_live_scoped_notes_without_conversation_turn(tmp_path, monkeypatch):
+    from remie.storage.memory import memory_path
+
+    monkeypatch.setenv("REMIE_HOME", str(tmp_path / "state"))
+
+    async def exercise():
+        app = AgentApp()
+        async with app.run_test(size=(100, 30)) as pilot:
+            context = app._tab_prompt_context()["memory_scope"]
+            for scope in ("global", "project"):
+                path = memory_path(scope, context)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(f"{scope} [literal] note", encoding="utf-8")
+            from remie.tui.screens.memory import MemoryScreen
+            from textual.widgets import Static
+
+            before = list(app.conversation)
+            app._dispatch_slash_command("memory")
+            await pilot.pause()
+            assert isinstance(app.screen, MemoryScreen)
+            assert ("global", "global [literal] note") in app.screen.entries
+            assert str(app.screen.query_one("#memory-tab-content", Static).render()) == "(empty)"
+            await pilot.press("escape")
+            await pilot.pause()
+            assert not isinstance(app.screen, MemoryScreen)
+            assert app.conversation == before
 
     asyncio.run(exercise())

@@ -299,12 +299,12 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
 
     def compose(self) -> ComposeResult:
         yield SandboxHeader()
+        with Horizontal(id="sidebar-controls"):
+            yield Button("> Tabs", id="tabs-show")
+            yield Button("TODO <", id="todo-show")
         with Horizontal(id="workspace"):
             yield TabSidebar()
             with Vertical(id="chat-pane"):
-                with Horizontal(id="sidebar-controls"):
-                    yield Button("> Tabs", id="tabs-show")
-                    yield Button("TODO <", id="todo-show")
                 with Vertical(id="tab-stack"):
                     yield ChatTabPane(id="initial-tab-pane", classes="chat-tab-pane")
             yield TodoSidebar()
@@ -942,6 +942,11 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
                 title="Agent busy",
                 severity="warning",
             )
+            return
+        if name == "memory":
+            from remie.tui.screens.memory import MemoryScreen
+
+            self.push_screen(MemoryScreen(self._tab_prompt_context()["memory_scope"]))
             return
         if name == "memory reload":
             self._runtime().memory_snapshots.clear()

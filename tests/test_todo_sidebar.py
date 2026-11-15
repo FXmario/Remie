@@ -43,6 +43,11 @@ def test_sidebar_updates_and_toggles(tmp_path, monkeypatch):
             await pilot.click("#todo-hide")
             assert not sidebar.display
             assert app.query_one("#todo-show", Button).display
+            await pilot.pause()
+            button = app.query_one("#todo-show", Button)
+            sandbox = app.query_one("#sandbox-status")
+            assert button.region.right == app.screen.region.right - 1
+            assert button.region.y == sandbox.region.bottom
             await pilot.click("#todo-show")
             assert sidebar.display
             monkeypatch.setattr("remie.storage.todo.todo_view", lambda context: {"items": []})

@@ -22,6 +22,7 @@ SLASH_COMMANDS = (
     SlashCommand("change worktree", "Open a worktree in a new tab"),
     SlashCommand("list worktree", "List and manage Git worktrees"),
     SlashCommand("change dir", "Change this tab's working directory"),
+    SlashCommand("memory", "Show global, project, and current-tab memories"),
     SlashCommand("memory reload", "Reload saved memory for this tab"),
 )
 
