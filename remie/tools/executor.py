@@ -190,7 +190,7 @@ class ToolExecutor:
     async def _execute(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
         if name == "tab_status" and self.tab_status is not None:
             return self.tab_status()
-        if name == "memory" and (args.get("action") or "read") != "read":
+        if name == "memory" and (args.get("operations") is not None or (args.get("action") or "read") != "read"):
             from remie.storage.memory import memory_context
 
             scope = args.get("scope") or "tab"
@@ -199,7 +199,7 @@ class ToolExecutor:
                 return current
             action = args.get("action")
             entry = ""
-            if action in {"replace", "remove"}:
+            if action in {"replace", "patch", "remove"}:
                 old_text = args.get("old_text") or ""
                 matches = [part for part in current["content"].split("\n\n---\n\n")
                            if old_text and old_text in part]
@@ -209,7 +209,9 @@ class ToolExecutor:
             answer = await self.ask_user(
                 f"Approve {action} in {scope} memory?\n"
                 f"Existing whole entry: {entry}\n"
-                f"New content: {args.get('content') or ''}\nDo not save secrets.",
+                f"New content: {args.get('content') or ''}\n"
+                f"Batch operations: {args.get('operations')}\n"
+                f"Current memory: {current['content']}\nDo not save secrets.",
                 ["Save memory", "Cancel"],
             )
             if answer != "Save memory":

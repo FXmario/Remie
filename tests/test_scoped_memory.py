@@ -226,3 +226,49 @@ def test_approval_accepts_and_refuses_concurrent_changes(context):
         assert "changed during approval" in result["error"]
     asyncio.run(exercise())
     assert memory_tool()["content"] == "changed entry"
+
+
+def test_patch_preserves_entry_and_rejects_repeated_span(context):
+    memory_tool('add', content='Use Python with pytest')
+    assert memory_tool('patch', old_text='Python', content='Rust')['success']
+    assert memory_tool()['content'] == 'Use Rust with pytest'
+    memory_tool('add', content='echo echo')
+    assert 'error' in memory_tool('patch', old_text='echo', content='once')
+
+
+def test_atomic_batch_final_budget_and_rollback(context, monkeypatch):
+    memory_tool('add', content='old note')
+    monkeypatch.setenv('REMIE_MEMORY_TAB_LIMIT', '8')
+    assert memory_tool(operations=[{'action': 'add', 'content': 'new note'},
+                                   {'action': 'remove', 'old_text': 'old note'}])['success']
+    result = memory_tool(operations=[{'action': 'remove', 'old_text': 'new note'},
+                                     {'action': 'patch', 'old_text': 'missing', 'content': 'x'}])
+    assert 'error' in result
+    assert result['current_entries'] == ['new note']
+    assert memory_tool()['content'] == 'new note'
+    assert memory_tool()['remaining'] == 0
+
+
+def test_batch_requires_approval(context):
+    prompts = []
+    async def deny(question, options):
+        prompts.append(question)
+        return 'Cancel'
+    executor = ToolExecutor(ask_user=deny)
+    result = asyncio.run(executor.execute('memory', {'operations': [{'action': 'add', 'content': 'proposed'}]}))
+    assert 'error' in result
+    assert prompts and 'proposed' in prompts[0]
+    assert memory_tool()['content'] == ''
+
+
+def test_batch_approval_refuses_concurrent_changes(context):
+    memory_tool('add', content='original')
+    async def approve(question, options):
+        memory_tool('add', content='concurrent')
+        return 'Save memory'
+    executor = ToolExecutor(ask_user=approve)
+    result = asyncio.run(executor.execute('memory', {'operations': [
+        {'action': 'patch', 'old_text': 'original', 'content': 'approved'}]}))
+    assert 'changed during approval' in result['error']
+    assert 'original' in memory_tool()['content']
+    assert 'approved' not in memory_tool()['content']

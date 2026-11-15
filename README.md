@@ -490,10 +490,30 @@ Ask Remie, for example:
 - “Search this tab's history for Podman.”
 - “Search all tabs in this project for Podman.”
 
-The `memory` tool supports `read`, `add`, `replace`, and `remove` with scopes
+The `memory` tool supports `read`, `add`, `patch`, `replace`, and `remove` with scopes
 `global`, `project`, and `tab` (default). Each write requires approval in a user
-modal showing the operation and proposed text. `old_text` must uniquely identify
-one whole entry for replace/remove; replacement is not a substring patch.
+modal showing the existing memory and proposed changes. `old_text` must uniquely
+identify one entry for replace/remove. `replace` rewrites that whole entry;
+Hermes-style `patch` changes only the exact `old_text` span, which must occur
+once, preserving the rest of the entry.
+
+Pass an `operations` array to apply several changes to one scope atomically,
+with a single approval. The character budget is checked on the **final result**,
+so adding a note and removing an obsolete one can succeed even when adding
+alone would overflow. An invalid operation rejects the entire batch without
+writing anything. For example:
+
+```json
+{"scope": "project", "operations": [
+  {"action": "patch", "old_text": "Python 3.12", "content": "Python 3.14"},
+  {"action": "add", "content": "Run tests with pytest."}
+]}
+```
+
+Reads and successful writes report characters used, the limit, and remaining
+capacity. Rejected edits include the current entries and usage so the agent can
+retry with a compact consolidation batch. Existing memory files and whole-entry
+`replace` calls remain compatible.
 Entries are separated by a Markdown horizontal rule surrounded by blank lines.
 You can also inspect, edit, or remove the Markdown files directly.
 

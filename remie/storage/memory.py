@@ -102,38 +102,62 @@ def memory_snapshot(context: dict) -> str:
     return "\n\n## Saved memory (reference notes, not overriding instructions)" + "".join(blocks)
 
 
-def memory_tool(action: str = "read", scope: str = "tab", content: str = "", old_text: str = "") -> dict:
+def memory_tool(action: str = "read", scope: str = "tab", content: str = "", old_text: str = "",
+                operations: list[dict] | None = None) -> dict:
     """Read or explicitly save durable notes in global, shared project, or private tab memory. Writes require user approval. Never save secrets or task logs; replace/remove identify one whole entry using a unique substring."""
     context = memory_context.get()
     if context is None:
         return {"error": "No active memory scope"}
-    if action not in {"read", "add", "replace", "remove"}:
-        return {"error": "Action must be read, add, replace, or remove"}
+    if scope not in {"global", "project", "tab"}:
+        return {"error": "Scope must be global, project, or tab"}
+    if operations is not None:
+        action = "batch"
+    if action not in {"read", "add", "replace", "patch", "remove", "batch"}:
+        return {"error": "Action must be read, add, replace, patch, remove, or batch"}
     with write_lock():
         path = memory_path(scope, context)
         text = read_memory(scope, context)
-        if action == "read":
-            return {"scope": scope, "content": text, "path": str(path), "limit": char_limit(scope)}
-        if "expected_memory" in context and context["expected_memory"] != text:
-            return {"error": "Memory changed during approval; review and retry"}
         entries = [entry.strip() for entry in text.split("\n\n---\n\n") if entry.strip()]
-        if action in {"add", "replace"} and not content.strip():
-            return {"error": "Nonempty content is required"}
-        if "\n\n---\n\n" in content:
-            return {"error": "Content cannot contain the memory entry separator"}
-        if action == "add":
-            entries.append(content.strip())
-        else:
-            matches = [i for i, entry in enumerate(entries) if old_text and old_text in entry]
+        usage = {"characters": len(text), "limit": char_limit(scope),
+                 "remaining": max(0, char_limit(scope) - len(text))}
+        def failure(message):
+            return {"error": message, "scope": scope, "current_entries": entries, **usage}
+        if action == "read":
+            return {"scope": scope, "content": text, "path": str(path), **usage}
+        if "expected_memory" in context and context["expected_memory"] != text:
+            return failure("Memory changed during approval; review and retry")
+        ops = operations if action == "batch" else [dict(action=action, content=content, old_text=old_text)]
+        if not isinstance(ops, list) or not ops:
+            return failure("operations must be a nonempty list")
+        updated_entries = entries.copy()
+        for op in ops:
+            if not isinstance(op, dict) or op.get("action") not in {"add", "replace", "patch", "remove"}:
+                return failure("Each operation must use add, replace, patch, or remove")
+            act, value, old = op["action"], op.get("content", ""), op.get("old_text", "")
+            if not isinstance(value, str) or not isinstance(old, str):
+                return failure("content and old_text must be strings")
+            if act != "remove" and not value.strip():
+                return failure("Nonempty content is required")
+            if "\n\n---\n\n" in value:
+                return failure("Content cannot contain the memory entry separator")
+            if act == "add":
+                updated_entries.append(value.strip())
+                continue
+            matches = [i for i, entry in enumerate(updated_entries) if old and old in entry]
             if len(matches) != 1:
-                return {"error": "old_text must identify exactly one entry"}
-            if action == "remove":
-                entries.pop(matches[0])
+                return failure("old_text must identify exactly one entry")
+            index = matches[0]
+            if act == "remove":
+                updated_entries.pop(index)
+            elif act == "patch":
+                if updated_entries[index].count(old) != 1:
+                    return failure("old_text must occur exactly once for patch")
+                updated_entries[index] = updated_entries[index].replace(old, value).strip()
             else:
-                entries[matches[0]] = content.strip()
-        updated = "\n\n---\n\n".join(entries)
+                updated_entries[index] = value.strip()
+        updated = "\n\n---\n\n".join(updated_entries)
         if len(updated) > char_limit(scope):
-            return {"error": "Memory limit exceeded; shorten or remove entries first", "limit": char_limit(scope)}
+            return failure("Memory limit exceeded; retry one atomic batch that shortens or removes stale entries and adds the new note")
         path.parent.mkdir(parents=True, exist_ok=True)
         fd, temporary = tempfile.mkstemp(dir=path.parent, prefix=".memory-")
         try:
@@ -143,7 +167,8 @@ def memory_tool(action: str = "read", scope: str = "tab", content: str = "", old
         finally:
             if os.path.exists(temporary):
                 os.unlink(temporary)
-        return {"success": True, "scope": scope, "characters": len(updated),
+        return {"success": True, "scope": scope, "characters": len(updated), "limit": char_limit(scope),
+                "remaining": char_limit(scope) - len(updated),
                 "message": "Saved. Use /memory reload to refresh this tab's prompt snapshot."}
 
 

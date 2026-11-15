@@ -87,10 +87,15 @@ TOOL_PARAMETERS = {
     "memory": {
         "type": "object",
         "properties": {
-            "action": {"type": "string", "enum": ["read", "add", "replace", "remove"]},
+            "action": {"type": "string", "enum": ["read", "add", "replace", "patch", "remove", "batch"]},
             "scope": {"type": "string", "enum": ["global", "project", "tab"]},
-            "content": {"type": "string", "description": "Complete entry for add/replace."},
+            "content": {"type": "string", "description": "Complete entry for add/replace; replacement span for patch."},
             "old_text": {"type": "string", "description": "Unique substring identifying an entry for replace/remove."},
+            "operations": {"type": "array", "description": "Atomic changes in one scope; limit checked on final result.", "items": {
+                "type": "object", "properties": {
+                    "action": {"type": "string", "enum": ["add", "patch", "replace", "remove"]},
+                    "content": {"type": "string"}, "old_text": {"type": "string"}
+                }, "required": ["action"], "additionalProperties": False}},
         },
     },
     "history_search": {
