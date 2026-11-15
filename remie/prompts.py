@@ -21,7 +21,7 @@ When you want to use a tool, first provide a short 'thinking:' line explaining y
 Use compact single-line JSON with double quotes. After receiving a tool_result(...) message, continue the task.
 If no tool is needed, respond normally.
 
-For user work requests, first use todo to write the important steps with pending statuses and confirm=true. Wait for approval before implementation; revise the plan if requested. Update todo as work progresses, marking steps in_progress and completed. Do not mark unfinished work completed.
+Create a todo only when the user asks you to perform actionable work (such as implementing a change, fixing a bug, or running tests). Do not create a todo for ordinary questions, explanations, advice, or conversation; answer those directly. For user work requests, first use todo to write the important steps with pending statuses and confirm=true. Wait for approval before implementation; revise the plan if requested. Update todo as work progresses, marking steps in_progress and completed. Do not mark unfinished work completed.
 
 When multiple valid approaches have meaningful tradeoffs or require a user preference, do not choose silently. Briefly explain the options and ask the user which they prefer. Continue autonomously for routine implementation details or when one option clearly dominates. Do not ask unnecessary confirmation questions.
 To ask the user a question, call the 'ask_user' tool and wait for its result instead of ending your turn.
@@ -151,8 +151,8 @@ def _compose_system_prompt(tool_list_repr: str, protocol: str) -> str:
         f"You have access to a series of tools you can execute. Here are the tools you can execute:\n\n"
         f"{tool_list_repr}\n"
         f"{protocol}\n"
-        "For user work requests, first use todo to write the important steps with pending statuses and confirm=true. Wait for approval before implementation; revise the plan if requested. Update todo as work progresses, marking steps in_progress and completed. Do not mark unfinished work completed.\n\n"
-        "Approval is enforced per tab. Safe inspection and questions are allowed before approval; edits, shell commands (including read-only-looking commands), tests, HTTP fetches, memory writes, and unknown tools are blocked. New user requests and resumed chats require approval again. Changing step titles/order revokes approval; status updates do not.\n"
+        "Create a todo only when the user asks you to perform actionable work (such as implementing a change, fixing a bug, or running tests). Do not create a todo for ordinary questions, explanations, advice, or conversation; answer those directly. For user work requests, first use todo to write the important steps with pending statuses and confirm=true. Wait for approval before implementation; revise the plan if requested. Update todo as work progresses, marking steps in_progress and completed. Do not mark unfinished work completed.\n\n"
+        "Approval is enforced per tab. Safe inspection and questions are allowed before approval; edits, shell commands (including read-only-looking commands), tests, HTTP fetches, memory writes, and unknown tools are blocked. New actionable work requests and resumed implementation require approval again; ordinary questions do not require a todo or approval. Changing step titles/order revokes approval; status updates do not.\n"
         "Completed todo steps require a non-empty evidence string. Optionally cite check_id from this tab's run_test_shards result. The app validates recorded passing execution, not semantic task correctness. Never claim a passing check proves arbitrary work correct. Preserve evidence/check_id on unchanged completed steps. Restored passing checks are historical.\n"
         f"{_ASK_USER_PARAGRAPH}\n"
         f"{_TESTING_PARAGRAPH}"
