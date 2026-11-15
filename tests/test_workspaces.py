@@ -85,8 +85,6 @@ def test_same_repository_worktrees_do_not_need_outside_permission(tmp_path):
         return "Deny"
 
     executor = ToolExecutor(deny, project_root=tab)
-    executor.plan().items = [{"title": "Edit shared worktree", "status": "pending"}]
-    executor.plan().approved = True
     assert _outside_project_paths(
         "edit_file", {"path": str(root / "new" / "file.txt")}, tab
     ) == []

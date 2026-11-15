@@ -60,8 +60,6 @@ from remie.storage.chats import (
 )
 from remie.storage.tabs import load_tab_layout, new_tab, save_tab_layout
 from remie.tools.common import tool_working_directory
-from remie.tools.todo import TodoState
-from remie.storage.chats import save_chat_todo
 from remie.tools.executor import ToolExecutor, execute_tool_call
 from remie.tools.registry import get_tool_summary
 from remie.tui.chat_session import ChatSessionMixin
@@ -108,7 +106,6 @@ from remie.tui.widgets import (
     StreamingRichLog,
     ThinkingIndicator,
     TabSidebar,
-    TodoSidebar,
 )
 
 
@@ -158,7 +155,6 @@ class TabRuntime:
     chat_id: str | None = None
     working_directory: str | None = None
     memory_snapshots: dict[str, str] = field(default_factory=dict)
-    todo: TodoState = field(default_factory=TodoState)
     conversation: list[dict[str, Any]] = field(default_factory=list)
     transcript: list[dict[str, Any]] = field(default_factory=list)
     cached_conv_tokens: int = 0
@@ -296,8 +292,6 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
             ask_user=self._ask_user_for_tool,
             run=execute_tool_call,
             tab_status=self._tab_status_tool,
-            update_todo=self._update_todo,
-            todo_state=lambda: self._runtime().todo,
             permission_scope=lambda: self._runtime().tab_id,
         )
         self._agent_runner = AgentRunner(self._tool_executor)
@@ -308,10 +302,8 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
             yield TabSidebar()
             with Vertical(id="chat-pane"):
                 yield Button("> Tabs", id="tabs-show")
-                yield Button("< Todo", id="todo-show")
                 with Vertical(id="tab-stack"):
                     yield ChatTabPane(id="initial-tab-pane", classes="chat-tab-pane")
-            yield TodoSidebar()
         yield CopyableFooter()
 
     def query_one(self, selector, expect_type=None):
@@ -376,7 +368,6 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
             working_directory=tab.get("working_directory"),
             conversation=list(chat.get("context_messages") or []),
             transcript=list(chat.get("transcript") or []),
-            todo=TodoState.restore(chat.get("todo")),
             total_input_tokens=int(usage.get("input_tokens") or 0),
             total_output_tokens=int(usage.get("output_tokens") or 0),
         )
@@ -496,7 +487,6 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
                 working_directory=tab.get("working_directory"),
                 conversation=list(loaded.get("context_messages") or []),
                 transcript=transcript,
-                todo=TodoState.restore(loaded.get("todo")),
                 cached_conv_tokens=estimate_conversation_tokens(
                     list(loaded.get("context_messages") or [])
                 ),
@@ -519,7 +509,7 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
             if chat is not None:
                 tab = new_tab(chat["id"])
                 self._tab_layout["tabs"].append(tab)
-                self._runtimes[tab["id"]] = TabRuntime(tab["id"], chat["id"], todo=TodoState.restore(chat.get("todo")))
+                self._runtimes[tab["id"]] = TabRuntime(tab["id"], chat["id"])
                 self._active_tab_id = tab["id"]
         active_pane = self.query_one("#initial-tab-pane", ChatTabPane)
         self._runtime().pane = active_pane
@@ -652,35 +642,11 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
             "working_directory": self._runtime().working_directory or str(Path.cwd().resolve()),
             "memory_scope": memory_scope,
             "memory_snapshot": snapshot,
-            "todo_snapshot": {"items": self._runtime().todo.items, "approved": self._runtime().todo.approved},
             "tab_count": max(1, len(tabs)),
             "active_index": index,
             "active_title": self._tab_title(self._runtime().tab_id),
             "other_tabs": other_tabs,
         }
-
-    def on_resize(self, event) -> None:
-        for runtime in self._runtimes.values():
-            if not runtime.todo.user_override:
-                runtime.todo.expanded = event.size.width >= 120
-        self._apply_todo_visibility()
-
-    def _apply_todo_visibility(self) -> None:
-        # Presentation must follow the visible tab, not a background worker's
-        # ContextVar, which may have scheduled this refresh.
-        plan = self._runtime(self._active_tab_id).todo
-        if not plan.user_override:
-            plan.expanded = self.size.width >= 120
-        has_items = bool(plan.items)
-        self.query_one(TodoSidebar).display = has_items and plan.expanded
-        self.query_one("#todo-show", Button).display = has_items and not plan.expanded
-
-    def _update_todo(self, items: list[dict]) -> None:
-        runtime = self._runtime()
-        runtime.todo.items = items
-        if runtime.chat_id:
-            save_chat_todo(runtime.chat_id, runtime.todo.snapshot())
-        self._refresh_tabs()
 
     async def _refresh_tabs_async(self) -> None:
         tabs = []
@@ -696,10 +662,6 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
                     "activity": runtime.current_activity if runtime else "",
                 })
         await self.query_one(TabSidebar).set_tabs(tabs, self._active_tab_id)
-        plan = self._runtime(self._active_tab_id).todo
-        await self.query_one(TodoSidebar).set_items(plan.items, approved=plan.approved)
-        self._apply_todo_visibility()
-
     def _refresh_tabs(self) -> None:
         self.call_later(self._refresh_tabs_async)
 
@@ -716,15 +678,7 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
         self._persist_tab_layout()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id in {"todo-show", "todo-hide"}:
-            event.stop()
-            runtime = self._runtime(self._active_tab_id)
-            runtime.todo.expanded = event.button.id == "todo-show"
-            runtime.todo.user_override = True
-            if runtime.chat_id:
-                save_chat_todo(runtime.chat_id, runtime.todo.snapshot())
-            self._apply_todo_visibility()
-        elif event.button.id == "tabs-show":
+        if event.button.id == "tabs-show":
             event.stop()
             self.action_toggle_tabs()
 
@@ -1103,7 +1057,6 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
         return await runtime.pending_answer
 
     async def run_agent_turn(self, user_content: str | list) -> None:
-        self._runtime().todo.revoke()
         self._refresh_tabs()
         log = self._widget(StreamingRichLog)
         completed = False
@@ -1408,9 +1361,7 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
                     result_json = json.dumps(result, default=str)
                     if isinstance(result, dict) and result.get("diff"):
                         log.write(_render_diff(result["diff"]))
-                    if isinstance(result, dict) and result.get("reason") == "todo_approval_required":
-                        log.write("[bold red]Blocked tool:[/] " + escape(name) + " — approve this tab's todo plan first")
-                    elif isinstance(result, dict) and result.get("blocked"):
+                    if isinstance(result, dict) and result.get("blocked"):
                         log.write(
                             "[bold red]Blocked command:[/] "
                             f"{escape(result.get('command', ''))} "

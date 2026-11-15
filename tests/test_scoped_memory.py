@@ -99,8 +99,6 @@ def test_memory_approval_cancelled(context):
         return "Cancel"
     async def exercise():
         executor = ToolExecutor(ask_user=deny)
-        executor.plan().items = [{"title": "Update memory", "status": "pending"}]
-        executor.plan().approved = True
         result = await executor.execute("memory", {"action": "add", "scope": "project", "content": "No save"})
         assert "error" in result
     asyncio.run(exercise())
@@ -218,8 +216,6 @@ def test_approval_accepts_and_refuses_concurrent_changes(context):
         return "Save memory"
     async def exercise():
         executor = ToolExecutor(ask_user=approve)
-        executor.plan().items = [{"title": "Update memory", "status": "pending"}]
-        executor.plan().approved = True
         assert (await executor.execute("memory", {"action": "add", "content": "original entry"}))["success"]
         async def changed(question, choices):
             assert "original entry" in question

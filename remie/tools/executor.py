@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Any
 
 from remie.tools.registry import TOOL_REGISTRY
-from remie.tools.todo import TodoState, todo_tool
 from remie.tools.files import (
     edit_file_tool,
     glob_files_tool,
@@ -168,67 +167,10 @@ class ToolExecutor:
     project_root: Path = field(default_factory=_project_root)
     tab_status: TabStatus | None = None
     permission_scope: Callable[[], str] | None = None
-    update_todo: Callable[[list[dict]], None] | None = None
-    todo_state: Callable[[], TodoState] | None = None
-    _plans: dict[str, TodoState] = field(default_factory=dict, init=False)
     _allowed_directories: dict[str, set[Path]] = field(default_factory=dict, init=False)
     _edit_locks: dict[Path, asyncio.Lock] = field(default_factory=dict, init=False)
 
-    def plan(self) -> TodoState:
-        if self.todo_state is not None:
-            return self.todo_state()
-        scope = self.permission_scope() if self.permission_scope else "session"
-        return self._plans.setdefault(scope, TodoState())
-
-    @staticmethod
-    def needs_approval(name: str, args: dict[str, Any]) -> bool:
-        # Deny by default, including arbitrary shell/test commands and HTTP
-        # requests. Memory writes retain their additional explicit confirmation.
-        return not (name in {"todo", "ask_user", "read_file", "list_files",
-                             "glob_files", "tree_files", "history_search",
-                             "tab_status", "web_search"}
-                    or (name == "memory" and (args.get("action") or "read") == "read"))
-
-    def approval_error(self, name: str, args: dict, plan: TodoState, revision: int) -> dict | None:
-        if (self.needs_approval(name, args)
-                and (not plan.approved or not plan.items or plan.revision != revision)):
-            return {"error": "Implementation blocked: obtain approval for this tab's current todo plan first. Call todo with confirm=true.",
-                    "blocked": True, "reason": "todo_approval_required"}
-        return None
-
-    async def _run_tool(self, name: str, args: dict, plan: TodoState, revision: int) -> dict:
-        # Recheck after permission dialogs and edit-lock waits.
-        error = self.approval_error(name, args, plan, revision)
-        if error:
-            return error
-        return await asyncio.to_thread(self.run, name, args)
-
     async def execute(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
-        plan = self.plan()
-        if name == "todo":
-            parsed = todo_tool(args.get("items"), args.get("confirm", False))
-            if "error" in parsed:
-                return parsed
-            result = plan.replace(parsed["items"])
-            if "error" in result:
-                return result
-            if parsed["confirm"] and plan.items:
-                plan.revoke()
-            if self.update_todo is not None:
-                self.update_todo(plan.items)
-            revision = plan.revision
-            if parsed["confirm"] and plan.items:
-                text = "\n".join(f"{i + 1}. {item['title']}" for i, item in enumerate(plan.items))
-                try:
-                    answer = await self.ask_user("Is this todo plan right?\n" + text, ["Approve", "Suggest changes"])
-                    if plan.revision == revision:
-                        plan.approved = answer == "Approve"
-                    result["answer"] = answer
-                finally:
-                    if self.update_todo is not None:
-                        self.update_todo(plan.items)
-            result.update(items=plan.items, approved=plan.approved, revision=plan.revision)
-            return result
         # A known-destructive request is rejected, not executed, even before
         # planning. Preserve the existing safety explanation without invoking
         # an injected runner or prompting for plan/path permissions.
@@ -238,16 +180,9 @@ class ToolExecutor:
                 return {"command": args.get("command", ""), "blocked": True,
                         "reason": reason, "exit_code": None, "stdout": "",
                         "stderr": f"Command blocked: {reason}", "timed_out": False}
-        revision = plan.revision
-        error = self.approval_error(name, args, plan, revision)
-        if error:
-            return error
-        result = await self._execute(name, args, plan, revision)
-        if name == "run_test_shards" and not result.get("error") and not result.get("blocked") and plan.revision == revision:
-            result = {**result, "check_id": plan.record_check(args, result)}
-        return result
+        return await self._execute(name, args)
 
-    async def _execute(self, name: str, args: dict[str, Any], plan: TodoState, revision: int) -> dict[str, Any]:
+    async def _execute(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
         if name == "tab_status" and self.tab_status is not None:
             return self.tab_status()
         if name == "memory" and (args.get("action") or "read") != "read":
@@ -281,7 +216,7 @@ class ToolExecutor:
                 return {"error": "No active memory scope"}
             token = memory_context.set({**context, "expected_memory": current["content"]})
             try:
-                return await self._run_tool(name, args, plan, revision)
+                return await asyncio.to_thread(self.run, name, args)
             finally:
                 memory_context.reset(token)
         if name == "ask_user":
@@ -326,5 +261,5 @@ class ToolExecutor:
             path = resolve_abs_path(str(args.get("path", ".")))
             lock = self._edit_locks.setdefault(path, asyncio.Lock())
             async with lock:
-                return await self._run_tool(name, args, plan, revision)
-        return await self._run_tool(name, args, plan, revision)
+                return await asyncio.to_thread(self.run, name, args)
+        return await asyncio.to_thread(self.run, name, args)

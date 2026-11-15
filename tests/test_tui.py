@@ -766,8 +766,6 @@ def test_edit_tool_writes_diff_panel_to_log(monkeypatch, tmp_path):
             nonlocal calls
             calls += 1
             if calls == 1:
-                yield 'tool: todo({"items":[{"title":"Edit file","status":"pending"}],"confirm":true})'
-            elif calls == 2:
                 yield (
                     f'tool: edit_file({{"path": "{file}", '
                     '"old_str": "hello", "new_str": "hi"})'
@@ -783,9 +781,9 @@ def test_edit_tool_writes_diff_panel_to_log(monkeypatch, tmp_path):
 
         app = AgentApp()
         app._tool_executor.project_root = tmp_path
-        async def approve_plan(question, options):
-            return "Approve"
-        app._tool_executor.ask_user = approve_plan
+        async def unexpected_prompt(question, options):
+            raise AssertionError("Unexpected approval prompt: " + question)
+        app._tool_executor.ask_user = unexpected_prompt
         async with app.run_test() as pilot:
             await app.run_agent_turn("edit it")
             await pilot.pause()
@@ -848,8 +846,6 @@ def test_truncated_tool_call_continues_before_executing(monkeypatch, tmp_path):
             nonlocal calls
             calls += 1
             if calls == 1:
-                yield 'tool: todo({"items":[{"title":"Edit file","status":"pending"}],"confirm":true})'
-            elif calls == 2:
                 finish_box["finish_reason"] = "length"
                 finish_box["truncated"] = True
                 yield (
@@ -863,16 +859,16 @@ def test_truncated_tool_call_continues_before_executing(monkeypatch, tmp_path):
 
         app = AgentApp()
         app._tool_executor.project_root = tmp_path
-        async def approve_plan(question, options):
-            return "Approve"
-        app._tool_executor.ask_user = approve_plan
+        async def unexpected_prompt(question, options):
+            raise AssertionError("Unexpected approval prompt: " + question)
+        app._tool_executor.ask_user = unexpected_prompt
         async with app.run_test() as pilot:
             await app.run_agent_turn("edit it")
             await pilot.pause()
 
             # Complete tool call still executes; no bogus continuation.
             assert file.read_text(encoding="utf-8") == "hi\n"
-            assert calls == 3
+            assert calls == 2
 
     asyncio.run(exercise())
 

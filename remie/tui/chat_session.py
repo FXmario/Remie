@@ -46,7 +46,6 @@ class ChatSessionMixin:
                 },
                 keep_empty=True,
                 memory_scope=memory_scope,
-                todo=self._runtime().todo.snapshot(),
             )
 
     def on_unmount(self) -> None:
