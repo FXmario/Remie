@@ -135,6 +135,22 @@ class StreamingRichLog(RichLog):
         super().__init__(*args, **kwargs)
         self._stream_start: int | None = None
         self._tool_calls: dict[int, ToolCallDisclosure] = {}
+        self._last_render_width: int | None = None
+
+    def on_resize(self, event: events.Resize) -> None:
+        if (width := self.scrollable_content_region.width) > 0:
+            self._last_render_width = width
+
+    def _render_width(self) -> int:
+        """Do not bake a hidden pane's zero-width layout into stored lines.
+
+        RichLog retains rendered strips rather than reflowing them on show.
+        Keep the last usable viewport width for background output; before the
+        first layout, use the terminal width instead.
+        """
+        if (width := self.scrollable_content_region.width) > 0:
+            self._last_render_width = width
+        return self._last_render_width or max(self.app.console.width, 1)
 
     def clear(self):
         self._tool_calls.clear()
@@ -160,7 +176,7 @@ class StreamingRichLog(RichLog):
             return
         start, end = rows[0], rows[-1] + 1
         call.expanded = not call.expanded
-        width = max(self.scrollable_content_region.width, 1)
+        width = self._render_width()
         segments = self.app.console.render(
             call, self.app.console.options.update_width(width)
         )
@@ -195,7 +211,7 @@ class StreamingRichLog(RichLog):
         """
         if isinstance(content, ToolCallDisclosure):
             self._tool_calls[content.token] = content
-            width = width or max(self.scrollable_content_region.width, 1)
+            width = width or self._render_width()
         if scroll_end is None:
             scroll_end = self.is_vertical_scroll_end
         return super().write(
@@ -292,7 +308,7 @@ class StreamingRichLog(RichLog):
             padding=(0, 1),
         )
         console = self.app.console
-        width = max(self.scrollable_content_region.width, 1)
+        width = self._render_width()
         segments = console.render(renderable, console.options.update_width(width))
         lines = list(Segment.split_lines(segments))
         strips = Strip.from_lines(lines)
