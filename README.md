@@ -563,6 +563,12 @@ For long, multi-step work the agent can use the `todo` tool (`read`, `add`,
 `update`). Small actions such as a commit, reading a file, or a simple edit do
 not need a TODO or planning approval.
 
+Before implementation, the agent should create the full initial checklist of meaningful
+steps, from setup through verification—not add each step only as it reaches it. It
+then follows the checklist in order, keeping future steps pending and only one
+step in progress. If requirements or discoveries change the plan, it updates the
+checklist before changing direction.
+
 Steps have `pending`, `in_progress`, `blocked`, or `completed` status. While a
 step is in progress, tool arguments are checkpointed before execution and tool
 results are saved when execution returns. Before completing a step, the agent

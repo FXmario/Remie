@@ -10,7 +10,12 @@ def test_todo_tool_and_prompt():
     assert "todo" in TOOL_REGISTRY
     assert "todo" in {schema["name"] for schema in get_tool_schemas()}
     for native in (False, True):
-        assert "todo" in build_system_prompt(native_tools=native).lower()
+        prompt = build_system_prompt(native_tools=native)
+        assert "todo" in prompt.lower()
+        assert "Before implementation, persist the full initial checklist" in prompt
+        assert "Do not create steps one at a time" in prompt
+        assert "follow the TODO in order" in prompt
+        assert "Keep future steps pending and update the checklist" in prompt
 
 
 def test_tools_execute_without_plan(tmp_path):
