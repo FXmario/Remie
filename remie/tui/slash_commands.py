@@ -16,6 +16,7 @@ class SlashCommand:
 
 
 SLASH_COMMANDS = (
+    SlashCommand("skills", "Browse and activate Agent Skills"),
     SlashCommand("chats", "Open saved chats"),
     SlashCommand("connect", "Configure a provider connection"),
     SlashCommand("models", "Switch the active model"),

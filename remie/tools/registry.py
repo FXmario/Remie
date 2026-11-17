@@ -20,7 +20,10 @@ from remie.tools.memory import memory_tool, history_search_tool
 
 from remie.tools.todo import todo_tool
 
+from remie.tools.skills import activate_skill_tool
+
 TOOL_REGISTRY = {
+    "activate_skill": activate_skill_tool,
     "todo": todo_tool,
     "memory": memory_tool,
     "history_search": history_search_tool,
@@ -38,6 +41,7 @@ TOOL_REGISTRY = {
 }
 
 TOOL_SUMMARIES = {
+    "activate_skill": "load skill instructions",
     "todo": "save or resume long-task checkpoints",
     "memory": "inspect or update scoped memory",
     "history_search": "search saved conversation history",
@@ -74,6 +78,7 @@ def get_tool_str_representation(tool_name: str) -> str:
 # JSON Schema for each tool's arguments, used for native function calling
 # (Responses API) where the model receives structured tool definitions.
 TOOL_PARAMETERS = {
+    "activate_skill": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]},
     "todo": {
         "type": "object",
         "properties": {

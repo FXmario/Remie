@@ -1,6 +1,7 @@
 """Construction of Remie's system prompt and project context."""
 
 from pathlib import Path
+from remie.skills import catalog
 
 from remie.tools import (
     TOOL_REGISTRY,
@@ -111,6 +112,7 @@ def build_system_prompt(
     return (
         _compose_system_prompt(tool_list_repr, protocol)
         + load_project_context()
+        + catalog(Path(str((tab_context or {}).get("working_directory", Path.cwd()))))
         + tabs
         + str((tab_context or {}).get("memory_snapshot", ""))
         + "\n\nMemory rules: save only durable facts explicitly requested by the user, "

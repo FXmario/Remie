@@ -558,3 +558,56 @@ A force-close during a tool call can leave an attempt without a result. This
 means its outcome is **unknown**, not that the action failed or should be
 repeated. The agent must verify side effects before continuing. Tool outputs
 are retained locally, so avoid running commands that print secrets.
+
+### Agent Skills (`/skills`)
+
+Remie discovers local [Agent Skills](https://agentskills.io): directories with a
+`SKILL.md` containing YAML metadata and Markdown instructions. Run `/skills` to
+browse skills, see their source paths and diagnostics, and select one to load into
+the current conversation. Then send your task normally. The model can also call
+`activate_skill` when a task matches an available skill's description.
+
+Supported locations:
+
+| Scope | Locations (first wins within a scope) |
+| --- | --- |
+| Project | `<git-root>/.remie/skills/`, `<git-root>/.agents/skills/` |
+| User | `~/.remie/skills/`, `~/.agents/skills/` |
+
+Outside Git, the current tab's working directory is the project root. Project
+skills override user skills of the same name. Discovery refreshes with the tab's
+prompt context, so directory changes pick up the appropriate project catalog.
+
+**Project skills require approval.** On opening `/skills` in a project containing
+skills, choose **Trust this project** or **User skills only**. Until approved,
+repository skill metadata and instructions are excluded from discovery and
+activation. Approval is stored per canonical project path in
+`~/.config/remie/trusted-skills-projects.json` (under `REMIE_CONFIG_DIR` if set).
+Remove a project's entry there to revoke approval for future loading. Previously
+loaded instructions remain in the conversation; start a new chat to clear them.
+User-wide skills are treated as trusted.
+
+Example: create `.agents/skills/code-review/SKILL.md`:
+
+```markdown
+---
+name: code-review
+description: Review code changes for correctness, security, and missing tests.
+---
+
+Inspect the diff and surrounding code. Check correctness, security, and tests.
+Report actionable findings with file paths and line numbers.
+```
+
+Only names and descriptions enter the initial catalog. Activation loads the full
+instructions and a bounded resource listing; referenced files are read separately
+as needed. Discovery and activation never execute bundled scripts or bypass
+command/file permissions. Symlinked skill directories and files are not scanned.
+Invalid files are skipped with diagnostics. Scans, file sizes, and resource
+listings are bounded.
+
+Activated instructions belong to the current conversation, survive context
+compaction and saved-chat reloads, and are deduplicated on repeat activation.
+Changing directory does not erase earlier conversation instructions; use a new
+chat when switching to an unrelated workflow. This initial version supports local
+skills, not registry installation or marketplace browsing.

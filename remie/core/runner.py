@@ -219,7 +219,13 @@ class AgentRunner:
 
             for call in prepared.tool_calls:
                 yield ToolStarted(call)
-                result = await self.execute_tool(call)
+                from remie.skills import active_contents
+                active = active_contents(conversation) if call.name == "activate_skill" else {}
+                if isinstance(call.args.get("name"), str) and call.args["name"] in active:
+                    result = {"already_active": True, "name": call.args["name"],
+                              "message": "Skill instructions are already in this conversation."}
+                else:
+                    result = await self.execute_tool(call)
                 result_json = json.dumps(result, default=str)
                 if call.id:
                     conversation.append(
