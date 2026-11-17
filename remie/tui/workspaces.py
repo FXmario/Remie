@@ -1,5 +1,6 @@
 """Allocate separate working directories for tabs sharing a project."""
 
+import re
 import subprocess
 import uuid
 from pathlib import Path
@@ -21,6 +22,15 @@ def workspace_label(directory: Path) -> str:
 
 class WorkspaceError(Exception):
     """A separate tab workspace could not be created."""
+
+
+def _branch_slug(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", value.casefold()).strip("-")[:64].rstrip("-") or "chat"
+
+
+def _folder_title(value: str) -> str:
+    # Preserve readable titles, but never allow path separators or control characters.
+    return re.sub(r'[<>:"/\\|?*\x00-\x1f\x7f]+', "-", value).strip(" .")[:100] or "New chat"
 
 
 def separate_workspace(directory: Path, tab_id: str) -> Path:
@@ -52,8 +62,9 @@ def separate_workspace(directory: Path, tab_id: str) -> Path:
         return target
 
     root = Path(result.stdout.strip()).resolve()
-    target = root.parent / f"{root.name}-remie-tab-{workspace_id}"
-    branch = f"remie/tab-{workspace_id}"
+    main = list_worktrees(root)[0]["path"]
+    target = main.parent / f"remie|{main.name} - New chat-{workspace_id}"
+    branch = f"remie|{_branch_slug(main.name)}-new-chat-{workspace_id}"
     if target.exists():
         raise WorkspaceError(f"Workspace already exists: {target}")
     try:
@@ -137,23 +148,34 @@ def remove_worktree(directory: Path) -> None:
 
 def name_worktree(directory: Path, title: str) -> Path:
     """Move a generated workspace once; callers persist the naming decision."""
-    import re
-
     item = linked_worktree(directory)
-    if item is None or "-remie-tab-" not in item["path"].name or not item["branch"].startswith("remie/tab-"):
+    if item is None:
+        return directory
+    generated = ("-remie-tab-" in item["path"].name and item["branch"].startswith("remie/tab-"))
+    generated = generated or (item["path"].name.startswith("remie|")
+                              and " - New chat-" in item["path"].name
+                              and item["branch"].startswith("remie|"))
+    if not generated:
         return directory
     root = item["path"]
     if Path.cwd().resolve().is_relative_to(root):
         return directory  # Keep the process cwd and project-scoped storage stable.
     main = list_worktrees(directory)[0]["path"]
-    slug = re.sub(r"[^a-z0-9]+", "-", title.casefold()).strip("-")[:64].rstrip("-") or "chat"
-    base = root.parent / f"{main.name}-{slug}"
-    target = base
+    base = root.parent / f"remie|{main.name} - {_folder_title(title)}"
+    branch_base = f"remie|{_branch_slug(main.name)}-{_branch_slug(title)}"
+    branches = set(_git(main, "for-each-ref", "--format=%(refname:short)", "refs/heads/").splitlines())
+    target, branch = base, branch_base
     number = 2
-    while target.exists():
+    while target.exists() or branch in branches:
         target = base.with_name(f"{base.name}-{number}")
+        branch = f"{branch_base}-{number}"
         number += 1
-    _git(main, "worktree", "move", str(root), str(target))
+    _git(root, "branch", "-m", branch)
+    try:
+        _git(main, "worktree", "move", str(root), str(target))
+    except WorkspaceError:
+        _git(root, "branch", "-m", item["branch"])
+        raise
     return target / directory.relative_to(root)
 
 
@@ -170,6 +192,16 @@ def ensure_merge_ready(directory: Path) -> None:
 
 def worktree_dirty(directory: Path) -> bool:
     return bool(_git(directory, "status", "--porcelain", "--untracked-files=all").strip())
+
+
+def commit_message_context(directory: Path) -> str:
+    """Bounded tracked diffs and status, including names of untracked files."""
+    status = _git(directory, "status", "--short", "--untracked-files=all")
+    staged = _git(directory, "diff", "--cached", "--no-ext-diff", "--no-textconv")
+    unstaged = _git(directory, "diff", "--no-ext-diff", "--no-textconv")
+    return (f"Status (including untracked files):\n{status[:12000]}\n"
+            f"Staged changes:\n{staged[:24000]}\n"
+            f"Unstaged changes:\n{unstaged[:24000]}")
 
 
 def commit_worktree(directory: Path, message: str) -> None:

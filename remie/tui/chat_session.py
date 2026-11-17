@@ -1,12 +1,14 @@
 """Chat persistence and UI session lifecycle behavior."""
 
+from remie.agent import generate_commit_message
+
 import asyncio
 from pathlib import Path
 from typing import Any
 
 from remie.tui.workspaces import (WorkspaceError, linked_worktree, list_worktrees,
                                   remove_worktree, name_worktree, ensure_merge_ready,
-                                  worktree_dirty, commit_worktree, merge_worktree)
+                                  worktree_dirty, commit_worktree, merge_worktree, commit_message_context)
 
 from remie.prompts import build_system_prompt
 from remie.protocol import strip_protocol_lines
@@ -328,9 +330,27 @@ class ChatSessionMixin:
         item = linked_worktree(self._tab_directory(tab))
         if item is None:
             answer = await self.push_screen_wait(self._make_ask_screen(
-                "Close this tab? This is not a linked worktree, so merging is not applicable.",
-                ["Close without merging", "Cancel"]))
-            if answer == "Close without merging":
+                "Close this tab? A fresh main-worktree chat will replace it if other "
+                "worktree tabs remain. Files and saved chat history are kept.",
+                ["Close tab", "Cancel"]))
+            if answer == "Close tab":
+                directory = self._tab_directory(tab)
+                try:
+                    worktrees = list_worktrees(directory)
+                except WorkspaceError:
+                    worktrees = []
+                if worktrees:
+                    main = worktrees[0]["path"]
+                    other_main_tabs = [user for user in self._worktree_users(main)
+                                       if user["id"] != tab_id
+                                       and linked_worktree(self._tab_directory(user)) is None]
+                    has_linked_tabs = any(
+                        user["id"] != tab_id
+                        and (linked := linked_worktree(self._tab_directory(user))) is not None
+                        and linked["path"] in {entry["path"] for entry in worktrees[1:]}
+                        for user in self._tab_layout["tabs"])
+                    if has_linked_tabs and not other_main_tabs:
+                        self._create_new_chat(directory=directory)
                 self._close_tab_now(tab_id)
             return
         main = list_worktrees(item["path"])[0]["path"]
@@ -396,13 +416,17 @@ class ChatSessionMixin:
                 choice = "Commit this worktree first" if label == "this" else "Commit the master worktree first"
                 answer = await self.push_screen_wait(self._make_ask_screen(
                     f"{directory} has uncommitted changes. Commit all changes, including "
-                    "non-ignored untracked files, before merging?", [choice, "Cancel"]))
+                    "non-ignored untracked files, before merging? The agent will write "
+                    "the commit message.", [choice, "Cancel"]))
                 if answer != choice:
                     return
-                message = await self.push_screen_wait(self._make_ask_screen(
-                    f"Enter a commit message for {directory}.", []))
+                check_agents()
+                context = commit_message_context(directory)
+                message = await generate_commit_message(context)
                 if not message or not message.strip():
-                    return
+                    raise WorkspaceError("Could not generate a commit message. Retry the merge when the model is available.")
+                if commit_message_context(directory) != context:
+                    raise WorkspaceError("Worktree changed while writing the commit message. Retry the merge.")
                 check_agents()
                 commit_worktree(directory, message)
             check_agents()

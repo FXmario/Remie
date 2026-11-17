@@ -45,7 +45,7 @@ def test_git_worktree_starts_at_head_and_preserves_original(tmp_path, monkeypatc
             assert target.parent.parent == tmp_path
             assert (target / "file.txt").read_text() == "committed"
             assert not (target / "untracked.txt").exists()
-            assert git("branch", "--show-current", cwd=target).startswith(f"remie/tab-{second}-")
+            assert git("branch", "--show-current", cwd=target).startswith("remie|project-new-chat-")
             assert git("rev-parse", "HEAD", cwd=target) == git("rev-parse", "HEAD", cwd=root)
             assert app._runtimes[original].working_directory is None
             app.on_prompt_submitted(PromptSubmitted(f"/change dir {root / 'sub'}"))
@@ -227,9 +227,10 @@ def test_worktree_listing_naming_and_safe_removal(tmp_path):
     assert items[0]["main"] and items[0]["path"] == root
     assert items[1]["path"] == first
     renamed = name_worktree(first, "Fix / MODEL picker!")
-    assert renamed.name == "project with spaces-fix-model-picker"
+    assert renamed.name == "remie|project with spaces - Fix - MODEL picker!"
     assert not first.exists()
-    assert git("branch", "--show-current", cwd=renamed) == branch
+    branch = git("branch", "--show-current", cwd=renamed)
+    assert branch == "remie|project-with-spaces-fix-model-picker"
     second = name_worktree(separate_workspace(root, "second"), "Fix / MODEL picker!")
     assert second.name.endswith("-2")
     (renamed / "untracked").write_text("save me")
@@ -276,7 +277,7 @@ def test_picker_opens_new_tab_and_names_once(tmp_path, monkeypatch):
             rename_chat(app._runtime().chat_id, "Readable title", title_source="manual")
             app._name_tab_worktree(second)
             renamed = Path(app._runtime().working_directory)
-            assert renamed.name.endswith("readable-title")
+            assert renamed.name == "remie|project with spaces - Readable title"
             rename_chat(app._runtime().chat_id, "Different title", title_source="manual")
             app._name_tab_worktree(second)
             assert Path(app._runtime().working_directory) == renamed
@@ -419,7 +420,7 @@ def test_delete_reports_folder_left_by_git(tmp_path, monkeypatch):
     assert linked.is_dir() and root.is_dir()
 
 
-@pytest.mark.parametrize("outcome", ["merge", "cancel", "running", "conflict", "commit_failure", "running_after_prompt"])
+@pytest.mark.parametrize("outcome", ["merge", "cancel", "running", "conflict", "commit_failure", "running_after_prompt", "message_failure"])
 def test_merge_close_flow(tmp_path, monkeypatch, outcome):
     from remie.tui.workspaces import worktree_dirty
 
@@ -445,6 +446,13 @@ def test_merge_close_flow(tmp_path, monkeypatch, outcome):
                 hook = root / ".git" / "hooks" / "pre-commit"
                 hook.write_text("#!/bin/sh\nexit 1\n")
                 hook.chmod(0o755)
+            generated_contexts = []
+            async def generate(context):
+                generated_contexts.append(context)
+                if outcome == "running_after_prompt":
+                    app._runtimes[original].agent_running = True
+                return "" if outcome == "message_failure" else "Save worktree changes before merge"
+            monkeypatch.setattr("remie.tui.chat_session.generate_commit_message", generate)
             questions = []
             async def choose(screen):
                 questions.append(screen)
@@ -468,7 +476,11 @@ def test_merge_close_flow(tmp_path, monkeypatch, outcome):
                 assert not worktree_dirty(root)
                 assert not worktree_dirty(source)
                 assert questions[0].options[0] == "Commit the master worktree first"
-                assert questions[2].options[0] == "Commit this worktree first"
+                assert questions[1].options[0] == "Commit this worktree first"
+                assert len(questions) == 2
+                assert "main-new.txt" in generated_contexts[0]
+                assert "source-new.txt" in generated_contexts[1]
+                assert git("log", "-1", "--format=%s", cwd=source) == "Save worktree changes before merge"
             else:
                 assert source_id in app._runtimes
                 if outcome != "conflict":
@@ -560,3 +572,56 @@ def test_new_tab_asks_before_creating_workspace(tmp_path, monkeypatch, key):
                 assert bool(list(tmp_path.glob("remie-tab-*"))) == (key == "1")
 
     asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("active_main", [True, False])
+def test_closing_main_replaces_chat_and_keeps_linked_tab(tmp_path, monkeypatch, active_main):
+    root = make_repository(tmp_path)
+    monkeypatch.chdir(root)
+
+    async def exercise():
+        app = AgentApp()
+        async with app.run_test() as pilot:
+            original = app._active_tab_id
+            old_chat = app._chat_id
+            app._create_new_chat()
+            await pilot.pause()
+            linked_id = app._active_tab_id
+            linked_path = Path(app._runtime().working_directory)
+            if active_main:
+                app.switch_tab(original)
+                await pilot.pause()
+
+            async def close(screen):
+                assert screen.options == ["Close tab", "Cancel"]
+                return "Close tab"
+
+            monkeypatch.setattr(app, "push_screen_wait", close)
+            await app._close_worktree_tab(original)
+            await pilot.pause()
+            assert original not in app._runtimes
+            assert linked_id in app._runtimes
+            assert linked_path.exists()
+            assert len(app._tab_layout["tabs"]) == 2
+            replacement = next(tab for tab in app._tab_layout["tabs"] if tab["id"] != linked_id)
+            assert replacement["chat_id"] != old_chat
+            assert app._tab_directory(replacement) == root
+            assert app._active_tab_id == replacement["id"]
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("failure", [False, True])
+def test_agent_generates_commit_message(monkeypatch, failure):
+    import remie.agent as agent
+
+    async def stream(messages):
+        assert "imperative" in messages[0]["content"]
+        assert messages[1]["content"] == "diff contents"
+        if failure:
+            raise RuntimeError("offline")
+        yield "Fix login"
+        yield " validation"
+
+    monkeypatch.setattr(agent, "stream_llm_call", stream)
+    result = asyncio.run(agent.generate_commit_message("diff contents"))
+    assert result == ("" if failure else "Fix login validation")
