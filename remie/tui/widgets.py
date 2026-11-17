@@ -31,6 +31,7 @@ from remie.agent import (
 )
 
 # from remie.agent import strip_protocol_lines
+from remie.tui.text_area import TerminalTextArea
 from remie.tui.constants import STATUS_ANIMATION_MAX_FPS
 from remie.tui.contracts import is_agent_app
 from remie.tui.helpers import _format_tokens, _is_tmux, _supports_terminal_graphics
@@ -757,7 +758,7 @@ class SlashCommandPopup(OptionList):
                 self.highlighted = hovered
 
 
-class PromptTextArea(TextArea):
+class PromptTextArea(TerminalTextArea):
     """Multiline prompt: Enter submits, Shift+Enter / Ctrl+J insert newlines."""
 
     def __init__(self, **kwargs) -> None:

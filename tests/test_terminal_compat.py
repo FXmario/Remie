@@ -111,3 +111,27 @@ def test_tty_model_badge_is_keyboard_accessible(monkeypatch, tmp_path):
             assert opened == [True]
 
     asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("theme", ["ansi-dark", "ansi-light", "textual-dark", "textual-light"])
+def test_text_editors_render_with_terminal_themes(theme):
+    from textual.app import App, ComposeResult
+    from textual.geometry import Region
+    from remie.tui.text_area import TerminalTextArea
+
+    class EditorApp(App):
+        def compose(self) -> ComposeResult:
+            yield PromptTextArea()
+            yield TerminalTextArea(id="memory-editor")
+
+    async def exercise():
+        app = EditorApp()
+        app.theme = theme
+        async with app.run_test() as pilot:
+            for editor in app.query(TerminalTextArea):
+                editor.load_text("hello")
+                editor.render_lines(Region(0, 0, editor.size.width, 1))
+                assert editor.rich_style.bgcolor is not None
+            await pilot.pause()
+
+    asyncio.run(exercise())

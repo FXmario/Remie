@@ -9,6 +9,8 @@ from remie.storage.memory import (
     memory_context, memory_path, memory_tool, read_memory,
 )
 
+from remie.tui.text_area import TerminalTextArea
+
 SCOPES = ("global", "project", "tab")
 SEPARATOR = "\n\n---\n\n"
 
@@ -79,7 +81,7 @@ class MemoryScreen(ModalScreen):
                 yield Button("Close", id="memory-close")
             yield Select([(s.title(), s) for s in SCOPES], value="project",
                          allow_blank=False, id="memory-scope")
-            yield TextArea(id="memory-editor")
+            yield TerminalTextArea(id="memory-editor")
             with Horizontal(classes="memory-actions"):
                 yield Button("Save", id="memory-save", variant="primary")
                 yield Button("Cancel edit", id="memory-cancel")
