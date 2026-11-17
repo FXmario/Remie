@@ -934,6 +934,59 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
         if not self._agent_running:
             _ = self.message_worker(self._active_tab_id)
 
+    async def _browse_skills(self) -> None:
+        from remie.skills import (
+            activate, active_contents, discover, is_trusted, project_path,
+            skill_message, trust_project,
+        )
+        directory = Path(self._tab_prompt_context()["working_directory"])
+        tab_id = self._active_tab_id
+        root = project_path(directory)
+        if not is_trusted(directory) and any(
+            (root / client / "skills").is_dir() for client in (".agents", ".remie")
+        ):
+            answer = await self.push_screen_wait(AskUserScreen(
+                f"Trust repository skills in {root}? Their descriptions and instructions "
+                "will be available to the agent. Scripts still require normal permissions.",
+                ["Trust this project", "User skills only"],
+            ))
+            if tab_id != self._active_tab_id:
+                return
+            if answer == "Trust this project":
+                try:
+                    trust_project(directory)
+                except OSError as error:
+                    self.notify(str(error), title="Skills trust", severity="error")
+                    return
+            elif answer != "User skills only":
+                return
+        skills, diagnostics = discover(directory)
+        self._refresh_system_prompt()
+        question = "Select a skill to load into this conversation."
+        if diagnostics:
+            question += "\n\nDiagnostics:\n" + "\n".join(diagnostics[:20])
+        if not skills:
+            self.notify("No available skills. Add a SKILL.md under .agents/skills/<name>/.", title="Skills")
+            if diagnostics:
+                await self.push_screen_wait(AskUserScreen(question, ["Close"]))
+            return
+        labels = {f"{s.name} ({s.scope}) — {s.description}\n{s.location}": s.name for s in skills.values()}
+        answer = await self.push_screen_wait(AskUserScreen(question, list(labels)))
+        if tab_id != self._active_tab_id or answer not in labels:
+            return
+        name = labels[answer]
+        if name in active_contents(self.conversation):
+            self.notify(f"{name} is already active in this conversation", title="Skills")
+            return
+        result = activate(name, directory)
+        if "error" in result:
+            self.notify(result["error"], title="Skills", severity="error")
+            return
+        self.conversation.append(skill_message(result))
+        self._cached_conv_tokens = estimate_conversation_tokens(self.conversation)
+        self._save_current_chat()
+        self.notify(f"Activated {name}. Send your task when ready.", title="Skills")
+
     def _dispatch_slash_command(self, name: str, argument: str | None = None) -> None:
         """Run a local command without adding a conversation turn."""
         if self._agent_running:
@@ -942,6 +995,9 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
                 title="Agent busy",
                 severity="warning",
             )
+            return
+        if name == "skills":
+            self.run_worker(self._browse_skills(), exclusive=True, group="skills")
             return
         if name == "memory":
             from remie.tui.screens.memory import MemoryScreen
@@ -1085,8 +1141,10 @@ class AgentApp(ChatSessionMixin, StreamingPresentationMixin, App):
             "nearly full. Continue based on the most recent messages below.)"
         )
         tail = self.conversation[1:][-COMPACTION_KEEP_MESSAGES:]
+        from remie.skills import preserved_messages
+        protected = preserved_messages(dropped, tail)
         self.conversation = (
-            self.conversation[:1] + [{"role": "system", "content": note}] + tail
+            self.conversation[:1] + [{"role": "system", "content": note}] + protected + tail
         )
         self._cached_conv_tokens = estimate_conversation_tokens(self.conversation)
         self._widget(ModelBadge).set_context(

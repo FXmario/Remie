@@ -364,3 +364,8 @@ def test_memory_command_shows_live_scoped_notes_without_conversation_turn(tmp_pa
             assert app.conversation == before
 
     asyncio.run(exercise())
+
+
+def test_skills_command_registered():
+    assert resolve_slash_command("/skills").name == "skills"
+    assert "skills" in [command.name for command in slash_command_matches("/ski")]
