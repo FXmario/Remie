@@ -128,3 +128,47 @@ def test_highlighting_failure_falls_back_to_literal_text(monkeypatch):
     console = Console()
     detail = list(call.__rich_console__(console, console.options))[1]
     assert detail.plain == "echo [bold]literal[/bold]"
+
+
+def test_tool_calls_with_zero_width_layout_remain_horizontal(monkeypatch):
+    """Hidden/new panes must not permanently render their headers at width 1."""
+    import asyncio
+    from textual.app import App, ComposeResult
+    from textual.geometry import Region
+    from remie.tui.widgets import StreamingRichLog
+
+    class TestApp(App):
+        def compose(self) -> ComposeResult:
+            yield StreamingRichLog(wrap=True)
+
+    async def exercise():
+        app = TestApp()
+        async with app.run_test(size=(80, 24)) as pilot:
+            log = app.query_one(StreamingRichLog)
+            await pilot.pause()
+            visible_width = log._render_width()
+            log.display = False
+            await pilot.pause()
+            # Reproduce a hidden/unlaid-out region deterministically, even
+            # on Textual versions which retain a hidden widget's old geometry.
+            monkeypatch.setattr(
+                StreamingRichLog, "scrollable_content_region",
+                property(lambda self: Region(0, 0, 0, 0)),
+            )
+            assert log._render_width() == visible_width
+            log.write(_render_tool_call("run_command", {"command": "echo hidden"}))
+            # Also exercise the fallback before any usable width was cached.
+            log._last_render_width = None
+            assert log._render_width() == app.console.width
+            log.write(_render_tool_call("run_command", {"command": "echo initial"}))
+            monkeypatch.undo()
+            log.display = True
+            await pilot.pause()
+            headers = [line.text for line in log.lines if "▶ Agent" in line.text]
+            assert len(headers) == 2
+            assert all("shell command" in header for header in headers)
+            call = next(iter(log._tool_calls.values()))
+            log.toggle_tool_call(call.token)
+            assert "echo hidden" in "\n".join(line.text for line in log.lines)
+
+    asyncio.run(exercise())
